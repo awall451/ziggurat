@@ -1,0 +1,16 @@
+{
+  "note": "USD per million tokens. First entry whose 'match' is a substring of the model id wins. Estimates only: this is the API-equivalent price, not a bill.",
+  "cacheWrite5mFactor": 1.25,
+  "cacheWrite1hFactor": 2.0,
+  "models": [
+    { "match": "<synthetic>", "input": 0, "output": 0, "cacheRead": 0 },
+    { "match": "fable-5", "input": 10, "output": 50, "cacheRead": 1.0 },
+    { "match": "mythos-5", "input": 10, "output": 50, "cacheRead": 1.0 },
+    { "match": "opus-5-5", "input": 4, "output": 20, "cacheRead": 0.2 },
+    { "match": "opus", "input": 5, "output": 25, "cacheRead": 0.5 },
+    { "match": "sonnet-5", "input": 2, "output": 10, "cacheRead": 0.2 },
+    { "match": "sonnet", "input": 3, "output": 15, "cacheRead": 0.3 },
+    { "match": "haiku", "input": 1, "output": 5, "cacheRead": 0.1 }
+  ],
+  "default": { "input": 4, "output": 20, "cacheRead": 0.2 }
+}
