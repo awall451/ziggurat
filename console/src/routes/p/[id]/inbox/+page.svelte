@@ -212,7 +212,7 @@
             <div class="reply well">
               <div class="small dim">{lead} · {REPLY_WORD[m.reply.status]}{m.reply.date ? ` · ${when(m.reply.date)}` : ''}</div>
               <!-- sanitised by md(): the reply was written inside the sandbox -->
-              <div class="md">{@html md(m.reply.text)}</div>
+              <div class="md">{@html md(m.reply.text, { breaks: true })}</div>
               {#if m.reply.attachments.length}
                 <div class="atts">
                   {#each m.reply.attachments as a (a.name)}
@@ -250,7 +250,7 @@
             <span class="dim small mono">{when(a.askedAt)}</span>
           </header>
           <!-- sanitised by md() -->
-          <div class="md">{@html md(a.text)}</div>
+          <div class="md">{@html md(a.text, { breaks: true })}</div>
           <div class="well default small"><span class="dim">If you do not answer, {lead} will:</span> {a.default}</div>
           {#if a.open && p.canControl}<footer><button class="btn small" onclick={() => answer(a)}>Answer</button></footer>{/if}
         </article>

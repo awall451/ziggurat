@@ -12,8 +12,11 @@
   const maxTool = $derived(Math.max(1, ...node.tools.map((t) => t.count)));
   const elapsed = $derived(between(node.started, node.ended));
   let fullBrief = $state(false);
+  // Briefs are markdown. Rendered reads better in a narrow panel; Raw shows
+  // the exact text the agent received. The choice is kept while you click around.
+  let rawBrief = $state(false);
   const brief = $derived(node.brief || '');
-  const briefShown = $derived(fullBrief || brief.length <= 700 ? brief : brief.slice(0, 700) + '…');
+  const longBrief = $derived(brief.length > 700);
 
   // Collapse the brief again when another agent is picked.
   $effect(() => {
@@ -67,11 +70,21 @@
     <section>
       <div class="row">
         <h3>{parent ? `Brief from ${parent.label}` : 'Cycle prompt'}</h3>
-        {#if brief.length > 700}
-          <button class="link" onclick={() => (fullBrief = !fullBrief)}>{fullBrief ? 'Show less' : 'Show full brief'}</button>
+        <span class="links">
+          <button class="link" onclick={() => (rawBrief = !rawBrief)} aria-pressed={rawBrief}>{rawBrief ? 'Rendered' : 'Raw'}</button>
+          {#if longBrief}
+            <button class="link" onclick={() => (fullBrief = !fullBrief)}>{fullBrief ? 'Show less' : 'Show full brief'}</button>
+          {/if}
+        </span>
+      </div>
+      <div class="well text brief" class:clipped={longBrief && !fullBrief}>
+        {#if rawBrief}
+          <div class="pre mono rawtext">{brief}</div>
+        {:else}
+          <!-- sanitised by md(): a brief is written by an agent -->
+          <div class="md">{@html md(brief)}</div>
         {/if}
       </div>
-      <div class="well pre text">{briefShown}</div>
     </section>
   {/if}
 
@@ -176,6 +189,25 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+  .links {
+    display: flex;
+    gap: 14px;
+  }
+  .brief.clipped {
+    max-height: 260px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(#000 70%, transparent);
+    mask-image: linear-gradient(#000 70%, transparent);
+  }
+  .rawtext {
+    font-size: 12px;
+  }
+  .brief :global(.md > :first-child) {
+    margin-top: 0;
+  }
+  .brief :global(.md > :last-child) {
+    margin-bottom: 0;
   }
   .link {
     background: none;

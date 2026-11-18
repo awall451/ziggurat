@@ -23,10 +23,11 @@ function hook() {
 }
 
 /** Markdown to safe HTML. Runs in the browser only; on the server it returns ''. */
-export function md(src) {
+export function md(src, { breaks = false } = {}) {
   if (typeof window === 'undefined') return '';
   hook();
-  return DOMPurify.sanitize(marked.parse(src || '', { gfm: true, breaks: false }), {
+  // breaks: keep single line breaks (short messages written line by line).
+  return DOMPurify.sanitize(marked.parse(src || '', { gfm: true, breaks }), {
     FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed', 'svg', 'math'],
     FORBID_ATTR: ['style', 'srcset']
   });

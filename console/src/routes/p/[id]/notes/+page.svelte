@@ -94,6 +94,8 @@
     overflow-y: auto;
   }
   .item {
+    /* Never shrink: with many files the list scrolls instead of squashing rows. */
+    flex: none;
     text-align: left;
     padding: 8px 10px;
     border-radius: 8px;
@@ -117,6 +119,7 @@
     white-space: nowrap;
   }
   .group {
+    flex: none;
     padding: 12px 10px 4px;
   }
   .reader {
