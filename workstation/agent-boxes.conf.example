@@ -1,3 +1,0 @@
-# One agent box (sandbox VM) per line: <box-name> <vm-ip> <gateway-lan-ip>
-# Copy to $FLEET_DATA/agent-boxes.conf. Box name = project name = /home/agent/<box> in the VM.
-my-game 10.66.0.10 192.168.1.110

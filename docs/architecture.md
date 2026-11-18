@@ -42,4 +42,45 @@ One isolated bridge with no uplink and no host address. The VMs on it have no de
 
 ## Getting data out
 
-The workstation pulls; the VM never pushes and holds no credentials for anything else. `workstation/agent-pull` copies transcripts (for a token tracker), the ledger, gate history, notes and screenshots, append-only and without following symlinks.
+The owner's side pulls; the VM never pushes and holds no credentials for anything else. The
+[console](../console/README.md) copies transcripts, the ledger, gate history, notes and screenshots every 15
+minutes (and the cycle in progress every 15 seconds while someone is watching it), append-only and without
+following symlinks. Agent-owned folders are read as the `agent` user, so a path an agent swapped for a link
+cannot make a root process read something else.
+
+## Talking to the lead
+
+| Path | Owner | Purpose |
+|---|---|---|
+| `/var/lib/agent-kit/inbox/<id>/message.md`, `att/` | root | Messages from the owner. Agents cannot write here, which is what makes a message genuine |
+| `/var/lib/agent-kit/inbox/.inject/<id>` | root | Marks a `priority` or `urgent` message for delivery mid-cycle |
+| `/var/lib/agent-kit/outbox/<id>.md`, `<id>.d/` | `agent` | The lead's reply (`Status: done`, `planned` or `declined`) and its attachments |
+| `/var/lib/agent-kit/outbox/<stamp>-a-<slug>.md` | `agent` | A question from the lead, with the default it takes if unanswered |
+
+- `agent-kit-inbox put` (root, called by the console) checks a message before it becomes visible: id, tier,
+  file names and sizes, plain files only.
+- Every cycle, `lead-cycle` appends the output of `owner-inbox prompt` to the lead's prompt: the protocol and
+  all open messages. Team bundles need no change, and the wording works for every theme.
+- Mid-cycle, a `PostToolUse` hook (`owner-inbox-hook`, registered only for the lead's session through
+  `lead-settings.json`) hands a new `priority` or `urgent` message to the lead once. For `urgent`, agents that
+  are working get a fixed notice, never the message text, asking them to reach a safe point and report back;
+  every agent is told at start that this notice is genuine.
+- A message stays open, and is shown again each cycle, until the lead replies `done` or `declined` or the
+  owner closes it. Owner messages rank above the lead's roadmap and below the charter and gate contract.
+- The lead never waits for the owner: a question must state its default, and work goes on with it.
+
+## Controls
+
+All root-owned, all run from outside by the owner (or the console):
+
+| Command | Does |
+|---|---|
+| `agent-kit-halt [reason]` | Kill switch, lead timer off, the cycle in progress stopped, and the team's own units that run Claude stopped. Other team services keep running. Records what it turned off |
+| `agent-kit-resume [--no-timer]` | Clears the stop, restores exactly what the halt turned off, enables the lead timer |
+| `agent-kit-halt-at set <unix-seconds>` | A halt at a fixed time (checked every minute, survives a reboot). The daily cap counts cycles, not hours |
+| `agent-kit-caps set <KEY> <VALUE>` | Cycle cap, budget and models, kept in `/etc/agent-kit/caps.env` |
+| `agent-kit-gate pause` / `resume` | Pause the merge gate on its own |
+| `agent-kit-units` | The team's own systemd user units and whether a halt stops them |
+
+A team unit counts as a token spender when it is listed in `/etc/agent-kit/token-units`, or when what it
+executes mentions `claude`; `/etc/agent-kit/keep-units` overrides both.

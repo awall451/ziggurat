@@ -43,7 +43,7 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 - A theme is a small file, `themes/<name>.yml`: role id → display name, plus an optional one-line
   flavour per role ("You are a Maia..."). Prompts reference `{{name.builder}}` etc.
 - The installer renders the agent files and prompts for the chosen theme (`THEME=tolkien`).
-- The dashboard, digests and spoken briefs read the same theme file, so labels match everywhere.
+- The console, digests and spoken briefs read the same theme file, so labels match everywhere.
 - Switching theme only changes display names and flavour text, never behaviour, models or permissions.
 - Migration from today: rename `ainu-*`/`maia-*` files to role ids and render Tolkien names from
   the theme. One mechanical change, best done when the setup is stable.
@@ -56,7 +56,7 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 | Admin user, SSH key, workstation paths | Done: `config.example.env`; next: a setup script |
 | Allow-list domains | Per-project additions in project config |
 | Gate checks (`gate-checks` per project) | Keep: it is the per-project contract; ship examples (web game, PS1/C++) |
-| Workstation pull, token tracker override, dashboard behind a reverse proxy | Optional add-ons; document the data contract (`cycles.jsonl`, `history.log`, `dashboard.json`) |
+| Console and digest on the owner's workstation | Done: `console/` with its own config folder; next: run it on a small VM with a login in front, and create projects from it |
 | Subscription-only auth via `claude auth login` in each VM | Document both login and `setup-token` paths and their trade-offs |
 
 ## 3. Lessons worth writing up for others
@@ -67,3 +67,16 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 - Most spend was long Opus builder sessions re-reading context; tiering (Opus leads, Sonnet
   builders, Haiku scouts) is the main cost lever. Measure: `fleet/<box>/trials/`.
 - Toolchains for sandboxed VMs: download on the host, copy in, keep the allow-list small.
+
+## 4. Console: what is next
+
+Done: projects, live topology with history, progress, usage, owner inbox with replies and questions,
+halt/resume and brakes, all through fixed kit scripts.
+
+Later:
+- Create a project from the console: pick a target, run the sandbox playbooks, install the kit and a team bundle.
+- A login in front (an auth proxy header is already honoured) and a dedicated, restricted ssh key.
+- A side chat with the lead that forks its session, for questions that need an answer now.
+- A full transcript viewer per agent, context shown as a share of the model's limit, and services used.
+- Allow-list edits, VM rollback and removal, with the same care as the gate.
+

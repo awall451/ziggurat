@@ -1,55 +1,47 @@
 #!/bin/bash
-# agent-digest: daily morning digest for each agent box (agent-digest.timer, 08:00).
-#   1. pulls the latest data (agent-pull) and the newest gate screenshots
-#   2. gathers facts: last-24h cycles + cost, gate verdicts, lead's STATE, escalations
-#   3. has Claude (Sonnet, headless, no tools) write a short plain-English digest
-#   4. saves fleet/<box>/digests/<date>.md and delivers it if a channel is configured
+# agent-digest: a short morning digest per project, with an optional spoken
+# version. Run it once a day (a systemd user timer works well).
 #
-# Delivery (optional) via ~/.config/agent-kit/digest.env:
-#   NTFY_URL=https://ntfy.sh/<long-random-topic>   -> short push to the ntfy app
-#   MAIL=1                                          -> full digest by email via remind.py
+# It only reads what the console has already pulled into $FLEET_DATA/<project>/
+# (ledger, gate history, notes, screenshots) and never talks to a VM itself.
+#   1. gathers facts: last-24h cycles and cost, gate verdicts, the lead's STATE, escalations
+#   2. has Claude (Sonnet, headless, no tools) write a short plain-English digest
+#   3. saves $FLEET_DATA/<project>/digests/<date>.md (shown in the console's Digest tab)
+#   4. optionally writes a spoken version and delivers the headline
+#
+# Settings: ${ZIGGURAT_CONFIG:-~/.config/ziggurat/config.env} (see config.example.env)
+#   FLEET_DATA=<folder>            required: one subfolder per project
+#   SPEAK_PYTHON=<python>          optional: a Python with `edge-tts` installed, for the spoken brief
+#   NTFY_URL=https://ntfy.sh/<long-random-topic>   optional: push the headline to the ntfy app
+#   DIGEST_MAIL_CMD=<command>      optional: gets the digest on stdin, the subject as $1
 set -uo pipefail
-# Settings come from your private config (never commit it):
-#   ${ZIGGURAT_CONFIG:-~/.config/ziggurat/config.env}  (see config.example.env)
 CONFIG=${ZIGGURAT_CONFIG:-$HOME/.config/ziggurat/config.env}
+# shellcheck source=/dev/null
 [ -f "$CONFIG" ] && . "$CONFIG"
-: "${ADMIN_USER:?set ADMIN_USER in $CONFIG}" "${SSH_KEY:?set SSH_KEY in $CONFIG}" "${FLEET_DATA:?set FLEET_DATA in $CONFIG}"
-KEY=$SSH_KEY
-FLEET=$FLEET_DATA
-TRACK=${TRACKER_AGENT_BOXES:-$HOME/.local/share/claude-token-tracker/agent-boxes}
-DASHBOARD=${DASHBOARD_DIR:-}
+: "${FLEET_DATA:?set FLEET_DATA in $CONFIG}"
 HERE=$(cd "$(dirname "$0")" && pwd)
-CONF=${AGENT_BOXES_CONF:-$FLEET_DATA/agent-boxes.conf}
 DATE=$(date +%F)
 SINCE=$(date -u -d '24 hours ago' +%FT%T)
-[ -f "$HOME/.config/agent-kit/digest.env" ] && source "$HOME/.config/agent-kit/digest.env"
 
-"$HERE/agent-pull" >/dev/null 2>&1
-
-# Box list on fd 3: ssh/rsync inside the loop must not consume it from stdin.
-while read -r box ip gw <&3; do
-  [ -n "${box:-}" ] || continue
-  D=$FLEET/$box; mkdir -p "$D/digests" "$D/shots/$DATE"
-  jump="ssh -o BatchMode=yes -o LogLevel=ERROR -i $KEY -W %h:%p $ADMIN_USER@$gw"
-  SSH="ssh -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=15 -i $KEY -o ProxyCommand=\"$jump\" $ADMIN_USER@$ip"
-
-  # Newest merged build's gate screenshots (what the game looks like now).
-  eval "$SSH 'f=\$(grep -l \"all checks passed\" /var/lib/agent-kit/gate/results/*.json 2>/dev/null | xargs -r ls -t | head -1); \
-        [ -n \"\$f\" ] && d=\$(jq -r .shots \"\$f\") && [ -d \"\$d\" ] && tar -C \"\$d\" -c .'" \
-    | tar -x -C "$D/shots/$DATE" 2>/dev/null
+for D in "$FLEET_DATA"/*/; do
+  D=${D%/}
+  box=$(basename "$D")
+  # A project is a folder the console has pulled a ledger into.
+  [ -f "$D/cycles.jsonl" ] || continue
+  mkdir -p "$D/digests"
 
   cycles=$(jq -c --arg s "$SINCE" 'select(.start >= $s) | {start:.start[11:16], rc, mins:((.secs // 0)/60|floor), usd:(.cost_usd // 0 | .*100|round/100), summary:(.summary // "" | .[-400:])}' "$D/cycles.jsonl" 2>/dev/null)
   usd=$(jq -s --arg s "$SINCE" 'map(select(.start >= $s) | .cost_usd // 0) | add // 0 | .*100|round/100' "$D/cycles.jsonl" 2>/dev/null)
   gate=$(awk -v s="$SINCE" '$1 >= s' "$D/history.log" 2>/dev/null | tail -30)
   facts=$(cat <<EOF
-BOX: $box   DATE: $DATE   WINDOW: last 24 hours (since $SINCE UTC)
+PROJECT: $box   DATE: $DATE   WINDOW: last 24 hours (since $SINCE UTC)
 CYCLES (one JSON per lead cycle; usd = API-equivalent estimate of subscription usage, not a bill):
 ${cycles:-none}
 TOTAL API-EQUIVALENT LAST 24H: \$${usd:-0}
 GATE VERDICTS (time topic sha status detail):
 ${gate:-none}
-SCREENSHOTS SAVED: $(ls "$D/shots/$DATE" 2>/dev/null | tr '\n' ' ')
---- ERU STATE.md ---
+SCREENSHOTS SAVED TODAY: $(ls "$D/shots/$DATE" 2>/dev/null | tr '\n' ' ')
+--- LEAD'S STATE.md ---
 $(sed -n '1,80p' "$D/notes/agents/STATE.md" 2>/dev/null)
 --- ESCALATIONS.md ---
 $(tail -40 "$D/notes/agents/ESCALATIONS.md" 2>/dev/null)
@@ -59,43 +51,40 @@ EOF
 )
   out=$D/digests/$DATE.md
   printf '%s' "$facts" | timeout 10m claude -p --model sonnet --tools "" --output-format text \
-"You write the owner's morning digest for an autonomous agent team building a game in a sandbox VM.
-Use ONLY the facts on stdin. Plain English, no hype, no terse/caveman style. Under 250 words. Format:
+"You write the owner's morning digest for an autonomous agent team building a project in a sandbox VM.
+Use ONLY the facts on stdin. Plain English, no hype, no terse style. Under 250 words. Format:
 # $box digest $DATE
 **Headline:** one sentence on the most important thing.
 ## Built and merged
 ## Failed or stuck
 ## Needs you   (escalations or anything that waits on the owner; write 'Nothing.' if none)
 ## Usage   (cycles run, API-equivalent total, a sentence on pace)
-## Next   (what lead plans next, from STATE.md)
-End with the line: Screenshots: fleet/$box/shots/$DATE/" > "$out" 2>/dev/null \
-  || printf '# %s digest %s\n\nClaude could not write the summary. Raw facts:\n\n```\n%s\n```\n' "$box" "$DATE" "$facts" > "$out"
+## Next   (what the lead plans next, from STATE.md)" > "$out.tmp" 2>/dev/null && [ -s "$out.tmp" ] && mv "$out.tmp" "$out" \
+  || { rm -f "$out.tmp"; printf '# %s digest %s\n\nClaude could not write the summary. Raw facts:\n\n```\n%s\n```\n' "$box" "$DATE" "$facts" > "$out"; }
 
-  # Spoken version for the dashboard player (edge-tts).
-  spoken=$D/digests/$DATE.spoken.txt
-  printf '%s' "$facts" | timeout 10m claude -p --model sonnet --tools "" --output-format text \
+  # Spoken version for the console's Digest tab (edge-tts).
+  if [ -n "${SPEAK_PYTHON:-}" ] && [ -x "$SPEAK_PYTHON" ]; then
+    spoken=$D/digests/$DATE.spoken.txt
+    printf '%s' "$facts" | timeout 10m claude -p --model sonnet --tools "" --output-format text \
 "Write the script for a spoken morning brief (about 60 to 120 seconds read aloud) for the owner of an
 autonomous agent team building a project in a sandbox VM. The lead agent plans each cycle;
 area leads and their builders do the work. Use ONLY the facts on stdin. Conversational, warm but factual, like a
 colleague catching them up over coffee. No markdown, no lists, no symbols, no file paths, no commit
 hashes, no URLs. Say money as 'about twenty dollars of usage'. Order: what got built and merged, what
 failed or is stuck, anything that needs the owner, usage, and what is next. Do not invent anything." \
-    > "$spoken.tmp" 2>/dev/null && [ -s "$spoken.tmp" ] && mv "$spoken.tmp" "$spoken"
-  if [ -s "$spoken" ] && [ -n "$DASHBOARD" ] && [ -x "$DASHBOARD/.venv/bin/python" ]; then
-    APP=$DASHBOARD
-    "$APP/.venv/bin/python" "$APP/speak.py" "$spoken" "$D/digests/$DATE.mp3" \
-      || { "$APP/.venv/bin/pip" install -q -U edge-tts && "$APP/.venv/bin/python" "$APP/speak.py" "$spoken" "$D/digests/$DATE.mp3"; } \
-      || echo "$(date -Is) $box: speech failed" >&2
+      > "$spoken.tmp" 2>/dev/null && [ -s "$spoken.tmp" ] && mv "$spoken.tmp" "$spoken"
+    if [ -s "$spoken" ]; then
+      "$SPEAK_PYTHON" "$HERE/speak.py" "$spoken" "$D/digests/$DATE.mp3" || echo "$(date -Is) $box: speech failed" >&2
+    fi
   fi
 
   headline=$(grep -m1 '^\*\*Headline' "$out" | sed 's/\*\*Headline:\*\* *//')
   if [ -n "${NTFY_URL:-}" ]; then
     curl -s -o /dev/null -H "Title: $box digest $DATE" -H "Tags: robot" \
-      -d "${headline:-digest ready} (24h: \$${usd:-0} API-eq). Full: fleet/$box/digests/$DATE.md" "$NTFY_URL"
+      -d "${headline:-digest ready} (24h: \$${usd:-0} API-eq)" "$NTFY_URL"
   fi
-  if [ "${MAIL:-0}" = 1 ]; then
-    python3 "$HOME/lab/shower-ideas/claude-email-reminders/remind.py" --subject "$box digest $DATE" < "$out"
+  if [ -n "${DIGEST_MAIL_CMD:-}" ]; then
+    $DIGEST_MAIL_CMD "$box digest $DATE" < "$out" || echo "$(date -Is) $box: mail failed" >&2
   fi
   echo "$(date -Is) $box: digest -> $out"
-done 3< <(grep -v '^\s*#' "${CONF:-$HERE/agent-boxes.conf}")
-[ -n "$DASHBOARD" ] && FLEET_DATA="$FLEET" python3 "$DASHBOARD/publish.py" >/dev/null 2>&1 || true
+done
