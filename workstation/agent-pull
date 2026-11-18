@@ -1,0 +1,46 @@
+#!/bin/bash
+# agent-pull: copy agent-box data back to the workstation. Pull only: the VM
+# never gets credentials for this machine.
+#
+#   transcripts -> ~/.local/share/claude-token-tracker/agent-boxes/<box>/projects   (token tracker root)
+#   ledger, gate history, team notes, screenshots -> $FLEET_DATA/<box>/
+#
+# Append-only (never --delete), no symlinks followed or copied, so a misbehaving
+# VM cannot remove or redirect files here. Boxes are listed in agent-boxes.conf.
+set -uo pipefail
+# Settings come from your private config (never commit it):
+#   ${ZIGGURAT_CONFIG:-~/.config/ziggurat/config.env}  (see config.example.env)
+CONFIG=${ZIGGURAT_CONFIG:-$HOME/.config/ziggurat/config.env}
+[ -f "$CONFIG" ] && . "$CONFIG"
+: "${ADMIN_USER:?set ADMIN_USER in $CONFIG}" "${SSH_KEY:?set SSH_KEY in $CONFIG}" "${FLEET_DATA:?set FLEET_DATA in $CONFIG}"
+KEY=$SSH_KEY
+FLEET=$FLEET_DATA
+TRACK=${TRACKER_AGENT_BOXES:-$HOME/.local/share/claude-token-tracker/agent-boxes}
+DASHBOARD=${DASHBOARD_DIR:-}
+HERE=$(cd "$(dirname "$0")" && pwd)
+CONF=${AGENT_BOXES_CONF:-$FLEET_DATA/agent-boxes.conf}
+
+# conf lines: <box-name> <vm-ip> <gateway-ip>
+# Box list on fd 3: ssh/rsync inside the loop must not consume it from stdin.
+while read -r box ip gw <&3; do
+  [ -n "${box:-}" ] || continue
+  jump="ssh -o BatchMode=yes -o LogLevel=ERROR -i $KEY -W %h:%p $ADMIN_USER@$gw"
+  SSH="ssh -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=15 -i $KEY -o ProxyCommand='$jump'"
+  R="rsync -rt --no-links --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r --rsync-path='sudo rsync' -e \"$SSH\""
+  mkdir -p "$TRACK/$box/projects" "$FLEET/$box/notes"
+  eval "$R $ADMIN_USER@$ip:/home/agent/.claude/projects/ '$TRACK/$box/projects/'" 2>/dev/null \
+    || echo "$(date -Is) $box: no transcripts pulled (none yet, or VM unreachable)" >&2
+  eval "$R $ADMIN_USER@$ip:/var/lib/agent-kit/ledger/cycles.jsonl $ADMIN_USER@$ip:/var/lib/agent-kit/gate/history.log $ADMIN_USER@$ip:/var/lib/agent-kit/control '$FLEET/$box/'" 2>/dev/null
+  # Screenshots of the newest passing build -> shots/<today>/ (dashboard gallery).
+  mkdir -p "$FLEET/$box/shots/$(date +%F)"
+  eval "$SSH $ADMIN_USER@$ip 'f=\$(grep -l \"all checks passed\" /var/lib/agent-kit/gate/results/*.json 2>/dev/null | xargs -r ls -t | head -1); \
+        [ -n \"\$f\" ] && d=\$(jq -r .shots \"\$f\") && [ -d \"\$d\" ] && tar -C \"\$d\" -c .'" \
+    | tar -x -C "$FLEET/$box/shots/$(date +%F)" 2>/dev/null
+  # Team notes + design docs as merged on gate main (the workspace checkout may lag).
+  eval "$SSH $ADMIN_USER@$ip \"git -c safe.directory=/srv/$box.git -C /srv/$box.git archive main docs\"" \
+    | tar -x -C "$FLEET/$box/notes" --strip-components=1 2>/dev/null \
+    || echo "$(date -Is) $box: notes pull failed" >&2
+  echo "$(date -Is) $box: pulled"
+done 3< <(grep -v '^\s*#' "${CONF:-$HERE/agent-boxes.conf}")
+# Refresh the fleet dashboard data (fleet-app/publish.py) if present.
+[ -n "$DASHBOARD" ] && [ -f "$DASHBOARD/publish.py" ] && FLEET_DATA="$FLEET" python3 "$DASHBOARD/publish.py" >/dev/null

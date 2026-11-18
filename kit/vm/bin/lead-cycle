@@ -1,0 +1,51 @@
+#!/bin/bash
+# lead-cycle: one headless lead cycle. Runs as `agent` from agent-kit-lead.service.
+# Root-owned; config in /etc/agent-kit/project.env.
+set -uo pipefail
+source /etc/agent-kit/project.env
+LEDGER=$STATE/ledger/cycles.jsonl
+mkdir -p "$STATE/ledger/runs"
+
+if grep -q '^stop' "$STATE/control" 2>/dev/null; then echo "control=stop: not running"; exit 0; fi
+
+today=$(date +%F)
+# Only real work counts toward the daily cap: attempts that hit a usage limit
+# (counted:false) must not use it up while waiting for the window to reset.
+n_today=$(jq -s --arg d "$today" '[.[] | select(.date == $d and .counted != false)] | length' "$LEDGER" 2>/dev/null || echo 0)
+if [ "${n_today:-0}" -ge "$MAX_CYCLES_PER_DAY" ]; then
+  echo "daily cycle cap reached ($n_today/$MAX_CYCLES_PER_DAY)"; exit 0
+fi
+
+cd "$WORKSPACE" || exit 1
+git fetch -q gate 2>/dev/null || true
+start=$(date -Is); t0=$SECONDS
+run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)
+export CLAUDE_CODE_RETRY_WATCHDOG=1
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+claude -p "$(cat /opt/agent-kit/lead-cycle.md)" \
+  --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" \
+  --dangerously-skip-permissions \
+  --max-budget-usd "$CYCLE_BUDGET_USD" \
+  --output-format json > "$run.json" 2> "$run.err"
+rc=$?
+# Usage-limit hit? (session/weekly limit, rate limit). Then this attempt is
+# not counted and the timer simply retries later; after the reset the next
+# attempt runs normally. No human needed.
+limited=false
+if grep -qiE "usage limit|session limit|weekly limit|limit reached|hit your .*limit|rate.?limit|resets at|429" "$run.json" "$run.err" 2>/dev/null \
+   && [ "$(jq -r '.num_turns // 0' "$run.json" 2>/dev/null || echo 0)" -le 2 ]; then
+  limited=true
+fi
+if ! jq -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" \
+      --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited \
+  '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not),
+    cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
+    session:(.session_id // null), is_error:(.is_error // null),
+    summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; then
+  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --argjson rc $rc \
+     --argjson limited $limited --arg err "$(tail -c 600 "$run.err")" \
+     '{date:$date, start:$start, end:$end, rc:$rc, limited:$limited, counted:($limited | not),
+       summary:("no json output: " + $err)}' >> "$LEDGER"
+fi
+echo "cycle done rc=$rc limited=$limited in $((SECONDS - t0))s"
+exit 0

@@ -1,0 +1,29 @@
+# Squid config for {{ agent_gw_name }} (managed by ansible, create-agent-gateway.yml).
+# Agent VMs on {{ agent_bridge }} ({{ agent_cidr }}) reach the internet ONLY
+# through this proxy, and only for domains in agent-allow.txt.
+
+http_port {{ agent_gw_bridge_ip }}:{{ agent_proxy_port }}
+
+acl agent_net src {{ agent_cidr }}
+acl allowed dstdomain "/etc/squid/agent-allow.txt"
+acl SSL_ports port 443
+acl Safe_ports port 80 443
+acl CONNECT method CONNECT
+
+# Never proxy into private, tailnet, link-local or loopback space, even if an
+# allowed name resolves there (DNS rebinding, split-horizon records).
+acl to_private dst 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 127.0.0.0/8 fc00::/7 fe80::/10 ::1
+
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access deny to_private
+http_access allow agent_net allowed
+http_access deny all
+
+# Pure forwarder: no caching, no via/forwarded headers leaking the VM IP.
+cache deny all
+via off
+forwarded_for delete
+
+access_log daemon:/var/log/squid/access.log squid
+logfile_rotate 14

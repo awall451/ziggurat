@@ -1,0 +1,7 @@
+# "The Collective". Display names only: the design itself keeps roles separate
+# and independently checked, unlike a hive mind.
+lead: Queen
+area_lead: Unimatrix
+area_leads: Unimatrices
+worker: Drone
+workers: Drones

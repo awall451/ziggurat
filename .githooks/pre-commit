@@ -1,0 +1,23 @@
+#!/bin/bash
+# Refuse commits that contain private strings (IPs, hostnames, names, domains).
+# The patterns live OUTSIDE the repo so the list itself never gets published:
+#   $ZIGGURAT_LEAK_PATTERNS, or ../ops/config/leak-patterns.txt next to this repo.
+# One extended regex per line; lines starting with # are ignored.
+set -euo pipefail
+root=$(git rev-parse --show-toplevel)
+pf=${ZIGGURAT_LEAK_PATTERNS:-$root/../ops/config/leak-patterns.txt}
+if [ ! -f "$pf" ]; then
+  echo "pre-commit: no leak pattern file at $pf (set ZIGGURAT_LEAK_PATTERNS). Skipping leak check." >&2
+  exit 0
+fi
+patterns=$(grep -vE '^\s*(#|$)' "$pf" | paste -sd'|' -)
+[ -z "$patterns" ] && exit 0
+hits=$(git diff --cached -U0 --no-color | grep -E '^\+' | grep -v '^+++' | grep -niE "$patterns" || true)
+names=$(git diff --cached --name-only | grep -iE "$patterns" || true)
+if [ -n "$hits$names" ]; then
+  echo "pre-commit: BLOCKED - staged changes contain private strings:" >&2
+  [ -n "$names" ] && echo "  in file names: $names" >&2
+  [ -n "$hits" ] && echo "$hits" | cut -c1-160 | sed 's/^/  /' >&2
+  echo "Remove them (move real values to your private config) and try again." >&2
+  exit 1
+fi

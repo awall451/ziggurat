@@ -1,0 +1,10 @@
+[Unit]
+Description=Agent kit: start the next lead cycle after the last one ends
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=15min
+Unit=agent-kit-lead.service
+
+[Install]
+WantedBy=timers.target

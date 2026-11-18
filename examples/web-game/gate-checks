@@ -1,0 +1,45 @@
+#!/bin/bash
+# gate-checks <workdir> <outdir>
+# Runs as the unprivileged `gaterun` user inside a fresh checkout of a
+# candidate commit. Root-owned; agents cannot edit it. Prints one line per
+# step ("STEP <name> ok|FAIL <secs>s") and exits non-zero on the first failure.
+# Also prints TESTS_PASSED=<n> for the orchestrator's test-count rule.
+set -uo pipefail
+work=$1 out=$2
+cd "$work" || exit 2
+mkdir -p "$out"
+PORT=5290
+DEV=""
+cleanup() { [ -n "$DEV" ] && kill -- -"$DEV" 2>/dev/null; true; }
+trap cleanup EXIT
+
+step() {
+  local name=$1; shift
+  local t0=$SECONDS
+  if "$@" >"$out/$name.log" 2>&1; then
+    echo "STEP $name ok $((SECONDS - t0))s"
+  else
+    echo "STEP $name FAIL $((SECONDS - t0))s"
+    echo "---- last 40 lines of $name ----"; tail -40 "$out/$name.log"
+    exit 1
+  fi
+}
+
+step install   timeout 600 npm ci --no-audit --no-fund
+step typecheck timeout 300 npm run -s typecheck
+step unit      timeout 300 npx vitest run --reporter=default --reporter=json --outputFile="$out/vitest.json"
+echo "TESTS_PASSED=$(jq -r '.numPassedTests // 0' "$out/vitest.json" 2>/dev/null || echo 0)"
+step build     timeout 300 npx vite build
+
+# Dev server (unminified: checks read scene class names).
+setsid npx vite --port $PORT --strictPort >"$out/devserver.log" 2>&1 &
+DEV=$!
+for _ in $(seq 1 60); do curl -sf -o /dev/null "http://localhost:$PORT/" && break; sleep 1; done
+
+mkdir -p .gate
+cp /opt/agent-kit/gate/checks/boot-fuzz.mjs .gate/boot-fuzz.mjs
+step boot-fuzz timeout 300 node .gate/boot-fuzz.mjs "http://localhost:$PORT" "$out/shots"
+if [ -f tools/smoke.mjs ]; then
+  step smoke   timeout 300 node tools/smoke.mjs "http://localhost:$PORT"
+fi
+echo "ALL CHECKS PASSED"

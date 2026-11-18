@@ -1,0 +1,214 @@
+---
+# Create one agent sandbox VM: a project's isolated home where autonomous
+# Claude Code agents run unattended. See ../AGENT-SANDBOX.md.
+#
+#   - Clone of the Ubuntu 24.04 cloud-init template (9000)
+#   - Single NIC on vmbr1, NO default route; egress only via agent-gw squid
+#   - Users: your admin user (your key, sudo) and `agent` (runs Claude, no sudo)
+#   - Node 22 + Claude Code installed for `agent`
+#   - Runs agent-wall-check from inside the VM, then snapshots "provisioned"
+#
+# Prereqs: agent-network.yml, create-agent-gateway.yml.
+#
+# Usage:
+#   ansible-playbook playbooks/create-agent-vm.yml -e agent_vm_name=oakhollow --check
+#   ansible-playbook playbooks/create-agent-vm.yml -e agent_vm_name=oakhollow
+#   # optional: -e agent_vm_vmid=300 -e agent_vm_cores=4 -e agent_vm_memory_mb=12288 -e agent_vm_disk_gb=40
+
+- name: Agent sandbox VM
+  hosts: pve
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/agent-sandbox.yml
+  vars:
+    agent_vm_name: ""                # required
+    agent_vm_vmid: ""                # optional; auto in 300..399
+    agent_vm_cores: 4
+    agent_vm_memory_mb: 12288
+    agent_vm_disk_gb: 40
+    agent_vm_storage: local-lvm
+    cloud_user: "{{ admin_user }}"
+    ssh_pubkey_local_path: "{{ admin_ssh_pubkey }}"
+    ssh_pubkey_remote_path: "/tmp/agent-vm-ssh.pub"
+    snippets_storage: local
+    snippets_dir: /var/lib/vz/snippets
+    cloudinit_timeout_s: 1500
+
+  tasks:
+    # ---- 0. Preconditions -------------------------------------------------
+    - name: Name is required
+      ansible.builtin.assert:
+        that: agent_vm_name | length > 0 and agent_vm_name is match('^[a-z0-9-]+$')
+        fail_msg: "pass -e agent_vm_name=<lowercase-name>"
+
+    - name: "{{ agent_bridge }} must exist"
+      ansible.builtin.command: "ip link show {{ agent_bridge }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Gateway CT must be running
+      ansible.builtin.command: "pct status {{ agent_gw_vmid }}"
+      register: gw_status
+      changed_when: false
+      check_mode: false
+      failed_when: "'running' not in gw_status.stdout"
+
+    - name: Template must exist
+      ansible.builtin.command: "qm status {{ agent_template_vmid }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Snippets content enabled on {{ snippets_storage }}
+      ansible.builtin.shell: "pvesh get /storage/{{ snippets_storage }} --output-format json | grep -q snippets"
+      changed_when: false
+      check_mode: false
+
+    # ---- 1. VMID + IP -----------------------------------------------------
+    - name: Find VMID (given, or next free in {{ agent_vmid_min }}..{{ agent_vmid_max }})
+      ansible.builtin.shell: |
+        set -e
+        if [ -n "{{ agent_vm_vmid }}" ]; then echo "{{ agent_vm_vmid }}"; exit 0; fi
+        for i in $(seq {{ agent_vmid_min }} {{ agent_vmid_max }}); do
+          if ! qm status $i >/dev/null 2>&1 && ! pct status $i >/dev/null 2>&1; then echo $i; exit 0; fi
+        done
+        echo "no free VMID" >&2; exit 1
+      register: vmid_out
+      changed_when: false
+      check_mode: false
+
+    - name: Resolve plan
+      ansible.builtin.set_fact:
+        vm:
+          vmid: "{{ vmid_out.stdout | int }}"
+          name: "{{ agent_vm_name }}"
+        vm_ip: "{{ agent_subnet_prefix }}.{{ (vmid_out.stdout | int) - agent_vmid_min + 10 }}"
+
+    - name: VMID must be in the agent range
+      ansible.builtin.assert:
+        that: (vm.vmid | int) >= agent_vmid_min and (vm.vmid | int) <= agent_vmid_max
+
+    - name: Does VM exist already?
+      ansible.builtin.command: "qm status {{ vm.vmid }}"
+      register: vm_probe
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: Plan
+      ansible.builtin.debug:
+        msg: >-
+          VMID {{ vm.vmid }} name={{ vm.name }} ip={{ vm_ip }} on {{ agent_bridge }}
+          cores={{ agent_vm_cores }} mem={{ agent_vm_memory_mb }} disk={{ agent_vm_disk_gb }}G
+          exists={{ vm_probe.rc == 0 }}
+
+    # ---- 2. Create --------------------------------------------------------
+    - name: Read local SSH public key
+      ansible.builtin.slurp:
+        src: "{{ ssh_pubkey_local_path }}"
+      register: pubkey_blob
+      delegate_to: localhost
+      become: false
+      check_mode: false
+
+    - name: Push SSH public key to pve
+      ansible.builtin.copy:
+        content: "{{ pubkey_blob.content | b64decode }}"
+        dest: "{{ ssh_pubkey_remote_path }}"
+        mode: "0644"
+
+    - name: Render cloud-init vendor snippet
+      ansible.builtin.template:
+        src: cloudinit-agent-vendor.yaml.j2
+        dest: "{{ snippets_dir }}/cloudinit-agent-{{ vm.vmid }}.yaml"
+        mode: "0644"
+      when: vm_probe.rc != 0
+
+    - name: Clone template, size it, wire it to the isolated bridge
+      ansible.builtin.shell: |
+        set -e
+        qm clone {{ agent_template_vmid }} {{ vm.vmid }} --name {{ vm.name }} --full 1 --storage {{ agent_vm_storage }}
+        qm resize {{ vm.vmid }} scsi0 {{ agent_vm_disk_gb }}G
+        qm set {{ vm.vmid }} --cores {{ agent_vm_cores }} --memory {{ agent_vm_memory_mb }} --balloon 0
+        qm set {{ vm.vmid }} --net0 virtio,bridge={{ agent_bridge }}
+        qm set {{ vm.vmid }} --ipconfig0 ip={{ vm_ip }}/24
+        qm set {{ vm.vmid }} --nameserver {{ agent_gw_bridge_ip }} --searchdomain agent.invalid
+        qm set {{ vm.vmid }} --ciuser {{ cloud_user }} --sshkeys {{ ssh_pubkey_remote_path }}
+        qm set {{ vm.vmid }} --cicustom "vendor={{ snippets_storage }}:snippets/cloudinit-agent-{{ vm.vmid }}.yaml"
+        qm set {{ vm.vmid }} --onboot 1 --tags 'agent-sandbox;cloudinit;managed-by-ansible'
+        qm set {{ vm.vmid }} --description 'Agent sandbox for {{ vm.name }}. No route out; egress via agent-gw squid only. Managed by ansible/playbooks/create-agent-vm.yml'
+        qm start {{ vm.vmid }}
+      when: vm_probe.rc != 0
+      changed_when: true
+
+    # ---- 3. Wait for cloud-init -------------------------------------------
+    - name: Wait for qemu guest agent
+      ansible.builtin.command: "qm agent {{ vm.vmid }} ping"
+      register: ga
+      retries: 90
+      delay: 10
+      until: ga.rc == 0
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: >-
+        qm guest exec {{ vm.vmid }} --timeout {{ cloudinit_timeout_s }}
+        -- cloud-init status --wait --long
+      register: ci
+      changed_when: false
+      async: "{{ cloudinit_timeout_s + 120 }}"
+      poll: 15
+      when: not ansible_check_mode
+
+    - name: Cloud-init result
+      ansible.builtin.debug:
+        msg: "{{ (ci.stdout | from_json)['out-data'] | default('') }}"
+      when: not ansible_check_mode
+
+    - name: Cloud-init must have succeeded (0 = done, 2 = done with warnings)
+      ansible.builtin.assert:
+        that: (ci.stdout | from_json).exitcode in [0, 2]
+        fail_msg: "cloud-init failed; inspect: qm guest exec {{ vm.vmid }} -- cat /var/log/cloud-init-output.log"
+      when: not ansible_check_mode
+
+    # ---- 4. Prove the wall from inside -----------------------------------
+    - name: Run agent-wall-check as the agent user
+      ansible.builtin.command: >-
+        qm guest exec {{ vm.vmid }} --timeout 300
+        -- sudo -u agent -H bash -lc /usr/local/bin/agent-wall-check
+      register: wall
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Wall check output
+      ansible.builtin.debug:
+        msg: "{{ ((wall.stdout | from_json)['out-data'] | default('')).split('\n') }}"
+      when: not ansible_check_mode
+
+    - name: Wall must hold
+      ansible.builtin.assert:
+        that: (wall.stdout | from_json).exitcode == 0
+        fail_msg: "WALL CHECK FAILED - do not start agents. VM left running for inspection, no snapshot taken."
+      when: not ansible_check_mode
+
+    # ---- 5. Snapshot -------------------------------------------------------
+    - name: Snapshot "provisioned" (rollback point before any agent runs)
+      ansible.builtin.shell: |
+        qm listsnapshot {{ vm.vmid }} | grep -q provisioned \
+          || qm snapshot {{ vm.vmid }} provisioned --description "fresh, wall-checked, before any agent run"
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg: |
+          Agent VM {{ vm.vmid }} ({{ vm.name }}) at {{ vm_ip }} - wall checked, snapshot "provisioned".
+          Workstation ~/.ssh/config:
+            Host {{ vm.name }}
+              HostName {{ vm_ip }}
+              User {{ cloud_user }}
+              IdentityFile <your private key>
+              ProxyJump agent-gw
+          Then: ssh {{ vm.name }}, `sudo -iu agent`, `claude` to log in once.
+          Rollback: qm rollback {{ vm.vmid }} provisioned

@@ -1,0 +1,89 @@
+#cloud-config
+# Agent sandbox VM {{ vm.vmid }} ({{ vm.name }}). Wired as cloud-init
+# VENDOR data (merged with PVE's user-data, which sets the admin user, key,
+# IP). Managed by ansible/playbooks/create-agent-vm.yml.
+#
+# The VM has no default route. Everything outbound goes through the agent
+# gateway's squid at {{ agent_proxy_url }}, allow-listed by domain.
+
+apt:
+  http_proxy: "{{ agent_proxy_url }}"
+  https_proxy: "{{ agent_proxy_url }}"
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - qemu-guest-agent
+  - git
+  - curl
+  - ca-certificates
+  - xz-utils
+  - jq
+  - unzip
+  - rsync
+  - tmux
+  - htop
+  - build-essential
+
+write_files:
+  - path: /etc/environment
+    append: true
+    content: |
+      HTTP_PROXY={{ agent_proxy_url }}
+      HTTPS_PROXY={{ agent_proxy_url }}
+      http_proxy={{ agent_proxy_url }}
+      https_proxy={{ agent_proxy_url }}
+      NO_PROXY=localhost,127.0.0.1,::1
+      no_proxy=localhost,127.0.0.1,::1
+  - path: /etc/profile.d/10-agent-sandbox.sh
+    permissions: "0644"
+    content: |
+      export HTTP_PROXY={{ agent_proxy_url }} HTTPS_PROXY={{ agent_proxy_url }}
+      export http_proxy={{ agent_proxy_url }} https_proxy={{ agent_proxy_url }}
+      export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1
+      case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+      # Never let an API key switch Claude Code to API billing.
+      unset ANTHROPIC_API_KEY
+  - path: /etc/agent-sandbox.env
+    permissions: "0644"
+    content: |
+      LAN_GW={{ lan_gateway }}
+      PVE_IP={{ pve_host_ip }}
+  - path: /usr/local/bin/agent-wall-check
+    permissions: "0755"
+    content: |
+      {{ lookup('file', 'agent-wall-check.sh') | indent(6) }}
+
+runcmd:
+  - [ systemctl, enable, --now, qemu-guest-agent ]
+  # Unprivileged agent user: runs Claude Code, owns the project. No sudo.
+  - [ bash, -c, "id -u agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent" ]
+  # Node.js 22 LTS from nodejs.org, checksum-verified, into /usr/local.
+  - - bash
+    - -c
+    - |
+      set -euo pipefail
+      export HTTPS_PROXY={{ agent_proxy_url }}
+      base=https://nodejs.org/dist/latest-v22.x
+      cd /tmp
+      curl -fsSLO "$base/SHASUMS256.txt"
+      f=$(grep -o 'node-v[0-9.]*-linux-x64.tar.xz' SHASUMS256.txt | head -1)
+      curl -fsSLO "$base/$f"
+      grep " $f\$" SHASUMS256.txt | sha256sum -c -
+      tar -xJf "$f" -C /usr/local --strip-components=1 --exclude='*.md' --exclude=LICENSE
+      rm -f "$f" SHASUMS256.txt
+  # Claude Code for the agent user: native installer, npm as fallback.
+  - - sudo
+    - -u
+    - agent
+    - -H
+    - bash
+    - -lc
+    - |
+      export HTTPS_PROXY={{ agent_proxy_url }} HTTP_PROXY={{ agent_proxy_url }}
+      curl -fsSL https://claude.ai/install.sh | bash \
+        || npm install -g --prefix "$HOME/.local" @anthropic-ai/claude-code
+  - [ bash, -c, "mkdir -p /var/lib/agent-sandbox && date -Is > /var/lib/agent-sandbox/provisioned" ]
+
+final_message: "agent VM {{ vm.vmid }} ({{ vm.name }}) cloud-init done after $UPTIME s"

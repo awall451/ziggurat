@@ -1,0 +1,10 @@
+[Unit]
+Description=Agent kit: run the merge gate every 2 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=2min
+Unit=agent-kit-gate.service
+
+[Install]
+WantedBy=timers.target

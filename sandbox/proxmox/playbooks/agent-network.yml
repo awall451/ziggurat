@@ -1,0 +1,68 @@
+---
+# Create the isolated agent bridge (vmbr1) on the PVE host.
+#
+# vmbr1 has no physical port, no host IP and the host does not route, so
+# guests on it can only talk to each other and to the agent gateway CT's
+# second NIC. See ../AGENT-SANDBOX.md.
+#
+# Touches the HOST network config. Safe by construction (adds a new bridge,
+# leaves vmbr0 alone, backs up /etc/network/interfaces), but it is still a
+# host change: run --check first and get an explicit go.
+#
+# Usage:
+#   ansible-playbook playbooks/agent-network.yml --check --diff
+#   ansible-playbook playbooks/agent-network.yml
+
+- name: Isolated bridge for agent sandboxes
+  hosts: pve
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/agent-sandbox.yml
+
+  tasks:
+    - name: Refuse if the host routes packets (isolation depends on it)
+      ansible.builtin.command:
+        cmd: sysctl -n net.ipv4.ip_forward
+      register: ipfwd
+      changed_when: false
+      check_mode: false
+      failed_when: ipfwd.stdout | trim != "0"
+
+    - name: Add {{ agent_bridge }} stanza to /etc/network/interfaces
+      ansible.builtin.blockinfile:
+        path: /etc/network/interfaces
+        backup: true
+        marker: "# {mark} ANSIBLE agent-sandbox bridge"
+        block: |
+          # Isolated bridge for agent sandbox VMs. No uplink, no host IP,
+          # host does not forward. Only agent VMs + agent-gw eth1 attach here.
+          auto {{ agent_bridge }}
+          iface {{ agent_bridge }} inet manual
+          	bridge-ports none
+          	bridge-stp off
+          	bridge-fd 0
+      register: ifaces
+
+    - name: Bring up {{ agent_bridge }} (only this interface, not ifreload -a)
+      ansible.builtin.command:
+        cmd: "ifup {{ agent_bridge }}"
+      when: ifaces.changed
+      changed_when: true
+
+    - name: Verify bridge state
+      ansible.builtin.shell: |
+        set -e
+        ip -br link show {{ agent_bridge }}
+        # must have no IPv4 address on the host side
+        ! ip -4 -o addr show dev {{ agent_bridge }} | grep -q inet
+        # vmbr0 must still carry the host address
+        ip -4 -o addr show dev vmbr0 | grep -q {{ pve_host_ip }}
+      register: verify
+      changed_when: false
+      check_mode: false
+      failed_when: verify.rc != 0 and not ansible_check_mode
+
+    - name: Show result
+      ansible.builtin.debug:
+        var: verify.stdout_lines
