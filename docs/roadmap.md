@@ -18,22 +18,29 @@ everyone. Treat every agent as a **neutral role** with a
 | `reviewer` | Independent review of risky branches | Opus / Sonnet | `ainu-review` |
 | `qa` | Plays the game, files issues | Opus | `ainu-qa` |
 
-### Candidate themes
+### Themes (implemented in `themes/`)
 
-| Theme | lead | area-lead | builder | scout | reviewer | qa |
+| Theme (file) | lead | area-lead | builder | scout | reviewer | qa |
 |---|---|---|---|---|---|---|
-| Plain (default for others) | Lead | Area lead | Builder | Scout | Reviewer | QA |
-| Tolkien | Eru | Ainur | Maiar | Maiar (scouts) | Ainu reviewer | Ainu QA |
-| Orchestra | Conductor | Section principal | Player | Stagehand | Critic | Audience |
-| Gothic household | The Count | Steward | Servant | Footman | Chaplain | Night watch |
-| Cathedral builders | Master builder | Master mason | Journeyman | Apprentice | Inspector | Pilgrim |
-| Starship | Captain | Chief officer | Crew | Ensign | First officer | Away team |
-| Norse | Odin | Aesir | Einherjar | Ravens | Norns | Valkyries |
+| Plain (`plain`, default for others) | lead | area lead | builder | scout | reviewer | QA |
+| Tolkien (`tolkien`) | Eru | Ainu / Ainur | Maia / Maiar | Maia scout | Ainu reviewer | Ainu QA |
+| Borg (`borg`) | Queen | Unimatrix | Drone | Probe | Vinculum | Tactical Cube |
+| Orchestra (`orchestra`) | Conductor | Section Principal | Player | Stagehand | Critic | Audience |
+| Gothic household (`gothic`) | The Count | Steward | Servant | Footman | Chaplain | Night Watch |
+| Cathedral builders (`cathedral`) | Master Builder | Master Mason | Journeyman | Apprentice | Inspector | Pilgrim |
+| Starship (`starship`) | Captain | Chief Officer | Crew member / Crew | Ensign | First Officer | Away Team |
+| Norse (`norse`) | Odin | As / Aesir | Einheri / Einherjar | Raven | Norn | Valkyrie |
+| Heist crew (`heist`) | Mastermind | Specialist | Muscle | Lookout | Fixer | Inside Man |
+| Greek (`greek`) | Zeus | Olympian | Hero | Hermes | Athena | the Oracle |
+| Monastery (`monastery`) | Abbot | Brother | Novice | Lay Brother | Prior | Pilgrim |
+
+Each file sets `lead`, `area_lead(s)`, `worker(s)` (the builder), `scout(s)`, `reviewer` and `qa`.
+Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 
 ### How a theme toggle could work (later)
 
 - Agent files and prompts use **role ids** (`area-lead-engine.md`, `builder.md`, `scout.md`).
-- A theme is a small file, `themes/<name>.yaml`: role id → display name, plus an optional one-line
+- A theme is a small file, `themes/<name>.yml`: role id → display name, plus an optional one-line
   flavour per role ("You are a Maia..."). Prompts reference `{{name.builder}}` etc.
 - The installer renders the agent files and prompts for the chosen theme (`THEME=tolkien`).
 - The dashboard, digests and spoken briefs read the same theme file, so labels match everywhere.

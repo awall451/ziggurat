@@ -1,0 +1,11 @@
+# Monastery: the abbot guides the brothers, who teach the novices.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: Abbot
+area_lead: Brother
+area_leads: Brothers
+worker: Novice
+workers: Novices
+scout: Lay Brother
+scouts: Lay Brothers
+reviewer: Prior
+qa: Pilgrim

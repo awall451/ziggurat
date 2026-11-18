@@ -1,0 +1,11 @@
+# Greek: Zeus rules the Olympians, who send heroes; Hermes runs messages.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: Zeus
+area_lead: Olympian
+area_leads: Olympians
+worker: Hero
+workers: Heroes
+scout: Hermes
+scouts: Hermes
+reviewer: Athena
+qa: the Oracle

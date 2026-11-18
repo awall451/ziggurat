@@ -1,6 +1,11 @@
-# Plain names. Default for new users.
+# Plain names, the default for others.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
 lead: lead
 area_lead: area lead
 area_leads: area leads
 worker: builder
 workers: builders
+scout: scout
+scouts: scouts
+reviewer: reviewer
+qa: QA

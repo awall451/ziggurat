@@ -1,7 +1,12 @@
 # "The Collective". Display names only: the design itself keeps roles separate
 # and independently checked, unlike a hive mind.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
 lead: Queen
 area_lead: Unimatrix
 area_leads: Unimatrices
 worker: Drone
 workers: Drones
+scout: Probe
+scouts: Probes
+reviewer: Vinculum
+qa: Tactical Cube

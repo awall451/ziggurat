@@ -1,6 +1,11 @@
 # The original theme: Eru commands the Ainur, who command the Maiar.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
 lead: Eru
 area_lead: Ainu
 area_leads: Ainur
 worker: Maia
 workers: Maiar
+scout: Maia scout
+scouts: Maia scouts
+reviewer: Ainu reviewer
+qa: Ainu QA
