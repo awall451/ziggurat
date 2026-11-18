@@ -1,0 +1,62 @@
+---
+# Shared settings for the agent sandbox: isolated VMs where autonomous
+# Claude Code agents run unattended. Read by:
+#   playbooks/agent-network.yml        (host bridge)
+#   playbooks/create-agent-gateway.yml (egress proxy CT)
+#   playbooks/create-agent-vm.yml      (one VM per project)
+# Design + reasoning: ../AGENT-SANDBOX.md
+#
+# Isolation model (topology, not firewall rules):
+#   - vmbr1 is a bridge with NO uplink port and NO host IP. The PVE host is
+#     not on it, and host ip_forward stays 0. Nothing on vmbr1 can route.
+#   - Agent VMs sit only on vmbr1, with no default gateway.
+#   - The gateway CT is the only other thing on vmbr1. It runs squid on
+#     10.66.0.1:3128 with a domain allow-list, does not forward packets, and
+#     its sshd listens on the LAN side only.
+#   => An agent VM can reach: other agent VMs on vmbr1, and squid. Nothing else.
+
+agent_bridge: vmbr1
+agent_subnet_prefix: "10.66.0"
+agent_cidr: "10.66.0.0/24"
+agent_gw_bridge_ip: "10.66.0.1"
+agent_proxy_port: 3128
+agent_proxy_url: "http://10.66.0.1:3128"
+
+# Your LAN (EXAMPLE VALUES: change to match your network).
+lan_gateway: "192.168.1.1"      # your router
+pve_host_ip: "192.168.1.10"     # the Proxmox host (agents must NOT reach it)
+admin_user: "admin"             # your admin login created in the gateway CT and agent VMs
+admin_ssh_pubkey: "~/.ssh/id_ed25519.pub"
+
+# Gateway CT (LAN side): needs a free LAN address.
+agent_gw_vmid: 110
+agent_gw_name: agent-gw
+agent_gw_lan_ip: "192.168.1.110"
+agent_gw_lan_gateway: "{{ lan_gateway }}"
+agent_gw_nameservers: "1.1.1.1 8.8.8.8"
+agent_gw_ct_template: "local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
+
+# Agent VMs: VMID 300..399, IP 10.66.0.(vmid - 300 + 10). Kept out of the
+# 200..254 range so the LAN "vmid == last octet" convention never applies.
+agent_vmid_min: 300
+agent_vmid_max: 399
+agent_template_vmid: 9000
+
+# Domains agents may reach through squid. Leading dot = include subdomains.
+# Keep this short: every entry is also a possible exfiltration channel.
+# Denied requests show up in /var/log/squid/access.log on the gateway
+# (TCP_DENIED) -> add entries deliberately, never wildcard a whole CDN.
+agent_allowed_domains:
+  # Claude Code: API, OAuth/login, Remote Control, installer + updates
+  - .anthropic.com
+  - .claude.ai
+  - .claude.com
+  # Node + npm
+  - registry.npmjs.org
+  - nodejs.org
+  # Ubuntu packages (cloud-init + apt)
+  - .archive.ubuntu.com     # leading dot also matches archive.ubuntu.com itself (squid rejects listing both)
+  - security.ubuntu.com
+  # Playwright browser downloads
+  - cdn.playwright.dev
+  - playwright.download.prss.microsoft.com

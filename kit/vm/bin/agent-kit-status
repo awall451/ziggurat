@@ -1,0 +1,14 @@
+#!/bin/bash
+# agent-kit-status [n]: owner's one-screen view.  ssh oakhollow agent-kit-status
+source /etc/agent-kit/project.env
+L=$STATE/ledger/cycles.jsonl
+today=$(date +%F)
+echo "== $PROJECT  $(date '+%F %H:%M')   control: $(cat "$STATE/control" 2>/dev/null || echo 'run (default)')"
+systemctl list-timers 'agent-kit-*' --no-pager | sed -n '1,4p'
+echo; echo "== last cycles"
+tail -n "${1:-6}" "$L" 2>/dev/null | jq -r '"\(.start[5:16])  rc=\(.rc)  \(.secs // "?")s  $\(.cost_usd // "?")  \(.summary // "" | gsub("\n";" ") | .[0:160])"'
+cost=$(grep "\"date\":\"$today\"" "$L" 2>/dev/null | jq -s 'map(.cost_usd // 0) | add // 0 | . * 100 | round / 100')
+echo; echo "== today: $(grep -c "\"date\":\"$today\"" "$L" 2>/dev/null || echo 0)/$MAX_CYCLES_PER_DAY cycles, API-equivalent \$${cost:-0} (subscription usage, not a bill)"
+echo; echo "== gate"; gate-status | head -8
+esc=$WORKSPACE/docs/agents/ESCALATIONS.md
+if sudo test -f "$esc"; then echo; echo "== escalations (tail)"; sudo tail -15 "$esc"; fi

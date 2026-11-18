@@ -1,0 +1,122 @@
+#!/bin/bash
+# Agent kit installer. Run as root INSIDE an agent sandbox VM:
+#   sudo bash install.sh <project-dir>     e.g. sudo bash install.sh ./oakhollow
+# Expects: kit files next to this script, the project workspace already at
+# $WORKSPACE (owned by `agent`), Claude Code + Node installed for `agent`.
+# Idempotent. Leaves the lead timer DISABLED and control=stop: the owner starts it.
+set -euo pipefail
+KIT=$(cd "$(dirname "$0")" && pwd)
+PDIR=$(cd "${1:?usage: install.sh <project-dir>}" && pwd)
+source "$PDIR/project.env"
+: "${PROJECT:?}" "${WORKSPACE:?}" "${BARE:?}" "${STATE:?}"
+
+echo "== packages"
+export DEBIAN_FRONTEND=noninteractive
+dpkg -s python3-pil jq >/dev/null 2>&1 || apt-get install -y -q python3-pil jq >/dev/null
+
+echo "== users"
+# gaterun: runs candidate (agent-written) code during gate checks. Owns nothing that matters.
+id -u gaterun >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/agent-kit-gaterun --shell /usr/sbin/nologin gaterun
+# gatekeeper: owns the canonical bare repo and does all gate git operations.
+# Never runs agent code. Reads the agent workspace via the agent group.
+id -u gatekeeper >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/agent-kit-gatekeeper --shell /usr/sbin/nologin gatekeeper
+usermod -aG agent gatekeeper
+chmod 750 /home/agent
+# Add (never replace) git safe.directory entries: projects add their own too.
+safe_add() { sudo -u "$1" -H git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$2" \
+  || sudo -u "$1" -H git config --global --add safe.directory "$2"; }
+safe_add gatekeeper "$WORKSPACE/.git"
+safe_add gatekeeper "$WORKSPACE"
+safe_add gaterun "$BARE"
+safe_add agent "$BARE"
+
+echo "== /opt/agent-kit (root-owned, read-only to agents)"
+install -d -m 755 /opt/agent-kit/bin /opt/agent-kit/gate/bin /opt/agent-kit/gate/checks
+[ -f "$PDIR/gate-checks" ] || { echo "project dir needs a gate-checks script (see examples/)"; exit 1; }
+install -m 755 "$KIT"/bin/* /opt/agent-kit/bin/
+install -m 755 "$KIT"/gate/bin/* /opt/agent-kit/gate/bin/
+# The project defines what "done" means: its gate-checks script.
+install -m 755 "$PDIR/gate-checks" /opt/agent-kit/gate/bin/gate-checks
+if [ -d "$PDIR/checks" ]; then install -m 644 "$PDIR"/checks/* /opt/agent-kit/gate/checks/; fi
+install -m 644 "$PDIR/CHARTER.md" "$PDIR/GATE-CONTRACT.md" "$PDIR/lead-cycle.md" /opt/agent-kit/
+for b in gate-status agent-kit-status agent-kit-stop; do ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b; done
+
+echo "== /etc/agent-kit"
+install -d -m 755 /etc/agent-kit
+install -m 644 "$PDIR/project.env" /etc/agent-kit/project.env
+install -m 644 "$KIT/agent.env" /etc/agent-kit/agent.env
+# Project-specific extra env (toolchain PATH etc.).
+if [ -f "$PDIR/agent.env.extra" ]; then cat "$PDIR/agent.env.extra" >> /etc/agent-kit/agent.env; fi
+grep -q PLAYWRIGHT_BROWSERS_PATH /etc/environment || echo "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" >> /etc/environment
+grep -q PLAYWRIGHT_BROWSERS_PATH /etc/profile.d/10-agent-sandbox.sh \
+  || echo "export PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" >> /etc/profile.d/10-agent-sandbox.sh
+
+echo "== shared Playwright browsers"
+if [ ! -d /opt/ms-playwright ] && [ -d /home/agent/.cache/ms-playwright ]; then
+  cp -a /home/agent/.cache/ms-playwright /opt/ms-playwright
+  chown -R root:root /opt/ms-playwright; chmod -R a+rX /opt/ms-playwright
+fi
+
+echo "== state dirs"
+install -d -m 755 "$STATE" "$STATE/gate"
+install -d -m 755 -o agent -g agent "$STATE/ledger"
+[ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
+chmod 644 "$STATE/control"
+
+echo "== agent workspace: team, docs, settings"
+AS="sudo -u agent -H"
+$AS mkdir -p "$WORKSPACE/.claude/agents" "$WORKSPACE/docs/agents/issues"
+install -m 644 -o agent -g agent "$PDIR"/agents/*.md "$WORKSPACE/.claude/agents/"
+if ! grep -q "## Agent team" "$WORKSPACE/CLAUDE.md"; then
+  cat >> "$WORKSPACE/CLAUDE.md" <<'EOF'
+
+## Agent team
+
+This repo is developed by an autonomous agent team (a lead, area leads and their
+workers;
+`.claude/agents/area-lead-*`, `builder`, `scout`). Binding rules live outside the repo, read-only:
+`/opt/agent-kit/CHARTER.md` and `/opt/agent-kit/GATE-CONTRACT.md`.
+Team notes: `docs/agents/` (STATE.md, JOURNAL.md, ESCALATIONS.md, issues/).
+Work reaches main only through the gate: `ready/<topic>` branches, `gate-status`.
+Playwright browsers are preinstalled at `$PLAYWRIGHT_BROWSERS_PATH`; do not run `playwright install`.
+EOF
+  chown agent:agent "$WORKSPACE/CLAUDE.md"
+fi
+for f in STATE JOURNAL ESCALATIONS; do
+  [ -f "$WORKSPACE/docs/agents/$f.md" ] || echo "# $f" | $AS tee "$WORKSPACE/docs/agents/$f.md" >/dev/null
+done
+$AS touch "$WORKSPACE/docs/agents/issues/.gitkeep"
+$AS mkdir -p /home/agent/.claude
+SET=/home/agent/.claude/settings.json
+[ -f "$SET" ] || echo '{}' | $AS tee "$SET" >/dev/null
+$AS bash -c "jq '.cleanupPeriodDays = 3650' '$SET' > '$SET.tmp' && mv '$SET.tmp' '$SET'"
+
+echo "== commit team setup in workspace"
+$AS bash -lc "cd '$WORKSPACE' && git add -A .claude/agents CLAUDE.md docs/agents && git commit -qm 'chore(agents): add agent team definitions and notes skeleton' || true"
+
+echo "== canonical bare repo (agents read, gate writes)"
+GK="sudo -u gatekeeper -H git"
+if [ ! -d "$BARE" ]; then
+  install -d -m 755 -o gatekeeper -g gatekeeper "$BARE"
+  $GK clone -q --bare "$WORKSPACE" "$BARE"
+else
+  $GK -C "$BARE" fetch -q "$WORKSPACE" "+refs/heads/main:refs/heads/main"
+fi
+chmod -R a+rX "$BARE"
+$AS bash -lc "cd '$WORKSPACE' && (git remote get-url gate >/dev/null 2>&1 || git remote add gate '$BARE') && git fetch -q gate"
+# Test-count baseline: projects may set BASELINE_TESTS in project.env; web
+# projects with a package.json fall back to counting Vitest tests.
+if [ -n "${BASELINE_TESTS:-}" ]; then
+  TESTS=$BASELINE_TESTS
+elif [ -f "$WORKSPACE/package.json" ]; then
+  TESTS=$($AS bash -lc "cd '$WORKSPACE' && npx vitest run --reporter=json 2>/dev/null" | jq -r '.numPassedTests // 0' || echo 0)
+fi
+[ -f "$STATE/gate/baseline-tests" ] && [ "$(cat "$STATE/gate/baseline-tests")" != 0 ] || echo "${TESTS:-0}" > "$STATE/gate/baseline-tests"
+echo "   main: $($GK -C "$BARE" log --oneline -1 main)   baseline tests: $(cat "$STATE/gate/baseline-tests")"
+
+echo "== systemd"
+install -m 644 "$KIT"/systemd/* /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now agent-kit-gate.timer >/dev/null
+echo "   gate timer enabled. lead timer NOT enabled (owner starts it)."
+echo "== done"

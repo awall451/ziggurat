@@ -1,0 +1,14 @@
+#!/bin/bash
+# gate-status [topic]  - gate verdicts for ready/* branches (readable by everyone)
+source /etc/agent-kit/project.env
+R=$STATE/gate/results
+if [ -n "${1:-}" ]; then
+  f="$R/${1//\//_}.json"
+  if [ -f "$f" ]; then jq . "$f"; else echo "no verdict yet for $1 (gate runs every ~2 min)"; fi
+  exit 0
+fi
+echo "gate main: $(git -c safe.directory="$BARE" -C "$BARE" log --oneline -1 main)"
+grep -q '^stop' "$STATE/control" 2>/dev/null && echo "!! control=stop: gate and cycles are paused"
+ls -t "$R"/*.json 2>/dev/null | head -20 | while read -r f; do
+  jq -r '"\(.at[0:16])  \(.status|ascii_upcase)\t\(.topic)\t\(.sha[0:9])  \(.detail)"' "$f"
+done

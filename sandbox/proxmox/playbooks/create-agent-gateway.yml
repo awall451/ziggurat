@@ -1,0 +1,223 @@
+---
+# Create the agent gateway CT: the ONLY door between agent VMs and the world.
+#
+#   eth0 -> vmbr0 (LAN, {{ agent_gw_lan_ip }}): upstream internet + your SSH
+#   eth1 -> vmbr1 ({{ agent_gw_bridge_ip }}): squid :3128 for agent VMs
+#
+# The CT does not forward packets, sshd listens on the LAN address only, and
+# squid allows only the domains in vars/agent-sandbox.yml. Re-running the
+# playbook re-renders squid config + allow-list (use it to change domains).
+#
+# Prereq: playbooks/agent-network.yml (vmbr1 must exist).
+#
+# Usage:
+#   ansible-playbook playbooks/create-agent-gateway.yml --check
+#   ansible-playbook playbooks/create-agent-gateway.yml
+
+- name: Agent egress gateway CT
+  hosts: pve
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/agent-sandbox.yml
+  vars:
+    cloud_user: "{{ admin_user }}"
+    ssh_pubkey_local_path: "{{ admin_ssh_pubkey }}"
+    ssh_pubkey_remote_path: "/tmp/agent-gw-ssh.pub"
+    stage_dir: "/tmp/agent-gw-{{ agent_gw_vmid }}"
+
+  tasks:
+    # ---- 0. Preconditions -------------------------------------------------
+    - name: "{{ agent_bridge }} must exist (run agent-network.yml first)"
+      ansible.builtin.command:
+        cmd: "ip link show {{ agent_bridge }}"
+      changed_when: false
+      check_mode: false
+
+    - name: CT template must be present
+      ansible.builtin.shell: "pveam list local | awk '{print $1}' | grep -qxF '{{ agent_gw_ct_template }}'"
+      changed_when: false
+      check_mode: false
+
+    - name: Does CT {{ agent_gw_vmid }} exist?
+      ansible.builtin.command:
+        cmd: "pct status {{ agent_gw_vmid }}"
+      register: gw_probe
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: VMID {{ agent_gw_vmid }} must not be a VM
+      ansible.builtin.command:
+        cmd: "qm status {{ agent_gw_vmid }}"
+      register: vm_probe
+      failed_when: vm_probe.rc == 0
+      changed_when: false
+      check_mode: false
+
+    - name: LAN address {{ agent_gw_lan_ip }} must be free (new CT only)
+      ansible.builtin.command:
+        cmd: "ping -c 2 -W 1 {{ agent_gw_lan_ip }}"
+      register: ip_probe
+      failed_when: ip_probe.rc == 0
+      changed_when: false
+      check_mode: false
+      when: gw_probe.rc != 0
+
+    # ---- 1. Create the CT -------------------------------------------------
+    - name: Read local SSH public key
+      ansible.builtin.slurp:
+        src: "{{ ssh_pubkey_local_path }}"
+      register: pubkey_blob
+      delegate_to: localhost
+      become: false
+      check_mode: false
+
+    - name: Push SSH public key to pve
+      ansible.builtin.copy:
+        content: "{{ pubkey_blob.content | b64decode }}"
+        dest: "{{ ssh_pubkey_remote_path }}"
+        mode: "0644"
+
+    - name: Create CT (unprivileged, no nesting, two NICs)
+      ansible.builtin.command:
+        cmd: >-
+          pct create {{ agent_gw_vmid }} {{ agent_gw_ct_template }}
+            --hostname {{ agent_gw_name }}
+            --cores 1 --memory 512 --swap 256
+            --rootfs local-lvm:8
+            --net0 name=eth0,bridge=vmbr0,ip={{ agent_gw_lan_ip }}/24,gw={{ agent_gw_lan_gateway }}
+            --net1 name=eth1,bridge={{ agent_bridge }},ip={{ agent_gw_bridge_ip }}/24
+            --nameserver "{{ agent_gw_nameservers }}"
+            --ssh-public-keys {{ ssh_pubkey_remote_path }}
+            --unprivileged 1
+            --onboot 1
+            --tags 'agent-sandbox;gateway;managed-by-ansible'
+            --description 'Egress proxy for agent sandbox VMs on {{ agent_bridge }}. Managed by ansible/playbooks/create-agent-gateway.yml'
+            --start 1
+      when: gw_probe.rc != 0
+      changed_when: true
+
+    - name: Wait until pct exec works
+      ansible.builtin.command:
+        cmd: "pct exec {{ agent_gw_vmid }} -- true"
+      register: ct_ready
+      retries: 30
+      delay: 2
+      until: ct_ready.rc == 0
+      changed_when: false
+      when: not ansible_check_mode
+
+    # ---- 2. Stage config files on pve, then push into the CT -------------
+    - name: Stage dir
+      ansible.builtin.file:
+        path: "{{ stage_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Render squid.conf
+      ansible.builtin.template:
+        src: squid-agent-gw.conf.j2
+        dest: "{{ stage_dir }}/squid.conf"
+        mode: "0644"
+
+    - name: Render allow-list
+      ansible.builtin.copy:
+        content: "{{ agent_allowed_domains | join('\n') }}\n"
+        dest: "{{ stage_dir }}/agent-allow.txt"
+        mode: "0644"
+
+    - name: Render bootstrap script
+      ansible.builtin.copy:
+        dest: "{{ stage_dir }}/bootstrap.sh"
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          grep -q '^precedence ::ffff:0:0/96  100' /etc/gai.conf 2>/dev/null \
+            || echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
+          # No packet forwarding, ever. The proxy is the only path.
+          cat > /etc/sysctl.d/99-agent-gw.conf <<'EOF'
+          net.ipv4.ip_forward = 0
+          net.ipv6.conf.all.forwarding = 0
+          EOF
+          sysctl -p /etc/sysctl.d/99-agent-gw.conf || true
+
+          if ! dpkg -s squid >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y --no-install-recommends squid openssh-server sudo ca-certificates curl
+          fi
+
+          # Admin user with the pve key, sudo. Agents never get this key.
+          id -u {{ cloud_user }} >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo {{ cloud_user }}
+          install -d -m 700 -o {{ cloud_user }} -g {{ cloud_user }} /home/{{ cloud_user }}/.ssh
+          install -m 600 -o {{ cloud_user }} -g {{ cloud_user }} /root/.ssh/authorized_keys /home/{{ cloud_user }}/.ssh/authorized_keys
+          echo "{{ cloud_user }} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-{{ cloud_user }}
+          chmod 440 /etc/sudoers.d/90-{{ cloud_user }}
+
+          # sshd: LAN side only, keys only. Agent VMs must not see port 22 here.
+          cat > /etc/ssh/sshd_config.d/10-agent-gw.conf <<'EOF'
+          ListenAddress {{ agent_gw_lan_ip }}
+          PasswordAuthentication no
+          PermitRootLogin prohibit-password
+          AllowTcpForwarding yes
+          EOF
+          systemctl enable ssh
+          systemctl restart ssh
+
+          install -m 0644 /root/agent-gw/squid.conf /etc/squid/squid.conf
+          install -m 0644 /root/agent-gw/agent-allow.txt /etc/squid/agent-allow.txt
+          squid -k parse
+          systemctl enable squid
+          systemctl restart squid
+
+          # Self-check: nothing listens on the bridge side except squid.
+          # Anything bound to the bridge IP or a wildcard address, other than
+          # squid itself, would be reachable by agents.
+          exposed=$(ss -ltnH | awk '{print $4}' \
+            | grep -E '^({{ agent_gw_bridge_ip }}|0\.0\.0\.0|\*|\[::\]):' \
+            | grep -v '^{{ agent_gw_bridge_ip }}:{{ agent_proxy_port }}$' || true)
+          if [ -n "$exposed" ]; then
+            echo "unexpected listener reachable from {{ agent_bridge }}: $exposed" >&2
+            exit 1
+          fi
+          echo "agent-gw bootstrap OK"
+
+    - name: Push files into CT
+      ansible.builtin.shell: |
+        set -e
+        pct exec {{ agent_gw_vmid }} -- mkdir -p /root/agent-gw
+        for f in squid.conf agent-allow.txt bootstrap.sh; do
+          pct push {{ agent_gw_vmid }} {{ stage_dir }}/$f /root/agent-gw/$f --perms 0600
+        done
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Run bootstrap inside CT
+      ansible.builtin.command:
+        cmd: "pct exec {{ agent_gw_vmid }} -- bash /root/agent-gw/bootstrap.sh"
+      async: 900
+      poll: 10
+      register: boot
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Show bootstrap output
+      ansible.builtin.debug:
+        var: boot.stdout_lines
+      when: not ansible_check_mode
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg: |
+          Gateway {{ agent_gw_name }} ({{ agent_gw_vmid }}):
+            LAN: ssh {{ cloud_user }}@{{ agent_gw_lan_ip }}
+            Proxy for agent VMs: {{ agent_proxy_url }}
+            Denied requests: sudo tail -f /var/log/squid/access.log | grep DENIED
+          Add to ~/.ssh/config on the workstation:
+            Host agent-gw
+              HostName {{ agent_gw_lan_ip }}
+              User {{ cloud_user }}
+              IdentityFile <your private key>

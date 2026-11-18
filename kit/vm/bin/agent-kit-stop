@@ -1,0 +1,13 @@
+#!/bin/bash
+# Kill switch. Run with sudo.
+#   sudo agent-kit-stop [reason]   -> control=stop, signal the running cycle
+#   sudo agent-kit-stop --resume   -> control=run
+# The control file is root-owned; agents can read it but not change it.
+source /etc/agent-kit/project.env
+if [ "${1:-}" = "--resume" ]; then
+  echo "run $(date -Is)" > "$STATE/control"; echo "resumed"; exit 0
+fi
+echo "stop ${1:-by owner} $(date -Is)" > "$STATE/control"
+chmod 644 "$STATE/control"
+pkill -TERM -u agent -f '^claude -p' 2>/dev/null
+echo "stopped; any running cycle was signalled. Resume: sudo agent-kit-stop --resume"

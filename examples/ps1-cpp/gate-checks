@@ -1,0 +1,53 @@
+#!/bin/bash
+# gate-checks for Nocturne (PS1, psyqo C++20). Runs as `gaterun` on a fresh
+# checkout of a candidate commit. Root-owned; agents cannot edit it.
+# One line per step ("STEP <name> ok|FAIL <secs>s"); exits non-zero on the
+# first failure. Prints TESTS_PASSED=<n> (doctest cases + pytest tests) for the
+# orchestrator's "test count must not drop" rule.
+set -uo pipefail
+work=$1 out=$2
+cd "$work" || exit 2
+mkdir -p "$out"
+export PATH=/opt/psx/mipsel-none-elf/bin:/opt/psx/bin:$PATH
+
+# psyqo comes from the nugget submodule. The sandbox cannot reach GitHub, so
+# gaterun's git config rewrites its URL to the local mirror /srv/nugget.git.
+git -c protocol.file.allow=always submodule update --init --quiet third_party/nugget \
+  || { echo "STEP submodule FAIL 0s"; exit 1; }
+
+# Machine settings for a plain Linux host (the repo was born on Windows+WSL).
+cat > config.local.mk <<'EOF'
+PCSX_REDUX_CLI := /opt/pcsx-redux/pcsx-redux
+winpath = $(1)
+EOF
+
+step() {
+  local name=$1; shift
+  local t0=$SECONDS
+  if "$@" >"$out/$name.log" 2>&1; then
+    echo "STEP $name ok $((SECONDS - t0))s"
+  else
+    echo "STEP $name FAIL $((SECONDS - t0))s"
+    echo "---- last 40 lines of $name ----"; tail -40 "$out/$name.log"
+    exit 1
+  fi
+}
+
+step test     timeout 900 make test
+cases=$(grep -aoE 'test cases: *[0-9]+ *\| *[0-9]+ passed' "$out/test.log" | tail -1 | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')
+pyt=$(grep -aoE '[0-9]+ passed' "$out/test.log" | tail -1 | grep -oE '[0-9]+')
+echo "TESTS_PASSED=$(( ${cases:-0} + ${pyt:-0} ))"
+step ps1      timeout 900 make ps1
+step test-emu timeout 300 make test-emu
+step iso      timeout 300 make iso
+cp -f build/nocturne.bin build/nocturne.cue "$out/" 2>/dev/null
+# Rendered key screens feed the owner's dashboard. Best effort: a failure here
+# never blocks a merge (the team owns `make screens`; see their decision 0008).
+if grep -q '^screens:' Makefile; then
+  timeout 900 make screens > "$out/screens.log" 2>&1 \
+    && echo "STEP screens ok (best effort)" || echo "STEP screens skipped (best effort, see screens.log)"
+fi
+if ls build/screens/*.png >/dev/null 2>&1; then
+  mkdir -p "$out/shots" && cp -f build/screens/*.png "$out/shots/"
+fi
+echo "ALL CHECKS PASSED"

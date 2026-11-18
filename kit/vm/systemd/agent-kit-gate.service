@@ -1,0 +1,8 @@
+[Unit]
+Description=Agent kit: merge gate
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agent-kit/gate/bin/gate-run
+TimeoutStartSec=2h
+Nice=10

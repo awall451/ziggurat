@@ -1,0 +1,85 @@
+#!/bin/bash
+# gate-run: the merge gate. Runs as root from a systemd timer.
+#
+# Agents submit work by creating a local branch `ready/<topic>` in their
+# workspace. This script fetches those branches into the canonical bare repo
+# (which agents can read but not write), tests each new candidate as the
+# unprivileged `gaterun` user, and fast-forwards `main` only if every check
+# passes. Results land in $STATE/gate/results/<topic>.json (world-readable).
+#
+# Rules:
+#   - candidate must be a descendant of current main (agents rebase first)
+#   - all gate-checks steps pass (install, typecheck, unit, build, boot-fuzz, smoke)
+#   - passed unit-test count must not drop below main's
+set -uo pipefail
+source /etc/agent-kit/project.env
+
+exec 9>/run/agent-kit-gate.lock
+flock -n 9 || exit 0
+
+GK="sudo -u gatekeeper -H git"   # bare-repo ops: gatekeeper never runs agent code
+GR="sudo -u gaterun -H git"      # candidate checkout: gaterun runs agent code, owns nothing
+RES=$STATE/gate/results LOGS=$STATE/gate/logs WORKROOT=$STATE/gate/work
+mkdir -p "$RES" "$LOGS" "$WORKROOT"
+chmod 755 "$STATE/gate" "$RES" "$LOGS"
+chown gaterun: "$WORKROOT"
+BASELINE=$STATE/gate/baseline-tests
+[ -f "$BASELINE" ] || echo 0 > "$BASELINE"
+
+grep -q '^stop' "$STATE/control" 2>/dev/null && exit 0
+set -a; source /etc/agent-kit/agent.env; set +a
+
+$GK -C "$BARE" fetch -q --prune "$WORKSPACE" "+refs/heads/ready/*:refs/candidates/*" || { echo "fetch failed"; exit 1; }
+
+result() { # name sha status detail
+  jq -n --arg n "$1" --arg s "$2" --arg st "$3" --arg d "$4" --arg at "$(date -Is)" \
+     --arg log "$LOGS/$2.log" --arg shots "$LOGS/$2-out/shots" \
+     '{topic:$n, sha:$s, status:$st, detail:$d, at:$at, log:$log, shots:$shots}' > "$RES/${1//\//_}.json"
+  chmod 644 "$RES/${1//\//_}.json"
+  echo "$(date -Is) $1 $2 $3 $4" >> "$STATE/gate/history.log"
+}
+
+for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' refs/candidates/); do
+  topic=${ref#refs/candidates/}
+  sha=$($GK -C "$BARE" rev-parse "$ref")
+  main=$($GK -C "$BARE" rev-parse refs/heads/main)
+  rf="$RES/${topic//\//_}.json"
+  # Already contained in main (e.g. lower branch of a stack merged via the top one).
+  if $GK -C "$BARE" merge-base --is-ancestor "$sha" "$main"; then
+    if [ ! -f "$rf" ] || [ "$(jq -r .sha "$rf")" != "$sha" ] || [ "$(jq -r .status "$rf")" != merged ]; then
+      result "$topic" "$sha" merged "contained in main ${main:0:9}"
+    fi
+    continue
+  fi
+  if [ -f "$rf" ] && [ "$(jq -r .sha "$rf")" = "$sha" ]; then continue; fi   # already judged
+  if ! $GK -C "$BARE" merge-base --is-ancestor "$main" "$sha"; then
+    result "$topic" "$sha" rejected "not based on current main ($main). Rebase onto gate/main and recreate ready/$topic."
+    continue
+  fi
+
+  work=${WORKROOT:?}/${sha:?} out=${LOGS:?}/${sha:?}-out
+  rm -rf -- "$work" "$out"; mkdir -p "$out"; chown gaterun: "$out"
+  $GR init -q "$work" \
+    && $GR -C "$work" fetch -q "$BARE" "$ref" \
+    && $GR -C "$work" checkout -q --detach "$sha" \
+    || { result "$topic" "$sha" failed "gate could not check out candidate"; continue; }
+  sudo -u gaterun -H env HTTP_PROXY="$HTTP_PROXY" HTTPS_PROXY="$HTTPS_PROXY" NO_PROXY="$NO_PROXY" \
+       PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" PATH="/usr/local/bin:/usr/bin:/bin" \
+       timeout 1800 /opt/agent-kit/gate/bin/gate-checks "$work" "$out" > "$LOGS/$sha.log" 2>&1
+  rc=$?
+  chmod -R a+rX "$out"; chmod 644 "$LOGS/$sha.log"
+  tests=$(grep -o 'TESTS_PASSED=[0-9]*' "$LOGS/$sha.log" | tail -1 | cut -d= -f2); tests=${tests:-0}
+  base=$(cat "$BASELINE")
+  if [ $rc -ne 0 ]; then
+    result "$topic" "$sha" failed "$(grep -m1 'STEP .* FAIL' "$LOGS/$sha.log" || echo "gate-checks exit $rc") - see log"
+  elif [ "$tests" -lt "$base" ]; then
+    result "$topic" "$sha" failed "unit tests passed dropped from $base to $tests (tests may not be deleted or skipped)"
+  elif $GK -C "$BARE" update-ref refs/heads/main "$sha" "$main"; then
+    echo "$tests" > "$BASELINE"
+    result "$topic" "$sha" merged "all checks passed; main -> ${sha:0:9} ($tests tests)"
+  else
+    result "$topic" "$sha" rejected "main moved during the run; rebase and resubmit"
+  fi
+  rm -rf -- "${work:?}"
+done
+exit 0
