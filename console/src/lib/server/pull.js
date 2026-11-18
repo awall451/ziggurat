@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { pull, sshArgs, q } from './ssh.js';
 import { getStatus, peekStatus, UUID_RE } from './live.js';
 import { listProjects } from './config.js';
+import { syncOutbox } from './feedback.js';
 
 const SLOW_EVERY = 15 * 60_000;
 const FAST_EVERY = 15_000;
@@ -91,6 +92,8 @@ async function slowPass(project) {
   }
 
   await pullNotes(project, path.join(fleet, 'notes'));
+  // Replies and questions from the lead (kits that have the owner inbox).
+  if (status.kitVersion) await syncOutbox(project, { force: true });
   s.error = errors.length ? errors.join('; ') : null;
 }
 

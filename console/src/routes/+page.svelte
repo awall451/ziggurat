@@ -98,7 +98,11 @@
           </div>
           <div>
             <dt>Waiting on you</dt>
-            <dd class:attn={p.summary.escalations > 0}>{p.summary.escalations ? `${p.summary.escalations} escalation${p.summary.escalations > 1 ? 's' : ''}` : 'Nothing'}</dd>
+            <dd class:attn={p.asks + p.summary.escalations > 0}>
+              {[p.asks ? `${p.asks} question${p.asks > 1 ? 's' : ''}` : '', p.summary.escalations ? `${p.summary.escalations} escalation${p.summary.escalations > 1 ? 's' : ''}` : '']
+                .filter(Boolean)
+                .join(' · ') || 'Nothing'}
+            </dd>
           </div>
         </dl>
 

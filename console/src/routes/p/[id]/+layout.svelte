@@ -11,11 +11,20 @@
   const TABS = [
     ['topology', 'Topology'],
     ['progress', 'Progress'],
+    ['inbox', 'Inbox'],
     ['notes', 'Notes'],
     ['gallery', 'Gallery'],
     ['digest', 'Digest'],
-    ['usage', 'Usage']
+    ['usage', 'Usage'],
+    ['controls', 'Controls']
   ];
+  // What needs the owner: questions from the lead plus escalations in the repo.
+  const waiting = $derived(p.asks + p.summary.escalations);
+  const waitingText = $derived(
+    [p.asks ? `${p.asks} question${p.asks > 1 ? 's' : ''}` : '', p.summary.escalations ? `${p.summary.escalations} escalation${p.summary.escalations > 1 ? 's' : ''}` : '']
+      .filter(Boolean)
+      .join(' · ') || 'Nothing'
+  );
   const current = $derived(page.url.pathname.split('/')[3] || 'topology');
 
   const STATE_WORD = { running: 'Running', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
@@ -59,10 +68,10 @@
       <span class="k">Merged / failed, 24 h</span>
       <span class="v mono"><span class="s-done">{p.summary.last24.merged}</span> / <span class:s-failed={p.summary.last24.failed > 0}>{p.summary.last24.failed}</span></span>
     </div>
-    <div class="stat panel" class:attn={p.summary.escalations > 0}>
+    <a class="stat panel" class:attn={waiting > 0} href="{base}/inbox">
       <span class="k">Waiting on you</span>
-      <span class="v">{p.summary.escalations ? `${p.summary.escalations} escalation${p.summary.escalations > 1 ? 's' : ''}` : 'Nothing'}</span>
-    </div>
+      <span class="v">{waitingText}</span>
+    </a>
   </div>
 
   {#if p.status.state === 'unreachable'}
@@ -73,7 +82,9 @@
 
   <div class="tabs">
     {#each TABS as [slug, label] (slug)}
-      <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>{label}</a>
+      <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
+        {label}{#if slug === 'inbox' && p.asks}<span class="count">{p.asks}</span>{/if}
+      </a>
     {/each}
     <span class="grow"></span>
     <span class="small dim mono sync">
@@ -150,6 +161,18 @@
     margin-bottom: -1px;
   }
   .tab:hover {
+    color: var(--ink);
+  }
+  .count {
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #050b17;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  a.stat {
     color: var(--ink);
   }
   .tab.on {

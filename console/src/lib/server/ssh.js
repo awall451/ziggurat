@@ -49,7 +49,7 @@ async function withSlot(id, fn) {
   }
 }
 
-function collect(cmd, argv, { input, timeout = 30000, maxBytes = 8 * 1024 * 1024 } = {}) {
+function collect(cmd, argv, { input, inputStream, timeout = 30000, maxBytes = 8 * 1024 * 1024 } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, argv, { stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
@@ -70,7 +70,8 @@ function collect(cmd, argv, { input, timeout = 30000, maxBytes = 8 * 1024 * 1024
       resolve({ code: code ?? -1, stdout, stderr: signal ? `${stderr}\nkilled: ${signal}` : stderr });
     });
     child.stdin.on('error', () => {});
-    child.stdin.end(input ?? '');
+    if (inputStream) inputStream.pipe(child.stdin);
+    else child.stdin.end(input ?? '');
   });
 }
 
@@ -83,7 +84,8 @@ export function readScript(project, script, opts = {}) {
 /**
  * Run one fixed kit script as root: `sudo /opt/agent-kit/bin/<script> <args>`.
  * Script name and every argument are checked against strict patterns, so no
- * shell text chosen by a caller can reach the VM. `input` goes to stdin.
+ * shell text chosen by a caller can reach the VM. `input` (or a readable
+ * `inputStream`) goes to stdin.
  */
 export function kit(project, script, argv = [], opts = {}) {
   if (!SCRIPT_RE.test(script)) throw new Error(`bad kit script name: ${script}`);
