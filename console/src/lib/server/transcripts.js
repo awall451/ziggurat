@@ -245,6 +245,50 @@ function readLedger(project) {
   return out;
 }
 
+const cycleNumbers = new Map(); // session id -> number the lead itself used
+
+/**
+ * The cycle number as the lead counts it. Leads number their own cycles in
+ * the briefs they write ("Goal (cycle 6, ..."), and they do not all count
+ * interrupted cycles the same way, so their own word beats any rule here.
+ * Reads only the head of each first-tier agent's transcript.
+ */
+function leadCycleNumber(dir, sid, settled) {
+  if (cycleNumbers.has(sid)) return cycleNumbers.get(sid);
+  const sub = path.join(dir, sid, 'subagents');
+  const votes = new Map();
+  let metas = [];
+  try {
+    metas = fs.readdirSync(sub).filter((n) => n.endsWith('.meta.json'));
+  } catch {
+    return null;
+  }
+  for (const n of metas) {
+    const meta = readMeta(path.join(sub, n));
+    if (meta.parentAgentId || (Number.isInteger(meta.spawnDepth) && meta.spawnDepth > 1)) continue;
+    try {
+      const fd = fs.openSync(path.join(sub, n.replace(/\.meta\.json$/, '.jsonl')), 'r');
+      try {
+        const buf = Buffer.allocUnsafe(8192);
+        const len = fs.readSync(fd, buf, 0, buf.length, 0);
+        for (const m of buf.toString('utf8', 0, len).matchAll(/\bcycle (\d{1,4})\b/gi)) {
+          votes.set(m[1], (votes.get(m[1]) || 0) + 1);
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      /* no transcript yet */
+    }
+  }
+  let best = null;
+  for (const [n, c] of votes) if (!best || c > best[1]) best = [n, c];
+  const number = best ? Number(best[0]) : null;
+  // A finished cycle's number cannot change; a running one may not have briefs yet.
+  if (number != null && settled) cycleNumbers.set(sid, number);
+  return number;
+}
+
 /** First timestamp of a transcript, read from its head only. */
 function firstTimestamp(file) {
   try {
@@ -308,6 +352,11 @@ export function listSessions(project, status = null) {
   // after the last counted cycle that started before them.
   for (const r of rows) {
     if (r.number == null) r.number = counted.filter((c) => c.start && c.start < r.started).length + 1;
+    // The lead's own count wins when it is ahead of the ledger's (a lead that
+    // counts an interrupted cycle). It never lowers the number: early briefs
+    // may mention other cycles in passing.
+    const own = r.agents ? leadCycleNumber(dir, r.id, !r.live) : null;
+    if (own != null && own > r.number) r.number = own;
   }
   // Sessions with no subagents and no ledger entry are not cycles (a login, a test).
   return rows.filter((r) => r.agents > 0 || bySession.has(r.id) || r.live);

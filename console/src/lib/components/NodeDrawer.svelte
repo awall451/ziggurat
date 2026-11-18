@@ -28,8 +28,7 @@
     <div class="title">
       <h2>{node.label}</h2>
       <div class="small dim">
-        {node.depth === 0 ? 'Lead of this cycle' : tiers[Math.min(node.depth, 2)] || 'Agent'}{#if parent}&nbsp;· spawned by {parent.label}{/if}
-        {#if node.rawType !== 'lead'}&nbsp;· <span class="mono">{node.rawType}</span>{/if}
+        {#if node.depth === 0}Lead of this cycle{:else}Spawned by {parent?.label || 'the lead'} · <span class="mono">{node.rawType}</span>{/if}
       </div>
     </div>
     <span class="pill {node.status}">{STATUS_WORD[node.status]}</span>
@@ -53,7 +52,7 @@
     <dt>Estimate</dt>
     <dd class="mono">{usd(node.costUsd)} <span class="dim">· API-equivalent</span></dd>
     <dt>Time</dt>
-    <dd class="mono">{dur(elapsed)}{#if live && (node.status === 'running' || node.status === 'waiting')}<span class="dim"> so far</span>{/if}</dd>
+    <dd class="mono">{dur(elapsed)}{#if live && (node.status === 'running' || node.status === 'waiting')}<span class="dim">&nbsp;so far</span>{/if}</dd>
     {#if node.branch}
       <dt>Branch</dt>
       <dd class="mono clip" title={node.branch}>{node.branch}</dd>

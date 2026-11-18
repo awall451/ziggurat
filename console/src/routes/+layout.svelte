@@ -15,6 +15,7 @@
 
   // Keep every page current while its tab is visible.
   onMount(() => {
+    document.getElementById('boot')?.remove();
     const t = setInterval(() => {
       // A refresh cut short by leaving the page is not an error.
       if (document.visibilityState === 'visible') invalidateAll().catch(() => {});

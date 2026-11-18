@@ -20,9 +20,9 @@
   });
 
   const cycleChart = $derived((t) => ({
-    grid: { left: 48, right: 48, top: 28, bottom: 28 },
+    grid: { left: 48, right: 48, top: 44, bottom: 28 },
     tooltip: tip(t),
-    legend: { textStyle: { color: t.ink2 }, top: 0, right: 0 },
+    legend: { textStyle: { color: t.ink2 }, top: 0, left: 'center' },
     xAxis: { type: 'category', data: cycles.map((_, i) => `${i + 1}`), ...axis(t) },
     yAxis: [
       { type: 'value', name: 'USD', nameTextStyle: { color: t.ink2 }, ...axis(t) },
@@ -90,6 +90,7 @@
 
 <section class="panel block">
   <h2>Cycle log</h2>
+  <p class="dim small">The summary is the end of the lead's last message of the cycle (the ledger keeps its last 600 characters).</p>
   <div class="scroll-x">
     <table class="grid">
       <thead>
@@ -107,7 +108,7 @@
               {:else if c.rc === 0 && !c.isError}<span class="s-done">finished</span>
               {:else}<span class="s-failed">ended with an error</span>{/if}
             </td>
-            <td class="summary">{c.summary}</td>
+            <td class="summary">{c.summary.length >= 600 ? '… ' : ''}{c.summary}</td>
           </tr>
         {:else}
           <tr><td colspan="6" class="dim">No cycles in the ledger yet.</td></tr>

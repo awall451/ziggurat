@@ -4,9 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+    <style>
+      html { background: #050b17; color: #8fb3d9; font-family: system-ui, sans-serif; }
+      #boot { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+    </style>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <div id="boot">Loading Ziggurat…</div>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>

@@ -3,10 +3,10 @@
 
 const SIZE = [
   { w: 236, h: 88 }, // lead tile
-  { w: 172, h: 82 }, // area lead tile
+  { w: 196, h: 82 }, // area lead tile
   { w: 64, h: 64 } // builder / scout circle (label sits under it)
 ];
-const SLOT = [260, 190, 108]; // horizontal room a childless node takes
+const SLOT = [260, 214, 108]; // horizontal room a childless node takes
 const TIER_Y = [72, 262, 452];
 const TIER_STEP = 170;
 const LABEL_H = 46; // room under a circle for its two-line label

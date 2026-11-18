@@ -18,8 +18,12 @@
     if (!box || !tree.width) return;
     const r = box.getBoundingClientRect();
     const k = Math.min(1.15, (r.width - 32) / tree.width, (r.height - 32) / tree.height);
-    const kk = Math.max(0.25, k);
-    view = { k: kk, x: (r.width - tree.width * kk) / 2, y: Math.max(12, (r.height - tree.height * kk) / 2) };
+    // A very wide cycle would shrink to unreadable: stop at a legible size and
+    // keep the lead in the middle; the rest is reached by dragging.
+    const kk = Math.max(0.6, k);
+    const lead = tree.nodes.find((n) => n.depth === 0);
+    const x = tree.width * kk <= r.width - 32 || !lead ? (r.width - tree.width * kk) / 2 : r.width / 2 - lead.x * kk;
+    view = { k: kk, x, y: Math.max(12, (r.height - tree.height * kk) / 2) };
   }
 
   // Fit once per cycle shown, not on every refresh: the user's own pan and zoom
