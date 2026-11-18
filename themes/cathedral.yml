@@ -1,0 +1,11 @@
+# Cathedral builders: a master builder, master masons, journeymen and apprentices.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: Master Builder
+area_lead: Master Mason
+area_leads: Master Masons
+worker: Journeyman
+workers: Journeymen
+scout: Apprentice
+scouts: Apprentices
+reviewer: Inspector
+qa: Pilgrim

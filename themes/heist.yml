@@ -1,0 +1,11 @@
+# Heist crew: the mastermind plans, specialists run each job, the muscle does the work.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: Mastermind
+area_lead: Specialist
+area_leads: Specialists
+worker: Muscle
+workers: Muscle
+scout: Lookout
+scouts: Lookouts
+reviewer: Fixer
+qa: Inside Man

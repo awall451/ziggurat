@@ -1,0 +1,11 @@
+# Starship: the captain gives orders to the chief officers, who run the crew.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: Captain
+area_lead: Chief Officer
+area_leads: Chief Officers
+worker: Crew member
+workers: Crew
+scout: Ensign
+scouts: Ensigns
+reviewer: First Officer
+qa: Away Team

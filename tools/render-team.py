@@ -3,7 +3,8 @@
 
 Agent ids (area-lead-engine, builder, scout, reviewer, qa) never change; a
 theme only changes the display names used in prose ({{lead}}, {{area_lead}},
-{{area_leads}}, {{worker}}, {{workers}}).
+{{area_leads}}, {{worker}}, {{workers}}, {{scout}},
+{{scouts}}, {{reviewer}}, {{qa}}).
 
 Usage: tools/render-team.py examples/ps1-cpp --theme tolkien --out build/my-project
        (theme = a name in themes/ or a path to a .yml file)

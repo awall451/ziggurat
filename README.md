@@ -45,7 +45,7 @@ Most "autonomous coding" failures come from one thing: **the agent that did the 
 | [`sandbox/proxmox/`](sandbox/proxmox) | Ansible for the isolated network, the egress proxy gateway and one VM per project, with a wall check that proves isolation from inside |
 | [`workstation/`](workstation) | Pull agent data home (append-only, pull-only) and write a morning digest with a spoken brief |
 | [`dashboard/`](dashboard) | A web page per box: spoken brief, screenshots over time, usage, gate verdicts, the lead's plan, QA issues, trial comparisons |
-| [`themes/`](themes) | Display names for the roles: `plain`, `tolkien`, `borg`, `orchestra`. Behaviour never changes with a theme |
+| [`themes/`](themes) | Display names for the roles: `plain`, `tolkien`, `borg`, `orchestra`, `gothic`, `cathedral`, `starship`, `norse`, `heist`, `greek`, `monastery`. Behaviour never changes with a theme |
 | [`tools/render-team.py`](tools/render-team.py) | Renders a project folder for a theme |
 | [`docs/`](docs) | [Architecture](docs/architecture.md) · [Getting started](docs/getting-started.md) · [Lessons](docs/lessons.md) · [Results](docs/results.md) · [Roadmap](docs/roadmap.md) |
 

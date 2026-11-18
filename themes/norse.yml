@@ -1,0 +1,12 @@
+# Norse: Odin rules the Aesir; the Einherjar build, Odin's ravens scout.
+# Singulars: As (one of the Aesir), Einheri (one of the Einherjar).
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: Odin
+area_lead: As
+area_leads: Aesir
+worker: Einheri
+workers: Einherjar
+scout: Raven
+scouts: Ravens
+reviewer: Norn
+qa: Valkyrie

@@ -1,0 +1,11 @@
+# Gothic household: the Count's steward runs the servants by candlelight.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
+lead: The Count
+area_lead: Steward
+area_leads: Stewards
+worker: Servant
+workers: Servants
+scout: Footman
+scouts: Footmen
+reviewer: Chaplain
+qa: Night Watch

@@ -1,6 +1,11 @@
-# A conductor does not play; section principals lead their players.
+# A conductor leads section principals, who lead the players.
+# Keys: lead, area_lead(s), worker(s) = builder, scout(s), reviewer, qa.
 lead: Conductor
 area_lead: Section Principal
 area_leads: Section Principals
 worker: Player
 workers: Players
+scout: Stagehand
+scouts: Stagehands
+reviewer: Critic
+qa: Audience
