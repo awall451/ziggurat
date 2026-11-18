@@ -1,0 +1,31 @@
+#!/bin/bash
+# agent-kit-gate: pause or resume the merge gate on its own, without halting
+# the team. Run with sudo. While paused, submitted branches wait; a check
+# already running is allowed to finish.
+#
+#   agent-kit-gate pause [reason words] | resume | show
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+F=$STATE/gate/paused
+
+case "${1:-show}" in
+  pause)
+    shift
+    printf '%s %s\n' "$(date -Is)" "$(printf '%s' "${*:-by owner}" | tr -c 'A-Za-z0-9 .,:()_/@-' ' ' | cut -c1-160)" > "$F"
+    chmod 644 "$F"
+    echo "gate paused"
+    ;;
+  resume)
+    rm -f "$F"
+    echo "gate running"
+    ;;
+  show)
+    if [ -f "$F" ]; then echo "gate paused: $(cat "$F")"; else echo "gate running"; fi
+    ;;
+  *)
+    echo "usage: agent-kit-gate pause [reason] | resume | show" >&2
+    exit 2
+    ;;
+esac

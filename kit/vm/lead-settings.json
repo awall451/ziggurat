@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "/opt/agent-kit/bin/owner-inbox-hook", "timeout": 5 }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "/opt/agent-kit/bin/owner-inbox-hook subagent-start", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}

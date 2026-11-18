@@ -1,0 +1,60 @@
+#!/bin/bash
+# agent-kit-units: the team's own systemd user units and whether they spend
+# tokens. A team may install units for `agent` (a bot, data jobs, its own
+# scheduled Claude runs). A halt must stop the ones that run Claude and leave
+# the rest alone.
+#
+#   agent-kit-units          one line per unit: <unit> <token|keep|other> <enabled> <active>
+#
+# A unit counts as a token spender when it is named in /etc/agent-kit/token-units
+# (root-owned, one unit name per line), or when its ExecStart, or the script
+# that ExecStart runs, mentions `claude`. A unit named in
+# /etc/agent-kit/keep-units never counts. Agent files are only read, never run
+# or sourced.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+AGENT_HOME=${AGENT_KIT_AGENT_HOME:-/home/agent}
+UNIT_RE='^[A-Za-z0-9@._-]{1,120}$'
+shopt -s nullglob
+
+listed() { [ -f "$1" ] && grep -qxF -- "$2" <(grep -vE '^\s*(#|$)' "$1"); }
+
+# systemctl --user for the agent, from a root shell. Empty output if the
+# agent has no user manager running.
+uctl() {
+  local uid
+  uid=$(id -u agent 2>/dev/null) || return 1
+  [ -S "/run/user/$uid/bus" ] || return 1
+  runuser -u agent -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@" 2>/dev/null
+}
+
+spends_tokens() {
+  local file=$1 line cmd
+  grep -qiE '^\s*ExecStart(Pre)?=.*claude' "$file" 2>/dev/null && return 0
+  while IFS= read -r line; do
+    # First word after ExecStart= (minus systemd's prefix characters) is the program.
+    cmd=$(printf '%s' "${line#*=}" | sed -E 's/^[-@:+!]*//' | awk '{print $1}')
+    # %h in a user unit is the agent's home.
+    cmd=${cmd//%h/$AGENT_HOME}
+    case "$cmd" in /*) ;; *) continue ;; esac
+    [ -f "$cmd" ] || continue
+    [ "$(stat -c %s "$cmd" 2>/dev/null || echo 0)" -le 1048576 ] || continue
+    grep -qI 'claude' "$cmd" 2>/dev/null && return 0
+  done < <(grep -E '^\s*ExecStart(Pre)?=' "$file" 2>/dev/null)
+  return 1
+}
+
+for file in "$AGENT_HOME"/.config/systemd/user/*.service; do
+  unit=$(basename "$file")
+  [[ $unit =~ $UNIT_RE ]] || continue
+  if listed "$ETC/keep-units" "$unit"; then kind=keep
+  elif listed "$ETC/token-units" "$unit" || spends_tokens "$file"; then kind=token
+  else kind=other; fi
+  timer=${unit%.service}.timer
+  # A unit driven by a timer reports the timer's state, otherwise its own.
+  enabled=$(uctl is-enabled "$timer" | head -1)
+  case "$enabled" in '' | not-found) enabled=$(uctl is-enabled "$unit" | head -1) ;; esac
+  active=$(uctl is-active "$unit" | head -1)
+  printf '%s %s %s %s\n' "$unit" "$kind" "${enabled:-unknown}" "${active:-unknown}"
+done
+exit 0

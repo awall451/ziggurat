@@ -1,0 +1,96 @@
+#!/bin/bash
+# agent-kit-inbox: the owner's side of the inbox. Run with sudo (the console
+# calls it over ssh). Agents cannot write to the inbox, which is what lets the
+# lead trust what it finds there.
+#
+#   agent-kit-inbox put <id> <tier> <from> [<ask-id>]   message on stdin (see below)
+#   agent-kit-inbox close <id>                          owner is done with this message
+#   agent-kit-inbox list                                ids, one per line
+#
+# `put` reads a tar stream on stdin holding `body.md` and, optionally, files
+# under `att/`. It checks everything before the message becomes visible.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+IN=$STATE/inbox
+ID_RE='^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$'
+ASK_RE='^[0-9]{8}T[0-9]{6}Z-a-[a-z0-9-]{1,40}$'
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
+MAX_ATT=$((20 * 1024 * 1024))
+MAX_FILES=8
+MAX_BODY=65536
+
+die() { echo "agent-kit-inbox: $*" >&2; exit 2; }
+umask 022
+
+case "${1:-}" in
+  put)
+    id=${2:-} tier=${3:-} from=${4:-} reply_to=${5:--}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [[ $tier =~ ^(note|priority|urgent)$ ]] || die "tier must be note, priority or urgent"
+    [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
+    [ "$reply_to" = "-" ] || [[ $reply_to =~ $ASK_RE ]] || die "bad ask id"
+    [ ! -e "$IN/$id" ] || die "message $id already exists"
+    install -d -m 755 "$IN" "$IN/.inject" "$IN/.closed"
+    tmp=$IN/.tmp-$id
+    rm -rf -- "$tmp"
+    mkdir -m 700 "$tmp" || die "cannot create work folder"
+    trap 'rm -rf -- "$tmp"' EXIT
+    # Nothing in the archive decides owners, modes or where files land.
+    head -c $((MAX_ATT * MAX_FILES + 1048576)) | tar -x -C "$tmp" --no-same-owner --no-same-permissions \
+      --no-overwrite-dir --delay-directory-restore 2>/dev/null || die "could not read the message archive"
+    [ -f "$tmp/body.md" ] && [ ! -L "$tmp/body.md" ] || die "archive has no body.md"
+    [ "$(stat -c %s "$tmp/body.md")" -le "$MAX_BODY" ] || die "message text over 64 KB"
+    # Only body.md and plain files directly under att/ are allowed.
+    bad=$(find "$tmp" -mindepth 1 ! -path "$tmp/body.md" ! -path "$tmp/att" ! -path "$tmp/att/*" -print -quit)
+    [ -z "$bad" ] || die "unexpected entry in archive"
+    bad=$(find "$tmp" -mindepth 1 ! -type f ! -path "$tmp/att" -print -quit)
+    [ -z "$bad" ] || die "archive may hold plain files only"
+    n=0
+    if [ -d "$tmp/att" ]; then
+      [ ! -L "$tmp/att" ] || die "archive may hold plain files only"
+      while IFS= read -r -d '' f; do
+        n=$((n + 1))
+        name=${f##*/}
+        [[ $name =~ $NAME_RE ]] || die "bad attachment name: $name"
+        [ "$(dirname "$f")" = "$tmp/att" ] || die "attachments must sit directly in att/"
+        [ "$(stat -c %s "$f")" -le "$MAX_ATT" ] || die "attachment over 20 MB: $name"
+      done < <(find "$tmp/att" -mindepth 1 -print0)
+      [ "$n" -le "$MAX_FILES" ] || die "more than $MAX_FILES attachments"
+    fi
+    {
+      printf 'Ziggurat-Owner-Message: 1\nId: %s\nTier: %s\nSent: %s\nFrom: %s\nIn-Reply-To: %s\n---\n' \
+        "$id" "$tier" "$(date -u +%FT%TZ)" "$from" "$reply_to"
+      cat "$tmp/body.md"
+    } > "$tmp/message.md"
+    rm -f "$tmp/body.md"
+    chmod 755 "$tmp"
+    find "$tmp" -type d -exec chmod 755 {} +
+    find "$tmp" -type f -exec chmod 644 {} +
+    mv "$tmp" "$IN/$id" || die "could not publish the message"
+    trap - EXIT
+    # note = read at the next cycle start only; the others are also delivered mid-cycle.
+    if [ "$tier" != note ]; then printf '%s\n' "$tier" > "$IN/.inject/$id"; fi
+    echo "delivered $id tier=$tier attachments=$n"
+    ;;
+
+  close)
+    id=${2:-}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [ -d "$IN/$id" ] || die "no such message: $id"
+    install -d -m 755 "$IN/.closed"
+    : > "$IN/.closed/$id"
+    rm -f "$IN/.inject/$id"
+    echo "closed $id"
+    ;;
+
+  list)
+    shopt -s nullglob
+    for d in "$IN"/2*/; do basename "$d"; done
+    ;;
+
+  *)
+    die "usage: agent-kit-inbox put <id> <tier> <from> [<ask-id>] | close <id> | list"
+    ;;
+esac

@@ -9,6 +9,7 @@ if [ -n "${1:-}" ]; then
 fi
 echo "gate main: $(git -c safe.directory="$BARE" -C "$BARE" log --oneline -1 main)"
 grep -q '^stop' "$STATE/control" 2>/dev/null && echo "!! control=stop: gate and cycles are paused"
+[ -e "$STATE/gate/paused" ] && echo "!! gate paused by the owner: submitted branches wait"
 ls -t "$R"/*.json 2>/dev/null | head -20 | while read -r f; do
   jq -r '"\(.at[0:16])  \(.status|ascii_upcase)\t\(.topic)\t\(.sha[0:9])  \(.detail)"' "$f"
 done

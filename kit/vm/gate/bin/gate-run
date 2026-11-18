@@ -27,6 +27,8 @@ BASELINE=$STATE/gate/baseline-tests
 [ -f "$BASELINE" ] || echo 0 > "$BASELINE"
 
 grep -q '^stop' "$STATE/control" 2>/dev/null && exit 0
+# The gate can also be paused on its own (agent-kit-gate pause).
+[ -e "$STATE/gate/paused" ] && exit 0
 set -a; source /etc/agent-kit/agent.env; set +a
 
 $GK -C "$BARE" fetch -q --prune "$WORKSPACE" "+refs/heads/ready/*:refs/candidates/*" || { echo "fetch failed"; exit 1; }

@@ -1,0 +1,75 @@
+#!/bin/bash
+# agent-kit-halt: stop spending tokens, now. Run with sudo.
+#
+#   agent-kit-halt [reason words]   halt immediately
+#   agent-kit-halt --if-due         halt only if a scheduled stop time has passed
+#                                   (run every minute by agent-kit-tick.timer)
+#
+# What it stops: the lead's cycle in progress, the lead timer, and the team's
+# own units that run Claude (see agent-kit-units). Other team services (a bot,
+# data jobs) keep running. What it turned off is recorded so that
+# agent-kit-resume restores exactly that. The gate also pauses while the
+# control file says stop.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+LEAD=agent-kit-lead
+BIN=$(dirname "$(readlink -f "$0")")
+
+exec 8> /run/agent-kit-ctl.lock
+flock 8
+
+reason=${*:-by owner}
+if [ "${1:-}" = "--if-due" ]; then
+  [ -f "$STATE/halt-at" ] || exit 0
+  read -r due why < "$STATE/halt-at"
+  [[ ${due:-} =~ ^[0-9]+$ ]] || { rm -f "$STATE/halt-at"; exit 0; }
+  [ "$(date +%s)" -ge "$due" ] || exit 0
+  reason="scheduled stop: ${why:-no reason given}"
+  rm -f "$STATE/halt-at"
+fi
+reason=$(printf '%s' "$reason" | tr -c 'A-Za-z0-9 .,:()_/@-' ' ' | cut -c1-200)
+
+# 1. Kill switch first: nothing new starts from here on.
+printf 'stop %s %s\n' "$reason" "$(date -Is)" > "$STATE/control.tmp"
+chmod 644 "$STATE/control.tmp"
+mv "$STATE/control.tmp" "$STATE/control"
+
+uid=$(id -u agent 2>/dev/null || echo)
+uctl() { [ -n "$uid" ] && [ -S "/run/user/$uid/bus" ] && runuser -u agent -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@" 2>/dev/null; }
+
+# 2. Remember what was on, once. A second halt must not overwrite the record
+#    with "everything was already off".
+record=$STATE/halt-state
+fresh=0
+if [ ! -f "$record" ]; then
+  fresh=1
+  : > "$record.tmp"
+  [ "$(systemctl is-enabled "$LEAD.timer" 2>/dev/null)" = enabled ] && echo "system $LEAD.timer" >> "$record.tmp"
+fi
+
+# 3. The lead: timer off, then the whole cycle (the service's process group).
+systemctl disable --now "$LEAD.timer" > /dev/null 2>&1
+systemctl stop "$LEAD.service" > /dev/null 2>&1
+
+# 4. Team units that run Claude: timers first so nothing restarts, then services.
+stopped=()
+while read -r unit kind _; do
+  [ "$kind" = token ] || continue
+  timer=${unit%.service}.timer
+  if [ "$fresh" = 1 ] && [ "$(uctl is-enabled "$timer")" = enabled ]; then echo "user $timer" >> "$record.tmp"; fi
+  uctl disable --now "$timer" > /dev/null
+  uctl stop "$unit" > /dev/null
+  stopped+=("$unit")
+done < <("$BIN/agent-kit-units")
+[ "$fresh" = 1 ] && mv "$record.tmp" "$record"
+
+# 5. Anything still running a headless Claude for the agent.
+pkill -TERM -u agent -f '^claude -p' 2> /dev/null
+sleep 1
+left=$(pgrep -u agent -f '^claude -p' 2> /dev/null | wc -l)
+
+echo "halted: $reason"
+echo "lead timer off, cycle stopped; team units stopped: ${stopped[*]:-none}; headless claude still running: $left"
+echo "resume with: sudo agent-kit-resume"

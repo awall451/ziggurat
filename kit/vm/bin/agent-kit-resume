@@ -1,0 +1,49 @@
+#!/bin/bash
+# agent-kit-resume: undo a halt. Run with sudo. Only the owner starts a team.
+#
+#   agent-kit-resume              clear the stop, turn back on what the halt
+#                                 turned off, and enable the lead timer
+#   agent-kit-resume --no-timer   clear the stop only (for a supervised single
+#                                 cycle: systemctl start agent-kit-lead.service)
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+LEAD=agent-kit-lead
+UNIT_RE='^[A-Za-z0-9@._-]{1,120}$'
+
+exec 8> /run/agent-kit-ctl.lock
+flock 8
+
+printf 'run %s\n' "$(date -Is)" > "$STATE/control.tmp"
+chmod 644 "$STATE/control.tmp"
+mv "$STATE/control.tmp" "$STATE/control"
+
+# A stop time that has already passed would halt again at once: drop it.
+if [ -f "$STATE/halt-at" ]; then
+  read -r due _ < "$STATE/halt-at"
+  { [[ ${due:-} =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$due" ]; } || rm -f "$STATE/halt-at"
+fi
+
+if [ "${1:-}" = "--no-timer" ]; then
+  echo "resumed (control=run). Lead timer left as it is."
+  exit 0
+fi
+
+uid=$(id -u agent 2>/dev/null || echo)
+uctl() { [ -n "$uid" ] && [ -S "/run/user/$uid/bus" ] && runuser -u agent -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@" 2>/dev/null; }
+
+restored=()
+if [ -f "$STATE/halt-state" ]; then
+  while read -r scope unit; do
+    [[ ${unit:-} =~ $UNIT_RE ]] || continue
+    case "$scope" in
+      user) uctl enable --now "$unit" > /dev/null && restored+=("$unit") ;;
+      system) ;; # the lead timer is enabled below either way
+    esac
+  done < "$STATE/halt-state"
+  rm -f "$STATE/halt-state"
+fi
+
+systemctl enable --now "$LEAD.timer" > /dev/null 2>&1
+echo "resumed (control=run). Lead timer on; team units restored: ${restored[*]:-none}"
