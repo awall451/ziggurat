@@ -20,6 +20,10 @@ services:
       CONSOLE_CONFIG_DIR: ${CONSOLE_CONFIG_DIR:?}
       CONSOLE_DATA_DIR: ${CONSOLE_DATA_DIR:?}
       CONSOLE_USER_HEADER: ${CONSOLE_USER_HEADER:-}
+      CONSOLE_DEPLOY: ${CONSOLE_DEPLOY:-}
+      # The data folders again, so saved entries can be kept inside them.
+      FLEET_DATA: ${FLEET_DATA:?}
+      TRANSCRIPTS_DIR: ${TRANSCRIPTS_DIR:?}
     volumes:
       - ${CONSOLE_CONFIG_DIR:?}:${CONSOLE_CONFIG_DIR:?}
       - ${CONSOLE_DATA_DIR:?}:${CONSOLE_DATA_DIR:?}

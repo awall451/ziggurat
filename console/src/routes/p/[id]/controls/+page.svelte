@@ -1,6 +1,7 @@
 <script>
   import { invalidateAll } from '$app/navigation';
   import { when } from '$lib/format.js';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -78,7 +79,9 @@
     'gate-resume': 'Resumed the gate',
     'message-send': 'Sent a message',
     'message-retry': 'Retried a message',
-    'message-close': 'Closed a message'
+    'message-close': 'Closed a message',
+    'project-add': 'Added to the registry',
+    'project-save': 'Changed the registry entry'
   };
   const args = (a) =>
     Object.entries(a || {})
@@ -217,19 +220,7 @@
   </div>
 </section>
 
-{#if confirm}
-  <div class="modal" role="dialog" aria-modal="true" aria-label={confirm.title}>
-    <button class="shade" onclick={() => (confirm = null)} aria-label="Cancel"></button>
-    <div class="panel lit box">
-      <h2>{confirm.title}</h2>
-      <p>{confirm.body}</p>
-      <div class="actions">
-        <button class="btn quiet" onclick={() => (confirm = null)} disabled={!!busy}>Cancel</button>
-        <button class="btn {confirm.danger ? 'stop' : 'go'}" onclick={confirm.run} disabled={!!busy}>{busy ? 'Working…' : confirm.word}</button>
-      </div>
-    </div>
-  </div>
-{/if}
+<ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
 
 <style>
   .cols {
@@ -255,19 +246,6 @@
   .warn {
     border-color: var(--warn);
   }
-  .note {
-    padding: 10px 14px;
-    margin-bottom: 12px;
-    font-size: 13px;
-  }
-  .note.bad {
-    border-color: var(--critical);
-    color: var(--critical);
-  }
-  .note.good {
-    border-color: #2f7d5a;
-    color: var(--good);
-  }
   .stack {
     display: flex;
     flex-direction: column;
@@ -282,50 +260,7 @@
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
   }
-  .btn.stop {
-    border-color: var(--critical);
-    background: rgba(248, 113, 113, 0.12);
-    color: #ffd6d6;
-  }
-  .btn.go {
-    border-color: var(--good);
-    background: rgba(74, 222, 128, 0.12);
-    color: #d6ffe4;
-  }
-  .btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
   .nowrap {
     white-space: nowrap;
-  }
-  .modal {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .shade {
-    position: absolute;
-    inset: 0;
-    background: rgba(2, 6, 14, 0.8);
-    border: 0;
-  }
-  .box {
-    position: relative;
-    max-width: 520px;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    background: var(--panel-solid);
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
   }
 </style>
