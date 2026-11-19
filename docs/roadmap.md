@@ -74,7 +74,7 @@ Done: projects, live topology with history, progress, usage, owner inbox with re
 halt/resume and brakes, all through fixed kit scripts.
 
 Later:
-- Create a project from the console. Done: deploy targets, the team check, a dry run, the VM, the kit and team install, the Claude sign-in (saved token or by hand) and registration, with live output. Still to do: an automatic proof of the gate.
+- Create a project from the console. Done: deploy targets, the team check, a dry run, the VM, the kit and team install, the Claude sign-in (saved token or by hand) and registration, and an automatic proof of the gate, with live output.
 - A login in front (an auth proxy header is already honoured) and a dedicated, restricted ssh key.
 - A side chat with the lead that forks its session, for questions that need an answer now.
 - A full transcript viewer per agent, context shown as a share of the model's limit, and services used.

@@ -102,6 +102,8 @@
     'deploy-login-check': 'New project: checked the sign-in',
     'deploy-apply-token': 'New project: applied the saved Claude token',
     'deploy-abandon': 'New project: given up',
+    'deploy-gate-proof': 'New project: gate proof started',
+    'deploy-gate-proof-end': 'New project: gate proof ended',
     'project-add': 'Added to the registry',
     'project-save': 'Changed the registry entry'
   };

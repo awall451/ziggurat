@@ -81,7 +81,7 @@ export function view(d) {
   const planFresh = d.state === 'planned' && d.plan?.hash === fingerprint(d) && age != null && age < DRY_RUN_MAX_AGE_MS;
   return {
     ...d,
-    running: RUNNING.includes(d.state),
+    running: RUNNING.includes(d.state) || d.proof?.state === 'running',
     busyElsewhere: active && active.deployId !== d.id ? active.deployId : null,
     can: {
       edit: EDITABLE.includes(d.state),
@@ -90,6 +90,7 @@ export function view(d) {
       continue: d.state === 'create-failed' && !!d.failure?.canContinue,
       install: d.state === 'created' || d.state === 'install-failed',
       checkLogin: d.state === 'awaiting-login',
+      proof: d.state === 'ready' && d.proof?.state !== 'running',
       abandon: !RUNNING.includes(d.state) && !['abandoned', 'ready'].includes(d.state)
     },
     tokenConfigured: tokenConfigured(),
@@ -452,6 +453,51 @@ function register(d, t) {
   audit({ name: d.by }, d.id, 'project-add', { ssh: entry.ssh.host, vmid: d.vm.vmid, by: 'deploy' });
 }
 
+const short = (v) => (v && typeof v === 'object' ? { status: String(v.status || ''), detail: String(v.detail || '').slice(0, 500), sha: String(v.sha || '').slice(0, 40) } : null);
+
+/**
+ * Prove the new project's gate on the VM: a harmless change must be merged, a
+ * change that deletes a test must be refused (kit script agent-kit-gate-proof).
+ * The team stays halted. Runs in the background; the record holds the result.
+ */
+function startProof(user, d, t) {
+  const startedAt = new Date().toISOString();
+  d.proof = { state: 'running', startedAt };
+  save(d);
+  audit(user, d.id, 'deploy-gate-proof', { vmid: d.vm.vmid });
+  const done = (proof) => {
+    const now = load(d.id);
+    if (!now || now.proof?.startedAt !== startedAt) return;
+    now.proof = { state: 'done', startedAt, ...proof };
+    save(now);
+    audit({ name: now.by }, now.id, 'deploy-gate-proof-end', { good: proof.good?.status || null, drop: proof.drop?.status || null }, { ok: proof.ok === true, detail: proof.error || proof.note || null });
+  };
+  // The gate's checks can take a while (two full runs).
+  kit({ id: d.id, target: t.id, ssh: vmSsh(d, t) }, 'agent-kit-gate-proof', ['run'], { timeout: 75 * 60_000 })
+    .then((res) => {
+      let r = null;
+      try {
+        r = JSON.parse(res.stdout.trim().split('\n').at(-1));
+      } catch {
+        r = null;
+      }
+      if (!r || typeof r.ok !== 'boolean') return done({ ok: false, error: `The VM gave no result: ${(res.stderr || `exit ${res.code}`).trim().slice(-200)}` });
+      done({ ok: r.ok, at: r.at || null, good: short(r.good), drop: short(r.drop), deleted: r.deleted ? String(r.deleted).slice(0, 200) : null, note: r.note ? String(r.note).slice(0, 300) : null, error: r.error ? String(r.error).slice(0, 300) : null, main: r.main ? String(r.main).slice(0, 12) : null, tests: Number.isInteger(r.tests) ? r.tests : null });
+    })
+    .catch((e) => done({ ok: false, error: e.message }));
+}
+
+/** Run the gate proof (again) for a finished project. */
+export function gateProof(user, id) {
+  needDeploy();
+  const d = load(id);
+  if (!d) throw fail(404, 'No such deploy');
+  if (d.state !== 'ready') throw fail(409, 'The project is not finished yet');
+  if (d.proof?.state === 'running') throw fail(409, 'A gate proof is already running');
+  startProof(user, d, targetOf(d));
+  return view(load(id));
+}
+
 /** Ask the VM whether Claude is signed in for the agent user. Spends no tokens. */
 async function signIn(d, t) {
   const res = await kit({ id: d.id, target: t.id, ssh: vmSsh(d, t) }, 'agent-kit-auth', ['status'], { timeout: 45000 });
@@ -475,7 +521,8 @@ export async function checkLogin(user, id) {
   if (s.loggedIn) register(d, t);
   save(d);
   audit(user, d.id, 'deploy-login-check', { method: s.authMethod }, { ok: s.loggedIn, detail: s.loggedIn ? null : s.apiKeySet ? 'an API key is set' : 'not signed in' });
-  return view(d);
+  if (d.state === 'ready' && !d.proof) startProof(user, d, t);
+  return view(load(id));
 }
 
 /** Hand the saved token to a VM that is waiting for a sign-in (the token file was added later). */
@@ -592,6 +639,8 @@ async function finished(id, run) {
     }
     save(d);
     audit({ name: d.by }, d.id, 'deploy-install-end', { run: run.id, vmid: d.vm?.vmid ?? null, kit: d.install?.kitVersion || null, token: !!d.install?.token }, { ok: ['ready', 'awaiting-login'].includes(d.state), detail: d.error });
+    // Finished and registered: prove the gate before anyone starts the team.
+    if (d.state === 'ready' && t) startProof({ name: d.by }, d, t);
     return;
   }
 
@@ -656,6 +705,10 @@ export async function recover() {
   }
   for (const id of ids) {
     const d = load(id);
+    if (d?.proof?.state === 'running') {
+      d.proof = { state: 'done', startedAt: d.proof.startedAt, ok: null, error: 'The console restarted while the proof was running. Run it again.' };
+      save(d);
+    }
     if (d && RUNNING.includes(d.state) && runner.activeRun()?.deployId !== id) {
       const last = d.lastRun ? runner.readRun(id, d.lastRun) : null;
       if (last && last.status !== 'running') await finished(id, last);

@@ -292,7 +292,43 @@
         {d.install?.baselineTests} test{d.install?.baselineTests === 1 ? '' : 's'}.
       </p>
       <p><b>The team is halted</b> and its timer is off. Nothing spends tokens until you resume it on the project's Controls tab.</p>
-      <div class="actions"><span class="grow"></span><a class="btn go" href="/p/{d.id}/controls">Open {r.name}</a></div>
+
+      <h3>Gate proof</h3>
+      {#if d.proof?.state === 'running'}
+        <p class="s-running">Running on the VM: one harmless change must be merged, one change that deletes a test must be refused. This runs the gate's real checks twice and spends no tokens.</p>
+      {:else if d.proof}
+        {#if d.proof.ok === true}
+          <p><span class="pill done">Proven</span> The gate works on this project{d.proof.main ? ` (main is now ${d.proof.main}` : ''}{d.proof.tests != null ? `, ${d.proof.tests} tests)` : d.proof.main ? ')' : ''}.</p>
+        {:else if d.proof.ok === false}
+          <p><span class="pill failed">Not proven</span> <b>Do not start this team yet.</b> {d.proof.error || 'The gate did not behave as it must.'}</p>
+        {:else}
+          <p><span class="pill halted">Unknown</span> {d.proof.error}</p>
+        {/if}
+        <ul class="proof">
+          {#if d.proof.good}
+            <li>
+              <span class="pill {d.proof.good.status === 'merged' ? 'done' : 'failed'}">{d.proof.good.status === 'merged' ? 'OK' : 'Problem'}</span>
+              <span>A harmless change must be merged: <b>{d.proof.good.status || 'no verdict'}</b></span>
+              <span class="small dim">{d.proof.good.detail}</span>
+            </li>
+          {/if}
+          {#if d.proof.drop}
+            <li>
+              <span class="pill {d.proof.drop.status === 'failed' ? 'done' : 'failed'}">{d.proof.drop.status === 'failed' ? 'OK' : 'Problem'}</span>
+              <span>Deleting <span class="mono">{d.proof.deleted}</span> must be refused: <b>{d.proof.drop.status === 'failed' ? 'refused' : d.proof.drop.status || 'no verdict'}</b></span>
+              <span class="small dim">{d.proof.drop.detail}</span>
+            </li>
+          {/if}
+        </ul>
+        {#if d.proof.note}<p class="small s-interrupted">{d.proof.note}</p>{/if}
+        <p class="small dim">A build that is broken in a way only this project knows (a failing compile, a wrong result) is still yours to try once by hand.</p>
+      {:else}
+        <p class="dim">Not run yet.</p>
+      {/if}
+      <div class="actions">
+        {#if d.can.proof}<button class="btn quiet" onclick={() => act('gate-proof', 'proof')} disabled={!!busy}>{d.proof ? 'Run the gate proof again' : 'Run the gate proof'}</button>{/if}
+        <span class="grow"></span><a class="btn go" href="/p/{d.id}/controls">Open {r.name}</a>
+      </div>
     </section>
   {/if}
 
@@ -375,6 +411,24 @@
   }
   .block.warn {
     border-color: var(--warn);
+  }
+  h3 {
+    margin: 6px 0 0;
+    font-size: 15px;
+  }
+  .proof {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .proof li {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
   }
   .steps {
     margin: 0;
