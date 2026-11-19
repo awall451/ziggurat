@@ -64,7 +64,8 @@ if [ -n "$PDIR" ]; then
   install -m 644 "$PDIR/CHARTER.md" "$PDIR/GATE-CONTRACT.md" "$PDIR/lead-cycle.md" /opt/agent-kit/
 fi
 for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
-         agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox owner-inbox; do
+         agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox owner-inbox \
+         agent-kit-issues owner-issues; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 
@@ -75,6 +76,9 @@ install -d -m 755 -o agent -g agent "$STATE/ledger"
 install -d -m 755 "$STATE/inbox" "$STATE/inbox/.inject" "$STATE/inbox/.closed"
 # Outbox: the lead's replies and questions.
 install -d -m 755 -o agent -g agent "$STATE/outbox" "$STATE/outbox/.seen"
+# Owner issues: root-owned like the inbox; the lead's updates go to issues-out.
+install -d -m 755 "$STATE/issues" "$STATE/issues/.owner"
+install -d -m 755 -o agent -g agent "$STATE/issues-out"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"
 

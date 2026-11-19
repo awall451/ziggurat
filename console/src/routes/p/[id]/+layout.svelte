@@ -13,6 +13,7 @@
     ['progress', 'Progress'],
     ['inbox', 'Inbox'],
     ['notes', 'Notes'],
+    ['issues', 'Issues'],
     ['gallery', 'Gallery'],
     ['digest', 'Digest'],
     ['usage', 'Usage'],
@@ -83,7 +84,7 @@
   <div class="tabs">
     {#each TABS as [slug, label] (slug)}
       <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
-        {label}{#if slug === 'inbox' && p.asks}<span class="count">{p.asks}</span>{/if}
+        {label}{#if slug === 'inbox' && p.asks}<span class="count">{p.asks}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{/if}
       </a>
     {/each}
     <span class="grow"></span>

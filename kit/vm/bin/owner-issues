@@ -1,0 +1,135 @@
+#!/bin/bash
+# owner-issues: how the lead reads the owner's issues and reports on them.
+# Runs as `agent`. Root-owned, like everything in /opt/agent-kit.
+#
+#   owner-issues list                     open issues
+#   owner-issues show <id>                one issue, with image paths
+#   owner-issues update <id> in_progress|done|wontfix [--shot shots/<date>/<file>.png]   (note on stdin)
+#   owner-issues prompt                   the protocol plus open issues (added to the lead's prompt)
+#
+# Layout (see docs/architecture.md):
+#   $STATE/issues/<id>/issue.md, shot.png, markup.png   root-owned: only the owner can write here
+#   $STATE/issues/.owner/<id>                           "<status> <date>" when the owner moved it
+#   $STATE/issues-out/<id>.md                           the lead's latest update (agent-written)
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+IS=$STATE/issues
+OUT=$STATE/issues-out
+ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
+SHOT_RE='^shots/[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9._-]+\.png$'
+shopt -s nullglob
+
+die() { echo "owner-issues: $*" >&2; exit 2; }
+header() { sed -n "1,/^---\$/s/^$2: //p" "$1" 2>/dev/null | head -1; }
+body() { sed '1,/^---$/d' "$1" 2>/dev/null; }
+
+# Current status: whichever of the owner's move and the lead's update is newer.
+status_of() {
+  local id=$1 os="" od="" ls="" ld=""
+  [ -f "$IS/.owner/$id" ] && read -r os od < "$IS/.owner/$id"
+  if [ -f "$OUT/$id.md" ]; then ls=$(header "$OUT/$id.md" Status); ld=$(header "$OUT/$id.md" Date); fi
+  if [ -n "$os" ] && { [ -z "$ls" ] || [[ ! $ld > $od ]]; }; then echo "$os"
+  elif [ -n "$ls" ]; then echo "$ls"
+  else echo new; fi
+}
+
+open_ids() {
+  local d id
+  for d in "$IS"/2*/; do
+    id=$(basename "$d")
+    [[ $id =~ $ID_RE ]] && [ -f "$d/issue.md" ] || continue
+    case "$(status_of "$id")" in new | in_progress) echo "$id" ;; esac
+  done
+}
+
+show() {
+  local id=$1 f
+  cat "$IS/$id/issue.md"
+  echo
+  echo "Status: $(status_of "$id")"
+  for f in markup.png shot.png; do
+    [ -f "$IS/$id/$f" ] && echo "Image ($f, read it with your file tools): $IS/$id/$f"
+  done
+  [ -f "$OUT/$id.md" ] && { echo; echo "Your last update:"; cat "$OUT/$id.md"; }
+}
+
+case "${1:-list}" in
+  list)
+    n=0
+    for id in $(open_ids); do
+      n=$((n + 1))
+      printf '%s  %-7s  %-11s  %s\n' "$id" "$(header "$IS/$id/issue.md" Kind)" "$(status_of "$id")" \
+        "$(body "$IS/$id/issue.md" | sed -n 's/^# //p' | head -1 | cut -c1-100)"
+    done
+    [ "$n" -gt 0 ] || echo "No open owner issues."
+    ;;
+
+  show)
+    [[ ${2:-} =~ $ID_RE ]] || die "usage: owner-issues show <id>"
+    [ -f "$IS/$2/issue.md" ] || die "no such issue: $2"
+    show "$2"
+    ;;
+
+  update)
+    id=${2:-} status=${3:-}
+    [[ $id =~ $ID_RE ]] || die "usage: owner-issues update <id> in_progress|done|wontfix [--shot shots/<date>/<file>.png]"
+    [[ $status =~ ^(in_progress|done|wontfix)$ ]] || die "status must be in_progress, done or wontfix"
+    [ -f "$IS/$id/issue.md" ] || die "no such issue: $id"
+    shift 3
+    shot=""
+    while [ $# -gt 0 ]; do
+      [ "$1" = "--shot" ] && [[ ${2:-} =~ $SHOT_RE ]] || die "unknown or bad argument: $1 ${2:-} (--shot shots/<date>/<file>.png)"
+      shot=$2
+      shift 2
+    done
+    mkdir -p "$OUT"
+    tmp=$OUT/.$id.tmp
+    {
+      printf 'Status: %s\nRe: %s\nDate: %s\n' "$status" "$id" "$(date -u +%FT%TZ)"
+      [ -n "$shot" ] && printf 'Fixed-shot: %s\n' "$shot"
+      printf -- '---\n'
+      head -c 20000
+    } > "$tmp" || die "could not write the update"
+    mv "$tmp" "$OUT/$id.md"
+    echo "updated $id: $status"
+    ;;
+
+  prompt)
+    # Printed at the end of the lead's prompt every cycle. Keep the wording
+    # neutral: team themes rename roles, this text must fit all of them.
+    ids=$(open_ids)
+    [ -n "$ids" ] || { echo "## Owner issues"; echo; echo "There are no open owner issues right now."; exit 0; }
+    cat <<'PROMPT'
+## Owner issues
+
+The owner also raises issues: tickets about the game, usually from a screenshot with markup drawn on
+it (`markup.png`: the screenshot with the owner's circles and boxes). They live under
+`/var/lib/agent-kit/issues/`, which you cannot write to; that is what makes them authentic. An issue is
+not urgent: weigh it like a `note` from the inbox when you choose tasks.
+
+You triage every issue. Decide who on the team should handle it and hand it to them as a task, or
+decline it. Report with `owner-issues update <id> in_progress|done|wontfix` (a short note on stdin):
+- `in_progress` once it is assigned (say to whom, and where it is planned);
+- `done` when the fix has merged; add `--shot shots/<date>/<file>.png` when a newer gallery screenshot
+  shows the fix, so the owner sees before and after;
+- `wontfix` with the reason, if it conflicts with the charter or is not worth doing.
+An issue is shown here every cycle until it is `done` or `wontfix`. The owner can also move it.
+Only you, the lead, update issues; your agents do not.
+
+### Open owner issues
+PROMPT
+    for id in $ids; do
+      echo
+      echo "--- $id ---"
+      show "$id" | head -c 4000
+      echo
+    done
+    exit 0
+    ;;
+
+  *)
+    die "unknown command: $1 (list, show, update, prompt)"
+    ;;
+esac

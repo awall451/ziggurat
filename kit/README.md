@@ -7,12 +7,13 @@ Update a VM that already runs the kit with `sudo bash vm/install.sh --upgrade` w
 | File | Role |
 |---|---|
 | `vm/install.sh` | idempotent installer: users, `/opt/agent-kit`, canonical repo, systemd units; `--upgrade` for kit files only |
-| `vm/bin/lead-cycle` | one headless lead cycle (budget, daily cap, usage-limit backoff, ledger, owner inbox) |
+| `vm/bin/lead-cycle` | one headless lead cycle (budget, daily cap, usage-limit backoff, ledger, owner inbox and issues) |
 | `vm/bin/gate-status`, `agent-kit-status` | verdicts, owner overview |
 | `vm/bin/agent-kit-halt`, `agent-kit-resume`, `agent-kit-halt-at` | stop now, undo a stop, stop at a set time (`agent-kit-stop` is the old name for halt) |
 | `vm/bin/agent-kit-caps`, `agent-kit-gate`, `agent-kit-units` | brakes and models, gate pause, the team's own units |
 | `vm/bin/agent-kit-inbox` | owner side of the inbox: checked delivery of a message, close |
 | `vm/bin/owner-inbox`, `owner-inbox-hook`, `vm/lead-settings.json` | lead side: read, reply, ask; mid-cycle delivery to the lead's session |
+| `vm/bin/agent-kit-issues`, `owner-issues` | owner issues: checked delivery and owner moves; the lead's list, show, update and prompt |
 | `vm/gate/bin/gate-run` | the gate: fetch `ready/*`, test as `gaterun`, fast-forward `main` |
 | `vm/agent.env` | proxy, PATH, model and safety env for agent processes |
 | `vm/systemd/` | `agent-kit-lead` (cycles), `agent-kit-gate` (every 2 min) and `agent-kit-tick` (scheduled stop) timers |

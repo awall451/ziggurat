@@ -38,10 +38,13 @@ export ZIGGURAT_LEAD_SESSION=$sid
 printf '%s %s\n' "$sid" "$start" > "$STATE/ledger/current"
 
 # The prompt is the team's lead-cycle.md plus the owner-inbox protocol and any
-# open owner messages.
+# open owner messages, then the owner-issues protocol and any open issues.
 prompt=$(cat /opt/agent-kit/lead-cycle.md)
 if [ -x /opt/agent-kit/bin/owner-inbox ]; then
   inbox=$(/opt/agent-kit/bin/owner-inbox prompt 2>/dev/null) && [ -n "$inbox" ] && prompt+=$'\n\n'"$inbox"
+fi
+if [ -x /opt/agent-kit/bin/owner-issues ]; then
+  issues=$(/opt/agent-kit/bin/owner-issues prompt 2>/dev/null) && [ -n "$issues" ] && prompt+=$'\n\n'"$issues"
 fi
 settings=()
 [ -f /opt/agent-kit/lead-settings.json ] && settings=(--settings /opt/agent-kit/lead-settings.json)

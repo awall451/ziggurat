@@ -1,9 +1,10 @@
 import { error } from '@sveltejs/kit';
 import { getProject } from '$lib/server/config.js';
 import { gallery } from '$lib/server/aggregate.js';
+import { screenIndex } from '$lib/server/issues.js';
 
 export function load({ params }) {
   const project = getProject(params.id);
   if (!project) error(404, 'No such project');
-  return { days: gallery(project) };
+  return { days: gallery(project), issues: screenIndex(project) };
 }

@@ -107,6 +107,41 @@ asks=$("$BIN/owner-inbox" asks)
 check "owner's answer links to the ask" 'grep -q "$ask  answered in 20260101T110000Z-o-answer1" <<< "$asks"'
 refuse "answer with a bad ask id" bash -c "tar -c -C '$T/work/a' . | '$BIN/agent-kit-inbox' put 20260101T110001Z-o-answer2 note owner 'x; id'"
 
+echo "== agent-kit-issues, owner-issues"
+I1=20260101T120000Z-i-aaaaaa I2=20260101T120001Z-i-bbbbbb
+mkdir -p "$T/work/i1" "$T/work/i2" "$T/work/ibad"
+printf '# Names box overlaps the victory box\n\nKind: bug\nScreen: level-up\n\nSee circle. Code word OBSIDIAN.\n' > "$T/work/i1/issue.md"
+echo png > "$T/work/i1/markup.png"; echo png > "$T/work/i1/shot.png"
+printf '# Brighter candles\n' > "$T/work/i2/issue.md"
+tarball i1 | "$BIN/agent-kit-issues" put $I1 bug > /dev/null
+tarball i2 | "$BIN/agent-kit-issues" put $I2 polish > /dev/null
+check "issue stored with images" '[ -f "$S/issues/$I1/issue.md" ] && [ -f "$S/issues/$I1/markup.png" ]'
+check "issue header written by the script" 'grep -q "^Kind: bug$" "$S/issues/$I1/issue.md" && grep -q "^Id: $I1$" "$S/issues/$I1/issue.md"'
+refuse "duplicate issue" bash -c "tar -c -C '$T/work/i2' . | '$BIN/agent-kit-issues' put $I2 polish"
+refuse "bad issue id" bash -c "tar -c -C '$T/work/i2' . | '$BIN/agent-kit-issues' put ../x bug"
+refuse "bad kind" bash -c "tar -c -C '$T/work/i2' . | '$BIN/agent-kit-issues' put 20260101T120002Z-i-cccccc feature"
+echo x > "$T/work/ibad/issue.md"; echo x > "$T/work/ibad/evil.sh"
+refuse "unexpected file in issue archive" bash -c "tar -c -C '$T/work/ibad' . | '$BIN/agent-kit-issues' put 20260101T120003Z-i-dddddd bug"
+check "refused issues left nothing" '[ "$("$BIN/agent-kit-issues" list | wc -l)" = 2 ]'
+listed=$("$BIN/owner-issues" list)
+check "list shows two new issues" '[ "$(wc -l <<< "$listed")" = 2 ] && grep -q "$I1  bug .*new .*Names box" <<< "$listed"'
+out=$("$BIN/owner-issues" prompt)
+check "prompt has protocol, issue text and image path" 'grep -q "## Owner issues" <<< "$out" && grep -q OBSIDIAN <<< "$out" && grep -q "issues/$I1/markup.png" <<< "$out"'
+echo "Given to the artist." | "$BIN/owner-issues" update $I1 in_progress > /dev/null
+check "in_progress keeps it open" 'grep -q "$I1 .*in_progress" <<< "$("$BIN/owner-issues" list)"'
+sleep 1
+echo "Fixed." | "$BIN/owner-issues" update $I1 done --shot shots/2026-01-02/07-level-up.png > /dev/null
+check "done closes it" '! grep -q "$I1" <<< "$("$BIN/owner-issues" list)"'
+check "update file is machine readable" '[ "$(head -1 "$S/issues-out/$I1.md")" = "Status: done" ] && grep -q "^Fixed-shot: shots/2026-01-02/07-level-up.png$" "$S/issues-out/$I1.md"'
+refuse "update with a bad shot path" bash -c "echo x | '$BIN/owner-issues' update $I2 done --shot ../../etc/passwd"
+refuse "update with an unknown status" bash -c "echo x | '$BIN/owner-issues' update $I2 maybe"
+sleep 1
+"$BIN/agent-kit-issues" set $I1 new > /dev/null
+check "owner reopening after the lead wins" 'grep -q "$I1 .*new" <<< "$("$BIN/owner-issues" list)"'
+"$BIN/agent-kit-issues" set $I2 wontfix > /dev/null
+check "owner can close an issue" '! grep -q "$I2" <<< "$("$BIN/owner-issues" list)"'
+refuse "owner set with a bad status" "$BIN/agent-kit-issues" set $I2 closed
+
 echo "== agent-kit-caps"
 "$BIN/agent-kit-caps" set MAX_CYCLES_PER_DAY 3 > /dev/null
 "$BIN/agent-kit-caps" set LEAD_MODEL opus > /dev/null
