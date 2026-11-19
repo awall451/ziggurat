@@ -57,7 +57,7 @@ tools/render-team.py examples/web-game --theme plain --out build/my-game
 6. Run one supervised cycle: `sudo agent-kit-resume --no-timer && sudo systemctl start agent-kit-lead.service`. Read the transcript, the ledger (`agent-kit-status`) and the gate verdicts (`gate-status`).
 7. When you trust it: `sudo agent-kit-resume` (clears the stop and enables the lead's timer). Stop it at any time with `sudo agent-kit-halt [reason]`; for a time window use `sudo agent-kit-halt-at set <unix-seconds>`.
 
-To update a VM that already runs the kit: halt the team, copy `kit/vm` in, `sudo bash vm/install.sh --upgrade`.
+To update a VM that already runs the kit: copy `kit/vm` in, `sudo bash vm/install.sh --upgrade`. A cycle that is running is not interrupted and finishes with the kit it started with. To stop a team without cutting its cycle short: `sudo agent-kit-halt-after set [--wrap-up]`.
 
 ## 4. The console (recommended)
 

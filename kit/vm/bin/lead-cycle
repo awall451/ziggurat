@@ -18,6 +18,10 @@ if [ -f "$STATE/halt-at" ]; then
   read -r due _ < "$STATE/halt-at"
   if [[ ${due:-} =~ ^[0-9]+$ ]] && [ "$(date +%s)" -ge "$due" ]; then echo "scheduled stop time has passed: not running"; exit 0; fi
 fi
+# A halt asked for "after this cycle" (agent-kit-halt-after) waits for the gate
+# once the cycle is over, which can take longer than the timer does: no new
+# cycle may start in between.
+if [ -f "$STATE/halt-after" ]; then echo "a halt after the last cycle is pending: not running"; exit 0; fi
 
 # A one-shot job (agent-kit-oneshot): this cycle works on one owner message and
 # the team halts again when it ends. The marker and the control line are both

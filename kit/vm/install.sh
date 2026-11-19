@@ -9,7 +9,14 @@
 #   sudo bash install.sh --upgrade                 kit scripts and units only
 #   sudo bash install.sh --upgrade <project-dir>   also the project's prompt and gate files
 # An upgrade never touches the workspace repo, the canonical repo, the
-# control file, project.env, agent.env or caps.env. Do it while the team is halted.
+# control file, project.env, agent.env or caps.env.
+#
+# It can be done while a cycle is running. Every file is put in place as a new
+# file (`install`, `ln -sf`), never written over, so a script that is running
+# keeps the version it started with; systemd reloads its unit files without
+# restarting a running unit. The cycle in progress therefore finishes with the
+# lead-cycle it began with, while the helper scripts it calls (owner-inbox, the
+# hook, gate-status) and the gate's next pass are the new ones at once.
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
 UPGRADE=0
@@ -24,6 +31,10 @@ else
   source "$PDIR/project.env"
 fi
 : "${PROJECT:?}" "${WORKSPACE:?}" "${BARE:?}" "${STATE:?}"
+# Everything from here on uses full paths. Leave the folder this was started
+# from: steps that run as gatekeeper, gaterun or agent fail outright in a
+# folder those users cannot read (an admin's home, say), git first of all.
+cd /
 
 if [ "$UPGRADE" = 0 ]; then
   # The gate takes its first main from here, so this must be a repository with
@@ -71,7 +82,8 @@ if [ -n "$PDIR" ]; then
   install -m 644 "$PDIR/CHARTER.md" "$PDIR/GATE-CONTRACT.md" "$PDIR/lead-cycle.md" /opt/agent-kit/
 fi
 for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
-         agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot agent-kit-auth agent-kit-gate-proof \
+         agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
+         agent-kit-auth agent-kit-gate-proof \
          owner-inbox gate-wait agent-kit-issues owner-issues; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
@@ -174,6 +186,11 @@ systemctl daemon-reload
 systemctl enable --now agent-kit-gate.timer agent-kit-tick.timer >/dev/null
 if [ "$UPGRADE" = 1 ]; then
   echo "   kit $(cat "$KIT/VERSION") installed. Lead timer and control file left as they were."
+  case "$(systemctl is-active agent-kit-lead.service 2>/dev/null)" in
+    active | activating)
+      echo "   A cycle is running: it was not interrupted and finishes with the lead-cycle it started with."
+      echo "   Its helper scripts, the gate and every later cycle use the new kit from now on." ;;
+  esac
 else
   echo "   gate timer enabled. lead timer NOT enabled (owner starts it)."
 fi

@@ -9,6 +9,10 @@
 #               text) asking them to reach a safe point and report back, so
 #               the lead sees the message sooner. Once per agent.
 #
+# It also delivers the wrap-up notice of `agent-kit-halt-after set --wrap-up`:
+# the owner will halt the team when this cycle ends, so the lead and each agent
+# are told once to wind down. The note it reads is root-owned.
+#
 # It runs after every tool call, so the common case (nothing waiting) costs
 # one directory read and no subprocess.
 [ -n "${ZIGGURAT_LEAD_SESSION:-}" ] || exit 0
@@ -32,7 +36,13 @@ for f in "$S"/inbox/.inject/*; do
   id=${f##*/}
   [ -e "$S/outbox/.seen/$id" ] || waiting+=("$id")
 done
-[ ${#waiting[@]} -gt 0 ] || exit 0
+# A halt after this cycle, with wrap-up asked for: "<set> wrap <reason>".
+wrap=
+if [ -f "$S/halt-after" ]; then
+  read -r hset hmode _ < "$S/halt-after"
+  [ "${hmode:-}" = wrap ] && [[ ${hset:-} =~ ^[0-9]{9,11}$ ]] && wrap=$hset
+fi
+[ ${#waiting[@]} -gt 0 ] || [ -n "$wrap" ] || exit 0
 
 ID_RE='^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$'
 IFS=$'\t' read -r sid aid < <(jq -r '[.session_id // "", .agent_id // ""] | @tsv' 2>/dev/null)
@@ -40,6 +50,17 @@ IFS=$'\t' read -r sid aid < <(jq -r '[.session_id // "", .agent_id // ""] | @tsv
 mkdir -p "$S/outbox/.seen" 2>/dev/null
 
 out=
+if [ -n "$wrap" ]; then
+  # Once for the lead and once for each agent; `mkdir` makes "first one wins" atomic.
+  who=$(printf '%s' "${aid:-lead}" | tr -cd 'A-Za-z0-9_-' | cut -c1-64)
+  if [ -n "$who" ] && mkdir "$S/outbox/.seen/halt-after-$wrap@$who" 2>/dev/null; then
+    if [ -z "$aid" ]; then
+      out+="[agent-kit owner notice] The owner has asked for the team to halt when this cycle ends. Wrap up: start no new work and no new agents. Agents that are running have been told to finish the step they are on and report back. Integrate and submit what is ready, write in your notes what is unfinished and where it stands, then end the cycle. No cycle follows until the owner resumes the team."$'\n\n'
+    else
+      out+="[agent-kit owner notice] The owner has asked for the team to halt when this cycle ends. Finish the step you are on and do not start further steps. Leave your work in a safe state (commit or note what is half done) and report back, saying what is left to do."$'\n'
+    fi
+  fi
+fi
 for id in "${waiting[@]}"; do
   [[ $id =~ $ID_RE ]] || continue
   msg=$S/inbox/$id/message.md

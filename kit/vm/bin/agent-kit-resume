@@ -20,6 +20,8 @@ chmod 644 "$STATE/control.tmp"
 mv "$STATE/control.tmp" "$STATE/control"
 # Resuming during a one-shot job makes it a normal run: nothing halts at its end.
 rm -f "$STATE/oneshot"
+# So does a halt that was waiting for the cycle to end: the owner wants it running.
+rm -f "$STATE/halt-after" "$STATE/halt-after.over"
 
 # A stop time that has already passed would halt again at once: drop it.
 if [ -f "$STATE/halt-at" ]; then

@@ -155,6 +155,9 @@ message in full with `owner-inbox show <id>` (attachments are listed with their 
 are told at start that the same notice is genuine; if one returns early because of it, that is
 expected, not a failure: note what it left unfinished and pick it up after you have handled the message.
 
+A notice of the same kind may tell you that the owner will halt the team when this cycle ends. It names
+no message and needs no reply: wrap up as it says. Your agents get their own short version of it.
+
 Answer every message, in a few plain lines, with
 `owner-inbox reply <id> done|planned|declined` (text on stdin; add `--attach <file>` to send a
 screenshot or file back). `planned` keeps it open, so say where it is planned (the STATE.md entry) and

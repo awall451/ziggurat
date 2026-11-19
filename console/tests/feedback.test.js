@@ -238,6 +238,37 @@ describe('one-shot jobs', () => {
     await expect(controls.oneshotAgain(user, jobs, ran.id)).rejects.toThrow('not halted');
   });
 
+  it('asks for a halt after the cycle with checked words only, and reads it back', async () => {
+    const controls = await import('../src/lib/server/controls.js');
+    const { getStatus } = await import('../src/lib/server/live.js');
+    const { readAudit } = await import('../src/lib/server/audit.js');
+    vm(0);
+    await controls.haltAfter(user, jobs, 'weekly usage; $(id)', true);
+    expect(calls().at(-1)).toBe('sudo -n /opt/agent-kit/bin/agent-kit-halt-after set --wrap-up weekly usage id via-console');
+    expect(readAudit('jobs')[0]).toMatchObject({ action: 'halt-after', ok: true, args: { reason: 'weekly usage id', wrapUp: 'yes' } });
+    await controls.haltAfter(user, jobs, '', false);
+    expect(calls().at(-1)).toBe('sudo -n /opt/agent-kit/bin/agent-kit-halt-after set owner via-console');
+    await controls.clearHaltAfter(user, jobs);
+    expect(calls().at(-1)).toBe('sudo -n /opt/agent-kit/bin/agent-kit-halt-after clear');
+    vm(2, 'agent-kit-halt-after: the team is already halted');
+    expect(await controls.haltAfter(user, jobs, 'x', false)).toMatchObject({ ok: false, detail: 'agent-kit-halt-after: the team is already halted' });
+
+    // What the VM reports comes back as a pending halt.
+    const report = (extra) => fs.writeFileSync(path.join(fake, 'status'), JSON.stringify({ kitver: '0.5.0', lead: 'activating', control: 'run x', ...extra }) + '\n');
+    report({ haltafter: '1767225600 wrap weekly usage\n', canhaltafter: 'yes' });
+    expect(await getStatus(jobs, { fresh: true })).toMatchObject({
+      state: 'running',
+      canHaltAfter: true,
+      haltAfter: { since: 1767225600, wrapUp: true, reason: 'weekly usage' }
+    });
+    report({ haltafter: '1767225600 plain owner', canhaltafter: 'yes' });
+    expect((await getStatus(jobs, { fresh: true })).haltAfter).toEqual({ since: 1767225600, wrapUp: false, reason: 'owner' });
+    report({ haltafter: 'garbage here', canhaltafter: 'no' });
+    expect(await getStatus(jobs, { fresh: true })).toMatchObject({ haltAfter: null, canHaltAfter: false });
+    report({});
+    expect(await getStatus(jobs, { fresh: true })).toMatchObject({ haltAfter: null, canHaltAfter: false });
+  });
+
   it('only starts one-shot jobs', async () => {
     await expect(fb.startOneshot(project, MSG)).rejects.toThrow('No such one-shot job');
     await expect(fb.startOneshot(jobs, '../../etc')).rejects.toThrow('Bad message id');

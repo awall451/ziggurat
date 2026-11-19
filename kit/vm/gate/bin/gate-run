@@ -60,6 +60,12 @@ set -a; source "$ETC/agent.env"; set +a
 # agent can write to. This script is root, so it keeps its own PATH (the checks
 # get an explicit one below).
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# When this pass over all submitted branches began. agent-kit-halt-after waits
+# for a pass that began after the last cycle ended before it halts the team.
+if [ -z "$PROOF" ]; then
+  date +%s > "$STATE/gate/pass-started.tmp" && chmod 644 "$STATE/gate/pass-started.tmp" \
+    && mv "$STATE/gate/pass-started.tmp" "$STATE/gate/pass-started"
+fi
 
 if [ -n "$PROOF" ]; then
   $GK -C "$BARE" fetch -q "$WORKSPACE" "+refs/heads/ready/$PROOF:refs/candidates/$PROOF" || { echo "fetch failed"; exit 1; }
