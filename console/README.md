@@ -18,7 +18,7 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 | Gallery | Screenshots the gate took of the newest passing build, by day |
 | Digest | The morning digest and its spoken version (written by `workstation/agent-digest`) |
 | Usage | Tokens and cost estimates by model, role and cycle, computed from the transcripts |
-| Controls | Halt, resume, a one-shot job (one cycle for the work you describe, then halted again), stop at a set time, cycle cap, budget, models, gate pause, audit log |
+| Controls | Halt now or after the cycle in progress (optionally asking the team to wrap up), resume, a one-shot job (one cycle for the work you describe, then halted again), stop at a set time, cycle cap, budget, models, gate pause, audit log |
 
 ## How it gets its data
 

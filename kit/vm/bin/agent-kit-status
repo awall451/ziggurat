@@ -4,6 +4,7 @@ source /etc/agent-kit/project.env
 L=$STATE/ledger/cycles.jsonl
 today=$(date +%F)
 echo "== $PROJECT  $(date '+%F %H:%M')   control: $(cat "$STATE/control" 2>/dev/null || echo 'run (default)')"
+[ -f "$STATE/halt-after" ] && agent-kit-halt-after show
 systemctl list-timers 'agent-kit-*' --no-pager | sed -n '1,4p'
 echo; echo "== last cycles"
 tail -n "${1:-6}" "$L" 2>/dev/null | jq -r '"\(.start[5:16])  rc=\(.rc)  \(.secs // "?")s  $\(.cost_usd // "?")  \(.summary // "" | gsub("\n";" ") | .[0:160])"'

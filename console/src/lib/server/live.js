@@ -29,6 +29,8 @@ haltat=$(head -c 200 "$STATE/halt-at" 2>/dev/null)
 gatepaused=$([ -e "$STATE/gate/paused" ] && echo yes || echo no)
 kitver=$(head -c 40 /opt/agent-kit/VERSION 2>/dev/null)
 oneshot=$(head -c 200 "$STATE/oneshot" 2>/dev/null)
+haltafter=$(head -c 300 "$STATE/halt-after" 2>/dev/null)
+canhaltafter=$([ -x /opt/agent-kit/bin/agent-kit-halt-after ] && echo yes || echo no)
 canoneshot=$([ -x /opt/agent-kit/bin/agent-kit-oneshot ] && echo yes || echo no)
 f=$(grep -l "all checks passed" "$STATE"/gate/results/*.json 2>/dev/null | xargs -r ls -t | head -1)
 shots=$([ -n "$f" ] && jq -r '.shots // empty' "$f" 2>/dev/null)
@@ -37,10 +39,12 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
   --arg newest "$newest" --arg worktrees "$worktrees" --arg haltat "$haltat" \\
   --arg gatepaused "$gatepaused" --arg kitver "$kitver" --arg shots "$shots" \\
   --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" \\
+  --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" \\
   --arg host "$(hostname)" --arg now "$(date +%s)" \\
   '{control:$control, lead:$lead, timer:$timer, since:$since, head:$head, ready:$ready, remote:$remote,
     current:$current, newest:$newest, worktrees:($worktrees|tonumber? // 0), haltat:$haltat,
-    gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot, host:$host, now:($now|tonumber? // 0)}'
+    gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot,
+    haltafter:$haltafter, canhaltafter:$canhaltafter, host:$host, now:($now|tonumber? // 0)}'
 `;
 }
 
@@ -57,6 +61,7 @@ function shape(raw) {
   }
   const [haltEpoch, ...haltReason] = (raw.haltat || '').trim().split(/\s+/);
   const [jobId, jobSince] = (raw.oneshot || '').trim().split(/\s+/);
+  const [afterSet, afterMode, ...afterReason] = (raw.haltafter || '').trim().split(/\s+/);
   return {
     reachable: true,
     state: running ? 'running' : stopped ? 'halted' : 'idle',
@@ -75,6 +80,9 @@ function shape(raw) {
     // A one-shot job in progress: one cycle for one owner message, then halted again.
     oneshot: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(jobId || '') ? { id: jobId, since: jobSince || null } : null,
     canOneshot: raw.canoneshot === 'yes',
+    // A halt that waits for the cycle in progress to end (and for the gate after it).
+    haltAfter: /^\d{9,11}$/.test(afterSet || '') ? { since: Number(afterSet), wrapUp: afterMode === 'wrap', reason: afterReason.join(' ') } : null,
+    canHaltAfter: raw.canhaltafter === 'yes',
     shotsDir: /^\/var\/lib\/agent-kit\/[A-Za-z0-9._\/-]+$/.test(raw.shots || '') ? raw.shots : null,
     host: raw.host,
     vmNow: raw.now

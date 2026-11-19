@@ -1,0 +1,120 @@
+#!/bin/bash
+# agent-kit-halt-after: halt the team when the cycle in progress has ended,
+# instead of cutting it short. Run with sudo (the console calls it over ssh).
+#
+#   agent-kit-halt-after set [--wrap-up] [reason words]
+#   agent-kit-halt-after clear
+#   agent-kit-halt-after show
+#   agent-kit-halt-after due      for agent-kit-halt --if-due: prints the reason and
+#                                 exits 0 when the pending halt should happen now
+#
+# `set` only leaves a note. agent-kit-tick (every minute) does the halt, through
+# agent-kit-halt --if-due, once the cycle is over AND the gate has started a pass
+# since then: a pass judges everything the cycle submitted and finishes on its
+# own after the stop, so the last cycle's work still reaches main. While the
+# note is there no new cycle starts (lead-cycle checks it).
+#
+# --wrap-up also tells the lead and its agents, once each, to wind down: finish
+# the step in hand, start nothing new, submit and record (owner-inbox-hook).
+# Without it the cycle runs its natural length and is told nothing.
+set -uo pipefail
+# Root script: never look programs up through an inherited PATH
+# (AGENT_KIT_PATH is for the tests).
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+LEAD=agent-kit-lead
+MARK=$STATE/halt-after       # "<set, unix seconds> <plain|wrap> <reason>"
+OVER=$STATE/halt-after.over  # unix seconds: when the cycle it waited for ended
+LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
+# How long to wait for the gate to start a pass after the cycle ended.
+GATE_WAIT=${HALT_AFTER_GATE_WAIT:-2700}
+[[ $GATE_WAIT =~ ^[0-9]{1,6}$ ]] || GATE_WAIT=2700
+
+die() { echo "agent-kit-halt-after: $*" >&2; exit 2; }
+cycle_alive() {
+  case "$(systemctl is-active "$LEAD.service" 2>/dev/null)" in
+    active | activating | deactivating) return 0 ;;
+  esac
+  return 1
+}
+number() { [[ ${1:-} =~ ^[0-9]{9,11}$ ]]; }
+
+case "${1:-show}" in
+  set)
+    shift
+    mode=plain
+    if [ "${1:-}" = "--wrap-up" ]; then mode=wrap; shift; fi
+    why=$(printf '%s' "${*:-owner}" | tr -c 'A-Za-z0-9 .,:()_/@-' ' ' | cut -c1-160)
+    exec 8> "$LOCK"
+    flock 8
+    grep -q '^stop' "$STATE/control" 2>/dev/null && die "the team is already halted"
+    [ ! -e "$STATE/oneshot" ] || die "a one-shot job is in progress: the team halts when it ends anyway"
+    rm -f "$OVER"
+    printf '%s %s %s\n' "$(date +%s)" "$mode" "$why" > "$MARK.tmp"
+    chmod 644 "$MARK.tmp"
+    mv "$MARK.tmp" "$MARK"
+    if cycle_alive; then
+      if [ "$mode" = wrap ]; then
+        echo "the team halts when this cycle ends; the lead and its agents are told to wrap up"
+      else
+        echo "the team halts when this cycle ends"
+      fi
+    else
+      # Nothing to wait for but the gate: do not leave it to the next minute.
+      systemctl start --no-block agent-kit-tick.service > /dev/null 2>&1
+      echo "no cycle is running: the team halts within a few minutes, after the gate's next pass"
+    fi
+    ;;
+
+  clear)
+    exec 8> "$LOCK"
+    flock 8
+    rm -f "$MARK" "$OVER"
+    echo "no halt pending"
+    ;;
+
+  show)
+    if [ -f "$MARK" ]; then
+      read -r at mode why < "$MARK"
+      echo "halt pending since $(date -d "@${at:-0}" -Is 2>/dev/null || echo "${at:-?}") (${mode:-plain}): ${why:-}"
+    else
+      echo "no halt pending"
+    fi
+    ;;
+
+  due)
+    # Called with the control lock already held by agent-kit-halt: take none.
+    [ -f "$MARK" ] || exit 1
+    read -r at mode why < "$MARK"
+    number "${at:-}" || { rm -f "$MARK" "$OVER"; exit 1; }
+    # Halted some other way in the meantime: nothing left to do.
+    if grep -q '^stop' "$STATE/control" 2>/dev/null; then rm -f "$MARK" "$OVER"; exit 1; fi
+    cycle_alive && exit 1
+    now=$(date +%s)
+    # When did the cycle end? systemd knows; otherwise now, the first time we look.
+    if [ ! -f "$OVER" ]; then
+      ended=$(systemctl show "$LEAD.service" -p InactiveEnterTimestamp --value 2>/dev/null)
+      ended=$([ -n "$ended" ] && date -d "$ended" +%s 2>/dev/null)
+      { number "${ended:-}" && [ "$ended" -le "$now" ]; } || ended=$now
+      echo "$ended" > "$OVER.tmp"
+      chmod 644 "$OVER.tmp"
+      mv "$OVER.tmp" "$OVER"
+    fi
+    read -r over < "$OVER"
+    number "${over:-}" || over=$now
+    reason="after cycle: ${why:-owner}"
+    # A paused gate will not run: nothing to wait for.
+    if [ -e "$STATE/gate/paused" ]; then echo "$reason (gate paused)"; exit 0; fi
+    pass=$(head -c 20 "$STATE/gate/pass-started" 2>/dev/null)
+    if number "${pass:-}" && [ "$pass" -ge "$over" ]; then echo "$reason"; exit 0; fi
+    if [ $((now - over)) -ge "$GATE_WAIT" ]; then echo "$reason (the gate did not run in time)"; exit 0; fi
+    exit 1
+    ;;
+
+  *)
+    die "usage: agent-kit-halt-after set [--wrap-up] [reason] | clear | show | due"
+    ;;
+esac

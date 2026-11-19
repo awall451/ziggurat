@@ -13,6 +13,7 @@
   let done = $state('');
   let confirm = $state(null); // {title, body, word, run}
   let haltReason = $state('');
+  let wrapUp = $state(false);
   let stopAt = $state('');
   let stopWhy = $state('');
   let edits = $state({});
@@ -51,6 +52,22 @@
       word: 'Halt now',
       danger: true,
       run: () => act({ action: 'halt', reason: haltReason }, 'halt')
+    };
+  }
+  function askHaltAfter() {
+    const running = st.leadActive;
+    confirm = {
+      title: running ? `Halt ${p.name} after this cycle?` : `Halt ${p.name}?`,
+      body: running
+        ? `The cycle in progress finishes. The gate then judges what it submitted, and after that the team is halted like any halt: timer off, the team's own jobs that run Claude stopped. No new cycle starts in between. ${
+            wrapUp
+              ? `${lead} and the agents now working are told to wrap up: finish the step in hand, start nothing new, submit and record. The cycle ends sooner and does less.`
+              : `Nobody is told, so the cycle runs its usual length, which can be hours.`
+          } If the cycle is only waiting for a usage limit to lift, this waits with it: use Halt now instead.`
+        : `No cycle is running, so there is nothing to wait for but the gate: the team is halted within a few minutes, after the gate's next pass.`,
+      word: running ? 'Halt after this cycle' : 'Halt',
+      danger: true,
+      run: () => act({ action: 'halt-after', reason: haltReason, wrap: running && wrapUp }, 'halt-after')
     };
   }
   function askResume() {
@@ -137,6 +154,8 @@
   const ACTION = {
     halt: 'Halt',
     resume: 'Resume',
+    'halt-after': 'Halt after the cycle',
+    'halt-after-clear': 'Cancelled the halt after the cycle',
     'schedule-halt': 'Scheduled a stop',
     'clear-scheduled-halt': 'Cleared the scheduled stop',
     'set-cap': 'Changed a setting',
@@ -199,12 +218,34 @@
         <p>The team is stopped. Nothing spends tokens until you resume it{p.canOneshot ? ' or start a one-shot job' : ''}.</p>
         <div><button class="btn go" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
       {/if}
+      {#if st.haltAfter && st.state !== 'halted'}
+        <p>
+          {#if st.leadActive}
+            The team halts when this cycle ends{st.haltAfter.wrapUp ? `, and ${lead} has been asked to wrap up` : ''}.
+          {:else}
+            The cycle is over. The team halts as soon as the gate has judged what it submitted.
+          {/if}
+          No new cycle starts.{st.haltAfter.reason ? ` Reason: ${st.haltAfter.reason}.` : ''}
+        </p>
+        <div><button class="btn quiet" onclick={() => act({ action: 'halt-after-clear' }, 'halt-after-clear')} disabled={!!busy}>Cancel: keep the team running</button></div>
+      {/if}
       {#if st.state !== 'halted'}
         <label class="stack">
           <span class="small dim">Reason (shown in the control file and the audit log)</span>
           <input class="field" bind:value={haltReason} placeholder="Weekly usage" maxlength="120" />
         </label>
-        <div><button class="btn stop" onclick={askHalt} disabled={!!busy}>Halt now…</button></div>
+        <div class="halts">
+          <button class="btn stop" onclick={askHalt} disabled={!!busy}>Halt now…</button>
+          {#if p.canHaltAfter && !st.haltAfter && !st.oneshot}
+            <button class="btn" onclick={askHaltAfter} disabled={!!busy}>{st.leadActive ? 'Halt after this cycle…' : 'Halt after the gate…'}</button>
+            {#if st.leadActive}
+              <label class="check small dim"><input type="checkbox" bind:checked={wrapUp} /> also ask {lead} to wrap up</label>
+            {/if}
+          {/if}
+        </div>
+        {#if !p.canHaltAfter}
+          <p class="dim small">Halting after the cycle needs kit 0.5 on the VM (it runs {st.kitVersion || 'an older kit'}).</p>
+        {/if}
       {/if}
     </section>
 
@@ -441,6 +482,17 @@
     font-size: 16px;
     line-height: 1;
     padding: 0 2px;
+  }
+  .halts {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
   .jobrow {
     display: flex;

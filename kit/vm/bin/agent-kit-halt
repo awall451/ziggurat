@@ -2,7 +2,9 @@
 # agent-kit-halt: stop spending tokens, now. Run with sudo.
 #
 #   agent-kit-halt [reason words]   halt immediately
-#   agent-kit-halt --if-due         halt only if a scheduled stop time has passed
+#   agent-kit-halt --if-due         halt only if a scheduled stop time has passed,
+#                                   or a halt after the cycle is pending and its
+#                                   time has come (see agent-kit-halt-after)
 #                                   (run every minute by agent-kit-tick.timer)
 #
 # What it stops: the lead's cycle in progress, the lead timer, and the team's
@@ -11,23 +13,37 @@
 # agent-kit-resume restores exactly that. The gate also pauses while the
 # control file says stop.
 set -uo pipefail
+# Root script: never look programs up through an inherited PATH
+# (AGENT_KIT_PATH and AGENT_KIT_LOCK are for the tests).
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
 ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 # shellcheck source=/dev/null
 source "$ETC/project.env"
 LEAD=agent-kit-lead
 BIN=$(dirname "$(readlink -f "$0")")
 
-exec 8> /run/agent-kit-ctl.lock
+exec 8> "${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}"
 flock 8
 
 reason=${*:-by owner}
 if [ "${1:-}" = "--if-due" ]; then
-  [ -f "$STATE/halt-at" ] || exit 0
-  read -r due why < "$STATE/halt-at"
-  [[ ${due:-} =~ ^[0-9]+$ ]] || { rm -f "$STATE/halt-at"; exit 0; }
-  [ "$(date +%s)" -ge "$due" ] || exit 0
-  reason="scheduled stop: ${why:-no reason given}"
-  rm -f "$STATE/halt-at"
+  reason=
+  if [ -f "$STATE/halt-at" ]; then
+    read -r due why < "$STATE/halt-at"
+    if [[ ! ${due:-} =~ ^[0-9]+$ ]]; then
+      rm -f "$STATE/halt-at"
+    elif [ "$(date +%s)" -ge "$due" ]; then
+      reason="scheduled stop: ${why:-no reason given}"
+      rm -f "$STATE/halt-at"
+    fi
+  fi
+  # A halt asked for "after this cycle": due once the cycle is over and the
+  # gate has started a pass since (agent-kit-halt-after decides).
+  if [ -z "$reason" ] && [ -x "$BIN/agent-kit-halt-after" ]; then
+    reason=$("$BIN/agent-kit-halt-after" due) || reason=
+  fi
+  [ -n "$reason" ] || exit 0
 fi
 reason=$(printf '%s' "$reason" | tr -c 'A-Za-z0-9 .,:()_/@-' ' ' | cut -c1-200)
 
@@ -38,6 +54,8 @@ mv "$STATE/control.tmp" "$STATE/control"
 # A one-shot job in progress is stopped like any cycle; its marker goes, so
 # that its end does not rewrite the reason given here.
 rm -f "$STATE/oneshot"
+# A halt that was waiting for the cycle to end is settled by this one.
+rm -f "$STATE/halt-after" "$STATE/halt-after.over"
 
 uid=$(id -u agent 2>/dev/null || echo)
 uctl() { [ -n "$uid" ] && [ -S "/run/user/$uid/bus" ] && runuser -u agent -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@" 2>/dev/null; }

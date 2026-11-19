@@ -100,11 +100,46 @@ All root-owned, all run from outside by the owner (or the console):
 |---|---|
 | `agent-kit-halt [reason]` | Kill switch, lead timer off, the cycle in progress stopped, and the team's own units that run Claude stopped. Other team services keep running. Records what it turned off |
 | `agent-kit-resume [--no-timer]` | Clears the stop, restores exactly what the halt turned off, enables the lead timer |
+| `agent-kit-halt-after set [--wrap-up] [reason]` / `clear` | Halt when the cycle in progress has ended, and the gate has judged what it submitted, instead of cutting it short (see below) |
 | `agent-kit-oneshot start <id> <from>` | On a halted team: one cycle for one job from the owner, then halted again (see below) |
 | `agent-kit-halt-at set <unix-seconds>` | A halt at a fixed time (checked every minute, survives a reboot). The daily cap counts cycles, not hours |
 | `agent-kit-caps set <KEY> <VALUE>` | Cycle cap, budget and models, kept in `/etc/agent-kit/caps.env` |
 | `agent-kit-gate pause` / `resume` | Pause the merge gate on its own |
 | `agent-kit-units` | The team's own systemd user units and whether a halt stops them |
+
+### Halt after the cycle
+
+`agent-kit-halt` stops a cycle where it stands. `agent-kit-halt-after set` lets it finish first.
+
+1. `set` writes a note, `/var/lib/agent-kit/halt-after`. Nothing else changes: the cycle runs on.
+2. While the note is there `lead-cycle` starts no new cycle.
+3. Every minute `agent-kit-tick` runs `agent-kit-halt --if-due`, which asks `agent-kit-halt-after due`. It is due
+   once the lead's unit is no longer running **and** the gate has started a pass since the cycle ended
+   (`gate-run` writes `gate/pass-started`). That pass judges everything the cycle submitted and finishes on its
+   own after the stop, so the last cycle's work still reaches main. A paused gate is not waited for, and a gate
+   that starts no pass within 45 minutes (`HALT_AFTER_GATE_WAIT`, seconds, in `project.env`) is not either.
+4. Then it is an ordinary halt: timer off, the team's own units that run Claude stopped, control `stop after
+   cycle: <reason>`.
+
+With no cycle running there is only the gate to wait for, so the halt comes within a few minutes.
+
+`--wrap-up` also tells the lead and each agent, once, to wind down: finish the step in hand, start nothing new,
+submit and record. It travels the same way as an owner message (`owner-inbox-hook`, after the next tool call),
+so an agent that makes no tool calls, such as a lead that is only waiting for a usage limit to lift, does not
+get it. Without `--wrap-up` nobody is told and the cycle takes its usual length.
+
+`clear`, a resume or any halt drops the note. A scheduled stop still applies, whichever comes first. During a
+one-shot job it is refused: that team halts at the end of its cycle anyway.
+
+### Upgrading the kit while a cycle runs
+
+`install.sh --upgrade` does not have to wait for a halt. It puts every file in place as a new file (`install`,
+`ln -sf`), so a script that is running keeps the version it started with, and `systemctl daemon-reload` does
+not restart a running unit. The cycle in progress finishes with the `lead-cycle` it began with; the helper
+scripts it calls, the hook, the gate's next pass and every later cycle use the new kit at once. The kit's tests
+cover the file replacement; the rest is how systemd behaves and has not been tried on a live team by these
+tests. New controls that work through the tick or the hook (halt after the cycle, the wrap-up notice) apply to
+a cycle that was already running when the kit was upgraded.
 
 ### One-shot job
 

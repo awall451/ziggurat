@@ -47,6 +47,7 @@ export async function projectView(project, { wait = 3500 } = {}) {
       gatePaused: !!status.gatePaused,
       kitVersion: status.kitVersion || null,
       oneshot: status.oneshot || null,
+      haltAfter: status.haltAfter || null,
       vmNow: status.vmNow || null,
       error: status.error || null
     },
@@ -59,6 +60,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canControl: !!status.kitVersion,
     // One-shot jobs need kit 0.4.
     canOneshot: !!status.canOneshot,
+    // Halting after the cycle needs kit 0.5.
+    canHaltAfter: !!status.canHaltAfter,
     cycle: current
       ? { number: current.number, started: current.started, agents: current.agents }
       : sessions[0]

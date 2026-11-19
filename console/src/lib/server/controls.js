@@ -34,6 +34,23 @@ export function halt(user, project, reason) {
   return run(user, project, 'halt', 'agent-kit-halt', [...w, 'via-console'], { reason: w.join(' ') });
 }
 
+/**
+ * Halt when the cycle in progress has ended, instead of cutting it short. The
+ * VM waits for the gate to judge what that cycle submitted. With `wrap` the
+ * lead and its agents are also told to wind down.
+ */
+export function haltAfter(user, project, reason, wrap) {
+  const w = words(reason, 'owner');
+  return run(user, project, 'halt-after', 'agent-kit-halt-after', ['set', ...(wrap ? ['--wrap-up'] : []), ...w, 'via-console'], {
+    reason: w.join(' '),
+    wrapUp: wrap ? 'yes' : null
+  });
+}
+
+export function clearHaltAfter(user, project) {
+  return run(user, project, 'halt-after-clear', 'agent-kit-halt-after', ['clear']);
+}
+
 export function resume(user, project) {
   return run(user, project, 'resume', 'agent-kit-resume', []);
 }

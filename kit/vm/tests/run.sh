@@ -1,9 +1,9 @@
 #!/bin/bash
 # Tests for the kit's owner-inbox, hook, caps, schedule, sign-in, one-shot and unit-scan scripts.
 # Runs anywhere, as any user, in a temp folder:   bash kit/vm/tests/run.sh
-# (Scripts that drive systemd, agent-kit-halt and agent-kit-resume, are only
-# syntax-checked here; they are exercised on a real VM. agent-kit-oneshot runs
-# against a stub systemctl.)
+# (agent-kit-resume drives systemd and is only syntax-checked here; it is
+# exercised on a real VM. agent-kit-halt, agent-kit-halt-after and
+# agent-kit-oneshot run against a stub systemctl.)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=$HERE/../bin
@@ -79,6 +79,7 @@ check "show prints text and attachment path" 'grep -q QUARTZ <<< "$shown" && gre
 refuse "show with a path instead of an id" "$BIN/owner-inbox" show ../../etc/passwd
 rm -rf "$S/outbox/.seen"
 out=$("$BIN/owner-inbox" prompt)
+check "prompt tells the lead about the wrap-up notice" 'grep -q "halt the team when this cycle ends" <<< "$out"'
 check "prompt has the protocol and all open messages" 'grep -q "## Owner inbox" <<< "$out" && grep -q QUARTZ <<< "$out" && grep -q "smaller rooms" <<< "$out" && grep -q "Nice work" <<< "$out"'
 check "prompt marks messages as seen" '[ -e "$S/outbox/.seen/$U" ] && [ -e "$S/outbox/.seen/$P" ]'
 check "hook stays quiet for messages shown in the prompt" '[ -z "$(hook LEAD null)" ]'
@@ -208,9 +209,12 @@ echo "$*" >> "$FAKE_LOG"
 case "$1" in
   is-active) echo "${FAKE_ACTIVE:-inactive}" ;;
   start) [ -z "${FAKE_START_FAIL:-}" ] ;;
+  show) echo "${FAKE_ENDED:-}" ;;
 esac
 EOF
-chmod 755 "$FB/systemctl"
+# Nothing a halt would signal or switch off may reach the real machine.
+for tool in pkill pgrep runuser; do printf '#!/bin/bash\nexit 1\n' > "$FB/$tool"; done
+chmod 755 "$FB"/*
 export AGENT_KIT_LOCK=$T/ctl.lock FAKE_LOG=$T/systemctl.log
 shot() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-oneshot" "$@"; }
 job() { tar -c -C "$T/work/j" . | shot start "$1" owner; }
@@ -309,6 +313,136 @@ check "a long job reaches the lead whole, with its attachments" 'grep -q TAILWOR
 
 check "halt and resume drop the marker" 'grep -q "rm -f \"\$STATE/oneshot\"" "$BIN/agent-kit-halt" && grep -q "rm -f \"\$STATE/oneshot\"" "$BIN/agent-kit-resume"'
 
+echo "== agent-kit-halt-after"
+ha() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-halt-after" "$@"; }
+halt() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-halt" "$@"; }
+rm -f "$S/oneshot" "$S/halt-at"
+mkdir -p "$S/gate"
+echo "stop owner halt 2026-01-01T00:00:00+00:00" > "$S/control"
+refuse "halt-after on a team that is already halted" ha set
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+echo "$J 2026-01-01T00:00:00+00:00" > "$S/oneshot"
+refuse "halt-after during a one-shot job" ha set
+rm -f "$S/oneshot"
+said=$(FAKE_ACTIVE=activating ha set --wrap-up 'weekly; usage $(id)')
+check "the note holds when, how and why, with nothing but plain words" 'grep -qE "^[0-9]{10} wrap weekly  usage  \(id\)$" "$S/halt-after" && ! grep -q "[;\$]" "$S/halt-after" && grep -q "wrap up" <<< "$said"'
+check "show reports it" 'ha show | grep -q "halt pending since .*(wrap): weekly"'
+FAKE_ACTIVE=activating refuse "not due while the cycle is running" ha due
+check "a running cycle does not start the wait for the gate" '[ ! -e "$S/halt-after.over" ]'
+
+# The cycle is over (the stub says inactive). Now the gate decides.
+rm -f "$S/gate/pass-started" "$S/gate/paused"
+refuse "not due before the gate has run" ha due
+over=$(cat "$S/halt-after.over")
+check "the end of the cycle is noted once" '[[ $over =~ ^[0-9]{10}$ ]] && [ "$over" -le "$(date +%s)" ]'
+echo $((over - 30)) > "$S/gate/pass-started"
+refuse "a gate pass from before the cycle ended does not count" ha due
+echo $((over + 5)) > "$S/gate/pass-started"
+why=$(ha due); rc=$?
+check "due once a gate pass has started since the cycle ended" '[ "$rc" = 0 ] && grep -q "^after cycle: weekly" <<< "$why"'
+rm -f "$S/gate/pass-started"; touch "$S/gate/paused"
+why=$(ha due); rc=$?
+check "a paused gate is not waited for" '[ "$rc" = 0 ] && grep -q "(gate paused)" <<< "$why"'
+rm -f "$S/gate/paused"
+echo $(($(date +%s) - 3000)) > "$S/halt-after.over"
+why=$(ha due); rc=$?
+check "a gate that never runs is not waited for longer than the limit" '[ "$rc" = 0 ] && grep -q "did not run in time" <<< "$why"'
+echo $(($(date +%s) - 20)) > "$S/halt-after.over"
+refuse "inside the limit the gate is still waited for" ha due
+why=$(HALT_AFTER_GATE_WAIT=10 ha due); rc=$?
+check "the limit can be set" '[ "$rc" = 0 ]'
+HALT_AFTER_GATE_WAIT="10; id" refuse "a limit that is not a number falls back to the default" ha due
+
+# systemd knows when the cycle ended: a pass since then is enough, however long ago.
+rm -f "$S/halt-after.over"
+date +%s > "$S/gate/pass-started"
+why=$(FAKE_ENDED="Thu 2026-01-01 00:00:00 UTC" ha due); rc=$?
+check "the cycle's real end time is used when systemd gives it" '[ "$rc" = 0 ] && [ "$(cat "$S/halt-after.over")" = "$(date -d "2026-01-01 00:00:00 UTC" +%s)" ]'
+rm -f "$S/halt-after.over" "$S/gate/pass-started"
+FAKE_ENDED="Thu 2099-01-01 00:00:00 UTC" refuse "an end time in the future is not believed" ha due
+check "then the time of the first look is used" '[ "$(cat "$S/halt-after.over")" -le "$(date +%s)" ]'
+
+# The tick: agent-kit-halt --if-due performs the halt when it is due.
+: > "$FAKE_LOG"
+before=$(cat "$S/control")
+rm -f "$S/halt-after.over" "$S/gate/pass-started" "$S/halt-state"
+halt --if-due > /dev/null
+check "the tick does nothing while the gate has not run" '[ "$(cat "$S/control")" = "$before" ] && [ -e "$S/halt-after" ] && ! grep -q "disable" "$FAKE_LOG"'
+FAKE_ACTIVE=activating halt --if-due > /dev/null
+check "the tick does nothing while the cycle runs" '[ "$(cat "$S/control")" = "$before" ]'
+date +%s > "$S/gate/pass-started"; sleep 1
+echo $(($(date +%s) + 5)) > "$S/gate/pass-started"
+halt --if-due > /dev/null
+check "the tick halts the team once the gate has run" 'grep -q "^stop after cycle: weekly" "$S/control" && grep -q "disable --now agent-kit-lead.timer" "$FAKE_LOG"'
+check "the pending halt is settled" '[ ! -e "$S/halt-after" ] && [ ! -e "$S/halt-after.over" ] && [ -f "$S/halt-state" ]'
+before=$(cat "$S/control")
+halt --if-due > /dev/null
+check "the tick does nothing more afterwards" '[ "$(cat "$S/control")" = "$before" ]'
+
+# A scheduled stop still comes first, and any halt settles a pending one.
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+FAKE_ACTIVE=activating ha set overnight > /dev/null
+check "without --wrap-up the note says plain" 'grep -qE "^[0-9]{10} plain overnight$" "$S/halt-after"'
+echo "1000000000 window closed" > "$S/halt-at"
+FAKE_ACTIVE=activating halt --if-due > /dev/null
+check "a scheduled stop whose time has come halts mid-cycle as before" 'grep -q "^stop scheduled stop: window closed" "$S/control" && [ ! -e "$S/halt-at" ] && [ ! -e "$S/halt-after" ]'
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+FAKE_ACTIVE=activating ha set > /dev/null
+halt because I said so > /dev/null
+check "halt now settles a pending halt" 'grep -q "^stop because I said so" "$S/control" && [ ! -e "$S/halt-after" ]'
+check "resume drops a pending halt" 'grep -q "rm -f \"\$STATE/halt-after\" \"\$STATE/halt-after.over\"" "$BIN/agent-kit-resume"'
+
+# Halted some other way while it was pending: nothing left to do.
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+FAKE_ACTIVE=activating ha set > /dev/null
+echo "stop by hand 2026-01-01T00:00:00+00:00" > "$S/control"
+refuse "not due on a team that is halted already" ha due
+check "and the note is dropped" '[ ! -e "$S/halt-after" ]'
+
+# No cycle running: the tick is asked to look at once.
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+: > "$FAKE_LOG"
+said=$(ha set)
+check "with no cycle running the tick is started right away" 'grep -qx "start --no-block agent-kit-tick.service" "$FAKE_LOG" && grep -q "no cycle is running" <<< "$said"'
+ha clear > /dev/null
+check "clear removes the note" '[ ! -e "$S/halt-after" ] && [ ! -e "$S/halt-after.over" ] && ha show | grep -q "no halt pending"'
+refuse "unknown command" ha now
+
+# The wrap-up notice, through the hook.
+FAKE_ACTIVE=activating ha set > /dev/null
+check "a plain pending halt tells nobody" '[ -z "$(hook LEAD null)" ] && [ -z "$(hook LEAD "\"wagent1\"")" ]'
+ha clear > /dev/null
+FAKE_ACTIVE=activating ha set --wrap-up > /dev/null
+check "another session is told nothing" '[ -z "$(hook OTHER null)" ]'
+note=$(hook LEAD null | jq -r .hookSpecificOutput.additionalContext)
+check "the lead is told to wrap up" 'grep -q "^\[agent-kit owner notice\] The owner has asked for the team to halt when this cycle ends" <<< "$note" && grep -q "start no new work and no new agents" <<< "$note"'
+check "the lead is told once" '[ -z "$(hook LEAD null)" ]'
+note=$(hook LEAD '"wagent1"' | jq -r .hookSpecificOutput.additionalContext)
+check "an agent is told to finish its step and report" 'grep -q "Finish the step you are on and do not start further steps" <<< "$note" && ! grep -q "no new agents" <<< "$note"'
+check "each agent is told once" '[ -z "$(hook LEAD "\"wagent1\"")" ] && [ -n "$(hook LEAD "\"wagent2\"")" ]'
+ha clear > /dev/null
+FAKE_ACTIVE=activating ha set --wrap-up > /dev/null
+check "a cleared halt tells nobody any more" 'ha clear > /dev/null; [ -z "$(hook LEAD "\"wagent3\"")" ]'
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+
+echo "== upgrade while a cycle runs"
+# install.sh puts every file in place with `install` or `ln -sf`. A script that
+# is running must keep the version it started with.
+printf '#!/bin/bash\necho old-start\nsleep 1\necho old-end\n' > "$T/work/v1"
+{ printf '#!/bin/bash\necho NEW\nexit 0\n'; head -c 400 /dev/zero | tr '\0' '#'; } > "$T/work/v2"
+install -m 755 "$T/work/v1" "$T/work/live"
+"$T/work/live" > "$T/work/live.out" 2>&1 &
+sleep 0.3
+install -m 755 "$T/work/v2" "$T/work/live"
+wait
+check "a running script is not disturbed by installing over it" '[ "$(tr "\n" " " < "$T/work/live.out")" = "old-start old-end " ]'
+check "the next run is the new version" '[ "$("$T/work/live")" = NEW ]'
+check "the installer writes kit files only with install or ln" '! grep -nE "^[^#]*(\bcp\b|\btee\b|>>?) *\"?(/opt/agent-kit|/etc/systemd|/usr/local/bin)" "$HERE/../install.sh"'
+# Started from a folder its service users cannot read, the installer must still work.
+check "the installer leaves its start folder before it runs anything as another user" '[ "$(grep -n "^cd /$" "$HERE/../install.sh" | head -1 | cut -d: -f1)" -lt "$(grep -n "sudo -u" "$HERE/../install.sh" | grep -v "^[0-9]*:#" | grep -v "rev-parse --verify" | head -1 | cut -d: -f1)" ]'
+check "nothing after that depends on the start folder" '! sed -n "/^cd \/$/,\$p" "$HERE/../install.sh" | grep -nE "(^|[ \"=(])\./|\$\(pwd\)|\$PWD"'
+check "the installer says so when it finds a cycle running" 'grep -q "A cycle is running: it was not interrupted" "$HERE/../install.sh"'
+
 echo "== gate-wait"
 git init -q "$T/ws"
 git -C "$T/ws" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m one
@@ -373,6 +507,13 @@ check "a normal cycle's ledger line names no job" '[ "$(tail -1 "$S/ledger/cycle
 echo "stop owner 2026-01-01T07:00:00+00:00" > "$S/control"
 out=$(cycle 2>&1)
 check "no cycle on a halted team" 'grep -q "control=stop" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+# A halt that waits for the gate after the last cycle: no new cycle in between.
+echo "run 2026-01-01T08:00:00+00:00" > "$S/control"
+echo "$(date +%s) plain overnight" > "$S/halt-after"
+out=$(cycle 2>&1)
+check "no cycle starts while a halt after the cycle is pending" 'grep -q "a halt after the last cycle is pending" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+rm -f "$S/halt-after"
+echo "stop owner 2026-01-01T09:00:00+00:00" > "$S/control"
 # A one-shot whose job cannot be read must not run as a normal cycle.
 rm -f "$S/oneshot"
 tar -c -C "$T/work/lc" . | shot start $LC owner > /dev/null
@@ -450,10 +591,12 @@ echo 2 > "$S/gate/baseline-tests"
 echo "stop owner halt for the test" > "$S/control"
 main0=$(git -C "$T/bare" rev-parse main)
 
+rm -f "$S/gate/pass-started"
 "$T/opt/gate/bin/gate-run"
 G branch -f ready/work-x main > /dev/null
 "$T/opt/gate/bin/gate-run"
 check "a halted gate judges nothing" '[ ! -e "$S/gate/results/work-x.json" ]'
+check "a halted gate does not count as a pass" '[ ! -e "$S/gate/pass-started" ]'
 refuse "proof mode takes only a gate-proof topic" "$T/opt/gate/bin/gate-run" --proof work-x
 refuse "proof mode needs a topic" "$T/opt/gate/bin/gate-run" --proof
 
@@ -499,7 +642,15 @@ proof=$("$BIN/agent-kit-gate-proof" run); rc=$?
 check "a path outside the repository is not accepted" '[ $rc = 1 ] && grep -q "plain path" <<< "$(jq -r .note <<< "$proof")"'
 sed -i '/GATE_PROOF_DELETE/d' "$T/etc/project.env"
 
+check "a proof run does not count as a pass over all branches" '[ ! -e "$S/gate/pass-started" ]'
 echo "run owner resumed" > "$S/control"
+t0=$(date +%s)
+"$T/opt/gate/bin/gate-run"
+check "a real pass says when it started" '[ "$(cat "$S/gate/pass-started")" -ge "$t0" ] && [ -e "$S/gate/results/work-x.json" ]'
+touch "$S/gate/paused"; echo 1 > "$S/gate/pass-started"
+"$T/opt/gate/bin/gate-run"
+check "a paused gate does not count as a pass" '[ "$(cat "$S/gate/pass-started")" = 1 ]'
+rm -f "$S/gate/paused"
 proof=$("$BIN/agent-kit-gate-proof" run); rc=$?
 check "refused while the team is not halted" '[ $rc = 1 ] && grep -q "not halted" <<< "$(jq -r .error <<< "$proof")"'
 refuse "unknown command" "$BIN/agent-kit-gate-proof" merge-everything

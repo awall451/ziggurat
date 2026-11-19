@@ -79,6 +79,10 @@
     <div class="note s-failed">VM not reachable{p.status.error ? ` (${p.status.error})` : ''}. Showing the last pulled data.</div>
   {:else if p.status.state === 'halted'}
     <div class="note dim">Halted: <span class="mono">{p.status.control}</span></div>
+  {:else if p.status.haltAfter}
+    <div class="note dim">
+      {p.status.leadActive ? 'Halting when this cycle ends' : 'The cycle is over: halting once the gate has run'}{p.status.haltAfter.wrapUp ? ' (wrap-up asked for)' : ''}. Cancel it under Controls.
+    </div>
   {:else if p.status.oneshot}
     <div class="note dim">One-shot job in progress. The team halts again when this cycle ends.</div>
   {/if}

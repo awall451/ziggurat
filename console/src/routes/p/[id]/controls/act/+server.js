@@ -19,6 +19,12 @@ export async function POST({ params, request, locals }) {
       case 'halt':
         out = await controls.halt(user, project, b.reason);
         break;
+      case 'halt-after':
+        out = await controls.haltAfter(user, project, b.reason, !!b.wrap);
+        break;
+      case 'halt-after-clear':
+        out = await controls.clearHaltAfter(user, project);
+        break;
       case 'resume':
         out = await controls.resume(user, project);
         break;
