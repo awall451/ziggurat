@@ -123,7 +123,16 @@ PROMPT
     for id in $ids; do
       echo
       echo "--- $id ---"
-      show "$id" | head -c 4000
+      # Long issues are cut here to keep the prompt small. Say so, and keep the
+      # image paths (they come last): a lead that is not told would take the
+      # first part for the whole issue and never look at the screenshot.
+      text=$(show "$id")
+      if [ ${#text} -gt 4000 ]; then
+        printf '%s\n' "${text:0:4000}"
+        echo "[cut here: this issue is longer. Read all of it, with its image paths: owner-issues show $id]"
+      else
+        printf '%s\n' "$text"
+      fi
       echo
     done
     exit 0

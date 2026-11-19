@@ -133,6 +133,9 @@ own `PATH`. `gate-run` reads `agent.env` too and resets its `PATH` after that, f
 - The cycle budget applies. The daily cycle cap does not block a one-shot job (the owner asked for it), but the
   cycle is counted. The ledger line of the cycle carries `oneshot: <id>`.
 - During the job every owner message, notes included, is delivered mid-cycle, since no later cycle would read it.
+- Open owner issues wait for a normal cycle, like other open messages, unless the job names them. Naming
+  issues in a job is how to get them fixed now without resuming the team; the lead reports on those with
+  `owner-issues update` as usual.
 - The gate runs for the length of the job. Branches that were submitted before the halt and not yet judged are
   tested and merged then, as they would be on a resume. Unfinished work (worktrees, `work/*` branches) is not
   touched.

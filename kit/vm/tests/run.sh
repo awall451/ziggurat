@@ -142,6 +142,17 @@ check "owner reopening after the lead wins" 'grep -q "$I1 .*new" <<< "$("$BIN/ow
 "$BIN/agent-kit-issues" set $I2 wontfix > /dev/null
 check "owner can close an issue" '! grep -q "$I2" <<< "$("$BIN/owner-issues" list)"'
 refuse "owner set with a bad status" "$BIN/agent-kit-issues" set $I2 closed
+I3=20260101T120004Z-i-eeeeee
+mkdir -p "$T/work/i3"
+{ echo "# A very long issue"; head -c 5000 /dev/zero | tr '\0' a; echo; echo "Last line: ISSUETAIL."; } > "$T/work/i3/issue.md"
+echo png > "$T/work/i3/markup.png"
+tarball i3 | "$BIN/agent-kit-issues" put $I3 bug > /dev/null
+out=$("$BIN/owner-issues" prompt)
+check "a cut issue says that it was cut and how to read the rest" '! grep -q ISSUETAIL <<< "$out" && grep -q "cut here.*owner-issues show $I3" <<< "$out"'
+check "a short issue is not marked as cut" '[ "$(grep -c "cut here" <<< "$out")" = 1 ]'
+whole=$("$BIN/owner-issues" show $I3)
+check "the whole issue and its image path are one command away" 'grep -q ISSUETAIL <<< "$whole" && grep -q "issues/$I3/markup.png" <<< "$whole"'
+"$BIN/agent-kit-issues" set $I3 wontfix > /dev/null
 
 echo "== agent-kit-caps"
 "$BIN/agent-kit-caps" set MAX_CYCLES_PER_DAY 3 > /dev/null
@@ -223,10 +234,12 @@ refuse "second job while one is in progress" job $J2
 rules=$("$BIN/owner-inbox" oneshot $J)
 check "lead gets the one-shot rules with the job id" 'grep -q "## One-shot job" <<< "$rules" && grep -q "owner-inbox reply $J done" <<< "$rules" && grep -q "gate-wait" <<< "$rules"'
 check "the rules carry the job itself" 'grep -q BASALT <<< "$rules"'
+check "the rules keep open issues for a normal cycle, unless the job names them" 'grep -q "So do open owner issues" <<< "$rules" && grep -q "an issue the job itself names" <<< "$rules" && grep -q "owner-issues update" <<< "$rules"'
 headline=$("$BIN/owner-inbox" oneshot $J --head)
 check "the notice for the top of the prompt names the job and protects leftover work" 'grep -q "Read this first" <<< "$headline" && grep -q "$J" <<< "$headline" && grep -q "do not resume, finish, rebase or remove" <<< "$headline"'
 refuse "one-shot rules with an unknown option" "$BIN/owner-inbox" oneshot $J --tail
-check "the job text is in the lead's prompt" '"$BIN/owner-inbox" prompt | grep -q BASALT'
+listing=$("$BIN/owner-inbox" prompt)
+check "the job text is in the lead's prompt" 'grep -q BASALT <<< "$listing"'
 refuse "one-shot rules for a message that does not exist" "$BIN/owner-inbox" oneshot 20250101T000000Z-o-nope
 NJ=20260101T120200Z-o-midjob
 tarball n | "$BIN/agent-kit-inbox" put $NJ note owner > /dev/null
@@ -344,6 +357,7 @@ for i in 1 2 3 4 5 6; do jq -nc --arg d "$(date +%F)" '{date:$d, counted:true}';
 out=$(cycle 2>&1)
 check "a one-shot cycle runs although the daily cap is used up" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$LC" <<< "$out"'
 check "its prompt starts with the notice, before the team's own text" '[ "$(head -c 16 "$FAKE_PROMPT")" = "**Read this firs" ] && [ "$(grep -n "Read this first" "$FAKE_PROMPT" | head -1 | cut -d: -f1)" -lt "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" ]'
+check "the issues section comes before the job, which stays last" '[ "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "^## Owner inbox" "$FAKE_PROMPT" | cut -d: -f1)" ] && [ "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" -lt "$(grep -n "^## One-shot job" "$FAKE_PROMPT" | cut -d: -f1)" ]'
 check "its prompt ends with the job and the rules" '[ "$(grep -n "## One-shot job" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "## Owner inbox" "$FAKE_PROMPT" | cut -d: -f1)" ] && grep -q GNEISS "$FAKE_PROMPT" && [ "$(tail -1 "$FAKE_PROMPT")" = "Then end the cycle. Do not look for more work." ]'
 check "the ledger line names the job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = "$LC" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .turns)" = 9 ]'
 check "no cycle is left marked as in progress" '[ ! -e "$S/ledger/current" ]'
