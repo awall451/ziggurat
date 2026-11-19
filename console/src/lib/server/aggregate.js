@@ -79,7 +79,10 @@ export function parseGateLog(text) {
       status,
       detail,
       tests: t ? Number(t[1]) : null,
-      canary: topic.startsWith('canary')
+      canary: topic.startsWith('canary'),
+      // The owner's gate proof (agent-kit-gate-proof): one branch that must be
+      // merged and one that must be refused. Not the team's work.
+      proof: topic.startsWith('gate-proof-')
     });
   }
   return rows;
@@ -124,7 +127,9 @@ export function summary(project) {
   const gate = parseGateLog(readText(path.join(fleet, 'history.log')));
   const since = Date.now() - DAY;
   const recentCycles = cycles.filter((c) => isRecent(c.start, since));
-  const recentGate = gate.filter((g) => !g.canary && isRecent(g.at, since));
+  // The team's own results only: a gate proof's refused branch is the gate
+  // working, and must not read as a failure of the team.
+  const recentGate = gate.filter((g) => !g.canary && !g.proof && isRecent(g.at, since));
   let testsNow = null;
   for (const g of gate) if (g.tests != null) testsNow = g.tests;
   const issuesDir = path.join(fleet, 'notes', 'agents', 'issues');

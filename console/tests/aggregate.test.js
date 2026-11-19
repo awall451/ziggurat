@@ -14,8 +14,20 @@ describe('parseGateLog', () => {
       ].join('\n')
     );
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ topic: 'field-menu', sha: 'abcdef012', status: 'merged', tests: 1031, canary: false });
+    expect(rows[0]).toMatchObject({ topic: 'field-menu', sha: 'abcdef012', status: 'merged', tests: 1031, canary: false, proof: false });
     expect(rows[1]).toMatchObject({ status: 'failed', tests: null, canary: true });
+  });
+
+  it('marks the verdicts of a gate proof', () => {
+    const rows = parseGateLog(
+      [
+        '2026-01-01T10:00:00+00:00 gate-proof-good-1795102282 abcdef0123456789 merged all checks passed; main -> abcdef012 (2 tests)',
+        '2026-01-01T10:00:05+00:00 gate-proof-drop-1795102282 1234567890abcdef failed unit tests passed dropped from 2 to 1 (tests may not be deleted or skipped)',
+        '2026-01-01T10:01:00+00:00 improve-gate-proofing 1111111111 merged all checks passed (3 tests)'
+      ].join('\n')
+    );
+    expect(rows.map((r) => r.proof)).toEqual([true, true, false]);
+    expect(rows[0].tests).toBe(2);
   });
 });
 
@@ -64,6 +76,20 @@ describe('files from the fleet folder', () => {
     expect(s.testsNow).toBe(10);
     expect(s.issuesOpen).toBe(1);
     expect(s.escalations).toBe(2);
+  });
+
+  it('does not count a gate proof as the team\'s merges or failures', () => {
+    const fleet = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-proof-'));
+    const now = new Date().toISOString();
+    // A brand-new project: the only verdicts are the proof's two.
+    fs.writeFileSync(
+      path.join(fleet, 'history.log'),
+      `${now} gate-proof-good-1 1111111111 merged all checks passed; main -> 111111111 (2 tests)\n${now} gate-proof-drop-1 2222222222 failed unit tests passed dropped from 2 to 1 (tests may not be deleted or skipped)\n`
+    );
+    const s = summary({ id: 'fresh', paths: { fleet } });
+    expect(s.last24).toMatchObject({ merged: 0, failed: 0 });
+    // The proof's merge did move main, so its test count is the current one.
+    expect(s.testsNow).toBe(2);
   });
 
   it('sorts issues by severity and lists other notes', () => {
