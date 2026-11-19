@@ -156,6 +156,10 @@ you turn it on, the console only ever talks to the sandbox VMs.
    a "check now" button. The check is `claude auth status` on the VM; it spends no tokens.
 7. **Registered, halted.** The project is added to `projects.json` and shows up like any other. Its lead
    timer is off. Starting the team is your Resume on its Controls tab; the console never does that.
+8. **Gate proof.** Runs by itself on the VM (`agent-kit-gate-proof`, kit 0.3.1): one harmless change must be
+   merged by the gate, and a change that deletes a test file (named by `GATE_PROOF_DELETE` in the team's
+   `project.env`) must be refused. It uses the gate's real checks, spends no tokens, and leaves the team
+   halted. A build that is broken in a way only your project knows is still yours to try once by hand.
 
 About the token: it is read only to hand it to a VM. It goes to the VM on stdin inside a task whose output is
 never logged, and it is never written to a run folder, the audit log or a page. On the VM it sits in the
@@ -177,7 +181,7 @@ Each deploy keeps its inputs, the staged team and every run (inventory, variable
 `console-data/deploys/<id>/`. Nothing there is deleted automatically.
 
 API: `GET/POST /api/deploys`, `GET/DELETE /api/deploys/<id>` (DELETE closes the record only),
-`POST /api/deploys/<id>/dry-run|create|continue|install|login-check|apply-token`, `GET /api/deploys/<id>/events?run=<run>` (server-sent
+`POST /api/deploys/<id>/dry-run|create|continue|install|login-check|apply-token|gate-proof`, `GET /api/deploys/<id>/events?run=<run>` (server-sent
 events), `GET /api/deploy-sources`.
 
 "Check target" runs one fixed, read-only script on the host (`qm list`, `pct list`, storage, memory, the

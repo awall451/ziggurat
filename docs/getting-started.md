@@ -53,7 +53,7 @@ tools/render-team.py examples/web-game --theme plain --out build/my-game
 4. Sign Claude in for the agent user, on your subscription. Either log in once: `sudo -iu agent claude`. Or store a long-lived token from `claude setup-token` (run that on your own machine): `sudo agent-kit-auth set-token < token-file`. `sudo agent-kit-auth status` tells which one is in use. Turn off your account's paid overflow usage if you do not want headless runs to spend money.
 
    The trade-off: a login is per VM and renews itself, but needs you at a terminal for every new VM. A token needs no terminal, so a VM can be set up unattended, but it is one secret for every VM you give it to, it lasts a year, it sits in the agents' environment (an agent that prints its environment writes it into its transcript), and there is no documented way to revoke a single token.
-5. Prove the gate: submit one deliberately broken branch and one that deletes tests (both must fail) and one good change (must merge).
+5. Prove the gate: `sudo agent-kit-gate-proof run` submits one good change (must merge) and one that deletes the test file named by `GATE_PROOF_DELETE` in `project.env` (must fail), while the team stays halted. Then submit one deliberately broken branch yourself (must fail): what "broken" means is specific to your project.
 6. Run one supervised cycle: `sudo agent-kit-resume --no-timer && sudo systemctl start agent-kit-lead.service`. Read the transcript, the ledger (`agent-kit-status`) and the gate verdicts (`gate-status`).
 7. When you trust it: `sudo agent-kit-resume` (clears the stop and enables the lead's timer). Stop it at any time with `sudo agent-kit-halt [reason]`; for a time window use `sudo agent-kit-halt-at set <unix-seconds>`.
 

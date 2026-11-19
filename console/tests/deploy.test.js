@@ -55,11 +55,16 @@ vi.mock('../src/lib/server/pve.js', () => ({
 }));
 
 // What the new VM "answers" when the console asks it over ssh.
-const vm = { auth: { loggedIn: false, authMethod: 'none', tokenStored: false, apiKeySet: false }, calls: [] };
+const PROOF_OK = { ok: true, at: '2026-01-01T00:00:00Z', good: { status: 'merged', detail: 'all checks passed; main -> abc1234 (2 tests)', sha: 'a'.repeat(40) }, drop: { status: 'failed', detail: 'unit tests passed dropped from 2 to 1 (tests may not be deleted or skipped)', sha: 'b'.repeat(40) }, deleted: 'tests/test_placeholder.py', note: null, main: 'abc1234', tests: 2 };
+const vm = { auth: { loggedIn: false, authMethod: 'none', tokenStored: false, apiKeySet: false }, calls: [], proof: PROOF_OK, proofGate: null };
 vi.mock('../src/lib/server/ssh.js', async (original) => ({
   ...(await original()),
   kit: async (project, script, argv, opts = {}) => {
     vm.calls.push({ project, script, argv, input: opts.input || null });
+    if (script === 'agent-kit-gate-proof') {
+      if (vm.proofGate) await vm.proofGate;
+      return vm.proof == null ? { code: 255, stdout: '', stderr: 'ssh: connection lost' } : { code: vm.proof.ok ? 0 : 1, stdout: JSON.stringify(vm.proof) + '\n', stderr: '' };
+    }
     if (script === 'agent-kit-auth' && argv[0] === 'set-token') {
       vm.auth = { loggedIn: true, authMethod: 'oauth_token', tokenStored: true, apiKeySet: false };
       return { code: 0, stdout: 'token stored (used from the next cycle)\n', stderr: '' };
@@ -136,7 +141,7 @@ beforeEach(() => {
   for (const f of [process.env.FAKE_LOG, process.env.FAKE_GUESTS, process.env.FAKE_INSTALL_MODE, tokenFile]) fs.rmSync(f, { force: true });
   delete process.env.CONSOLE_RUN_TIMEOUT_MS;
   config.deleteProject('demo');
-  Object.assign(vm, { auth: { loggedIn: false, authMethod: 'none', tokenStored: false, apiKeySet: false }, calls: [] });
+  Object.assign(vm, { auth: { loggedIn: false, authMethod: 'none', tokenStored: false, apiKeySet: false }, calls: [], proof: PROOF_OK, proofGate: null });
   mode('ok');
 });
 
@@ -453,6 +458,85 @@ describe('install, sign-in and registration', () => {
     const d = await deploy.putDeploy(user, form({ charter: '# Charter\n\nREPLACE THIS: say what the team should build.\n' }));
     expect(d.bundle.ok).toBe(false);
     expect(d.bundle.problems.join(' ')).toMatch(/placeholder/);
+  });
+});
+
+describe('the gate proof', () => {
+  const ready = async () => {
+    fs.writeFileSync(tokenFile, TOKEN + '\n');
+    await planned();
+    await deploy.startCreate(user, 'demo');
+    await settled();
+  };
+  const proofDone = async () => {
+    for (let i = 0; i < 200; i++) {
+      const d = record();
+      if (d.proof?.state === 'done') return d;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error('proof did not end');
+  };
+
+  it('runs by itself once the project is registered and records both verdicts', async () => {
+    await ready();
+    const d = await proofDone();
+    expect(d.state).toBe('ready');
+    expect(d.proof).toMatchObject({ ok: true, good: { status: 'merged' }, drop: { status: 'failed' }, deleted: 'tests/test_placeholder.py', main: 'abc1234', tests: 2 });
+    const call = vm.calls.find((c) => c.script === 'agent-kit-gate-proof');
+    expect(call).toMatchObject({ argv: ['run'], project: { ssh: { host: '10.66.0.11' } } });
+    expect(readAudit('demo').map((r) => r.action)).toEqual(expect.arrayContaining(['deploy-gate-proof', 'deploy-gate-proof-end']));
+    // Nothing in the flow resumes the team.
+    expect(vm.calls.some((c) => /resume|halt/.test(c.script))).toBe(false);
+  });
+
+  it('says so when the gate let a test deletion through', async () => {
+    vm.proof = { ...PROOF_OK, ok: false, drop: { status: 'merged', detail: 'all checks passed', sha: 'c'.repeat(40) } };
+    await ready();
+    const d = await proofDone();
+    expect(d.proof).toMatchObject({ ok: false, drop: { status: 'merged' } });
+    expect(d.state).toBe('ready');
+  });
+
+  it('copes with a VM that gives no answer, and can be run again', async () => {
+    vm.proof = null;
+    await ready();
+    let d = await proofDone();
+    expect(d.proof.ok).toBe(false);
+    expect(d.proof.error).toMatch(/gave no result/);
+    vm.proof = PROOF_OK;
+    expect(deploy.gateProof(user, 'demo').proof.state).toBe('running');
+    d = await proofDone();
+    expect(d.proof.ok).toBe(true);
+  });
+
+  it('runs one at a time, only for a finished project, and shows as running meanwhile', async () => {
+    await deploy.putDeploy(user, form());
+    expect((await status(() => Promise.resolve().then(() => deploy.gateProof(user, 'demo'))))[0]).toBe(409);
+    let release;
+    vm.proofGate = new Promise((r) => (release = r));
+    await ready();
+    const v = deploy.getDeploy('demo');
+    expect(v.proof.state).toBe('running');
+    expect(v.running).toBe(true);
+    expect(v.can.proof).toBe(false);
+    expect((await status(() => Promise.resolve().then(() => deploy.gateProof(user, 'demo'))))[0]).toBe(409);
+    release();
+    expect((await proofDone()).proof.ok).toBe(true);
+    expect(deploy.getDeploy('demo').can.proof).toBe(true);
+  });
+
+  it('is marked unknown when a console restart cut it off', async () => {
+    let release;
+    vm.proofGate = new Promise((r) => (release = r));
+    await ready();
+    await deploy.recover();
+    const d = record();
+    expect(d.proof).toMatchObject({ state: 'done', ok: null });
+    expect(d.proof.error).toMatch(/restarted/);
+    release();
+    await new Promise((r) => setTimeout(r, 60));
+    // Here the process did not really restart, so the answer still arrives and is recorded.
+    expect(record().proof.ok).toBe(true);
   });
 });
 
