@@ -129,12 +129,17 @@
       </thead>
       <tbody>
         {#each pr.gate as g (g.at + g.topic + g.sha)}
-          <tr class:faint={g.canary}>
+          <tr class:faint={g.canary || g.proof}>
             <td class="mono nowrap">{when(g.at)}</td>
             <td class="mono">{g.topic}</td>
             <td class="mono">{g.sha}</td>
             <td>
-              <span class={g.status === 'merged' ? 's-done' : g.status === 'failed' || g.status === 'rejected' ? 's-failed' : 'dim'}>{g.status}</span>
+              {#if g.proof}
+                <!-- A gate proof: the refused branch is the expected, good outcome. -->
+                <span class="dim">{g.status === 'failed' ? 'refused' : g.status} · gate proof</span>
+              {:else}
+                <span class={g.status === 'merged' ? 's-done' : g.status === 'failed' || g.status === 'rejected' ? 's-failed' : 'dim'}>{g.status}</span>
+              {/if}
             </td>
             <td class="num">{num(g.tests)}</td>
             <td class="dim">{g.detail}</td>
