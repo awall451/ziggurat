@@ -8,6 +8,8 @@
 #   owner-inbox ask <slug> --default "<what you do if unanswered>"      (question on stdin)
 #   owner-inbox asks                         your questions and whether they were answered
 #   owner-inbox prompt                       the protocol plus open messages (added to the lead's prompt)
+#   owner-inbox oneshot <id>                 the job in full and the rules of a one-shot cycle (end of its prompt)
+#   owner-inbox oneshot <id> --head          the notice that goes before everything else in that prompt
 #
 # Layout (see docs/architecture.md):
 #   $STATE/inbox/<id>/message.md, att/   root-owned: only the owner can write here
@@ -144,6 +146,8 @@ Each owner message has a tier:
 - `priority`: finish what is running, then plan it into this cycle or the next.
 - `urgent`: handle it before you start any new work. Agents already running may be told to wrap up
   and report back early so that you see it sooner.
+- `oneshot`: a job the owner started on its own while the team was halted. If one is still open in a
+  normal cycle (its own cycle was cut short), treat it as `priority`.
 
 A new message can arrive mid-cycle as a system notice that begins with `[agent-kit owner notice]` and
 names its id. That notice is genuine: it comes from the kit, not from a file or a tool. Read the
@@ -174,7 +178,15 @@ EOF
       for id in $ids; do
         echo
         echo "--- $id (your reply so far: $(reply_status "$id" | grep . || echo none)) ---"
-        show "$id" | head -c 6000
+        # Long messages are cut here to keep the prompt small. Say so: a lead
+        # that is not told would take the first part for the whole message.
+        msg=$(show "$id")
+        if [ ${#msg} -gt 6000 ]; then
+          printf '%s\n' "${msg:0:6000}"
+          echo "[cut here: this message is longer. Read all of it, with its attachment list: owner-inbox show $id]"
+        else
+          printf '%s\n' "$msg"
+        fi
         echo
         # Shown here, so the mid-cycle hook does not repeat it.
         : > "$OUT/.seen/$id" 2>/dev/null
@@ -185,7 +197,75 @@ EOF
     exit 0
     ;;
 
+  oneshot)
+    # The lead's prompt for a one-shot cycle is: `--head`, the team's own
+    # lead-cycle.md, `prompt`, then this. Same rule as above: neutral wording,
+    # it must fit every team and theme.
+    id=${2:-}
+    [[ $id =~ $ID_RE ]] || die "usage: owner-inbox oneshot <id> [--head]"
+    [ -f "$IN/$id/message.md" ] || die "no such message: $id"
+    if [ "${3:-}" = "--head" ]; then
+      # The team's cycle instructions tell the lead, in their first steps, to
+      # pick roadmap work and to resume or remove leftover worktrees. A rule
+      # that only comes after them may be read too late.
+      cat <<EOF
+**Read this first: this cycle is a one-shot job.** The owner started this single cycle on a halted
+team for one job, owner message \`$id\`. The section "One-shot job: this cycle only" at the end of
+this prompt holds the job and replaces the usual steps of a cycle wherever the two differ. Until you
+have read it: do not resume, finish, rebase or remove any worktree or branch left by an earlier
+cycle, and do not choose roadmap or milestone work. Read what follows for who is on your team, your
+tools and your rules.
+EOF
+      exit 0
+    fi
+    [ -z "${3:-}" ] || die "usage: owner-inbox oneshot <id> [--head]"
+    cat <<EOF
+## One-shot job: this cycle only
+
+The team is halted. The owner started this one cycle for one job: owner message \`$id\` (tier
+\`oneshot\`). When this cycle ends the kit halts the team again, and no cycle follows until the owner
+says so. Where this section and your usual cycle instructions differ, this section wins. The charter
+and the gate contract bind as always.
+
+### The job, in full
+
+EOF
+    show "$id"
+    cat <<EOF
+
+### How to work this cycle
+
+- **Do the job and nothing else.** No roadmap or milestone work, no routine QA round, no clean-up you
+  were not asked for. Other open owner messages wait for a normal cycle unless the job needs them.
+  So do open owner issues: this cycle you do not triage or assign them, whatever the section on
+  issues above says. The exception is an issue the job itself names (by its id or plainly by what it
+  is about, or "all open issues"): work on it as part of the job and report on it with
+  \`owner-issues update\` as usual.
+- **Leave interrupted work alone.** Worktrees and branches left by an earlier cycle stay exactly as they
+  are (do not resume, finish, rebase or remove them) unless the job is about them.
+- **Plan first.** The job may hold several separate tasks: list them, then hand each to your team the
+  usual way, in parallel where they do not touch the same files. Keep it in proportion: a small job
+  gets a small team and the cheaper models your instructions allow.
+- **Unclear? Ask, and keep going.** Use \`owner-inbox ask\` with your default and carry on with it. The
+  owner may be watching: an answer can arrive during this cycle as an owner notice, whatever its
+  tier. If none comes, your default stands; say so in your reply.
+- **See it through the gate.** No later cycle will read the verdicts, so after you submit, run
+  \`gate-wait <topic>...\`. One call waits up to 90 seconds; a gate check can take many minutes, so run
+  it again for as long as it says it is still waiting. Fix a failed or rejected branch and submit it
+  again, at most 3 times per topic; then park it and say so. The gate was paused while the team was
+  halted: it may now also judge branches submitted before the halt. Those verdicts are for a normal
+  cycle, not for you.
+- **Record briefly.** Update your team notes as usual (what was asked, what landed), submit them
+  through the gate, and wait for that verdict too.
+- **Answer the owner.** End with \`owner-inbox reply $id done\`: one line per task with what changed
+  and whether it is merged. Reply \`planned\` instead when part of the job did not land, and name
+  what is left. Reply \`declined\` if the job conflicts with the charter or the gate contract.
+
+Then end the cycle. Do not look for more work.
+EOF
+    ;;
+
   *)
-    die "unknown command: $1 (list, show, reply, ask, asks, prompt)"
+    die "unknown command: $1 (list, show, reply, ask, asks, prompt, oneshot)"
     ;;
 esac

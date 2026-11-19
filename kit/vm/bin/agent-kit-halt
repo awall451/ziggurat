@@ -35,6 +35,9 @@ reason=$(printf '%s' "$reason" | tr -c 'A-Za-z0-9 .,:()_/@-' ' ' | cut -c1-200)
 printf 'stop %s %s\n' "$reason" "$(date -Is)" > "$STATE/control.tmp"
 chmod 644 "$STATE/control.tmp"
 mv "$STATE/control.tmp" "$STATE/control"
+# A one-shot job in progress is stopped like any cycle; its marker goes, so
+# that its end does not rewrite the reason given here.
+rm -f "$STATE/oneshot"
 
 uid=$(id -u agent 2>/dev/null || echo)
 uctl() { [ -n "$uid" ] && [ -S "/run/user/$uid/bus" ] && runuser -u agent -- env XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user "$@" 2>/dev/null; }

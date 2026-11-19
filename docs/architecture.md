@@ -69,6 +69,29 @@ cannot make a root process read something else.
   owner closes it. Owner messages rank above the lead's roadmap and below the charter and gate contract.
 - The lead never waits for the owner: a question must state its default, and work goes on with it.
 
+## Owner issues
+
+Tickets for the lead, separate from the inbox. The owner raises one from a Gallery screenshot (tile menu ☰ →
+"Leave a note"), drawing boxes, ellipses or freehand marks on it. The console's Issues tab shows them as a
+board: New, In progress, Done (won't fix sits in Done).
+
+| Path | Owner | Purpose |
+|---|---|---|
+| `/var/lib/agent-kit/issues/<id>/issue.md`, `shot.png`, `markup.png` | root | The issue, the screenshot, and the screenshot with the owner's markup flattened on it |
+| `/var/lib/agent-kit/issues/.owner/<id>` | root | `<status> <date>` when the owner moved the issue on the board |
+| `/var/lib/agent-kit/issues-out/<id>.md` | `agent` | The lead's latest update: `Status: in_progress`, `done` or `wontfix`, optional `Fixed-shot:` |
+
+- `agent-kit-issues put` (root, called by the console) accepts only `issue.md`, `shot.png` and `markup.png`.
+  `agent-kit-issues set` records an owner move.
+- Every cycle, `lead-cycle` appends `owner-issues prompt` after the inbox: the protocol and all open issues.
+  Issues are never injected mid-cycle; they weigh like a `note`.
+- The lead always triages: assigns the issue to the team (`in_progress`), reports `done` with an optional newer
+  gallery shot (the console shows before and after), or `wontfix` with a reason.
+- The newer of the owner's move and the lead's update wins, on the VM and in the console.
+- In the console an issue is tied to its gallery *screen* (the file name without its number prefix), not to
+  one day's file, so a tile keeps its dot after screenshots are regenerated: amber while any issue for that
+  screen is open, green once all are resolved. Console copies live in `DATA_DIR/issues/<project>/`.
+
 ## Controls
 
 All root-owned, all run from outside by the owner (or the console):
@@ -77,10 +100,51 @@ All root-owned, all run from outside by the owner (or the console):
 |---|---|
 | `agent-kit-halt [reason]` | Kill switch, lead timer off, the cycle in progress stopped, and the team's own units that run Claude stopped. Other team services keep running. Records what it turned off |
 | `agent-kit-resume [--no-timer]` | Clears the stop, restores exactly what the halt turned off, enables the lead timer |
+| `agent-kit-oneshot start <id> <from>` | On a halted team: one cycle for one job from the owner, then halted again (see below) |
 | `agent-kit-halt-at set <unix-seconds>` | A halt at a fixed time (checked every minute, survives a reboot). The daily cap counts cycles, not hours |
 | `agent-kit-caps set <KEY> <VALUE>` | Cycle cap, budget and models, kept in `/etc/agent-kit/caps.env` |
 | `agent-kit-gate pause` / `resume` | Pause the merge gate on its own |
 | `agent-kit-units` | The team's own systemd user units and whether a halt stops them |
+
+### One-shot job
+
+For feedback and fixes the owner wants now, without letting the team run on. Only on a halted team.
+
+1. `agent-kit-oneshot start` stores the job as an owner message (tier `oneshot`, same checks as any message),
+   writes the marker `/var/lib/agent-kit/oneshot`, sets `control` to `run oneshot <id>` so that the gate runs,
+   and starts `agent-kit-lead.service` once. The lead timer stays off and the team's own units stay stopped.
+   If the cycle cannot be started, all of it is undone, the stored message included.
+2. `lead-cycle` sees the marker (it must agree with the control line) and builds a different prompt:
+   `owner-inbox oneshot <id> --head` (a notice that this is a one-shot cycle), then the team's own
+   `lead-cycle.md`, then `owner-inbox prompt`, then `owner-inbox oneshot <id>`: the job in full and the rules.
+   The notice comes first because the team's instructions say the opposite in their first steps (pick roadmap
+   work, resume or remove leftover worktrees). The rules: do this job and nothing else, leave interrupted work
+   alone, plan, delegate as usual, ask with a default if unsure, wait for the gate with `gate-wait`, reply to
+   the message, end. The team's own `lead-cycle.md` is not changed, and a normal cycle's prompt is the same
+   as before.
+3. When the cycle ends for any reason, the unit's `ExecStopPost` runs `agent-kit-oneshot finish`, which writes
+   `stop` again. No second cycle starts. If the VM loses power mid-job, `finish` never runs: `agent-kit-tick`
+   calls `agent-kit-oneshot reap` every minute, which halts again once a job has no cycle.
+
+`finish` runs as root at the end of every cycle. The lead's unit reads `agent.env`, whose `PATH` starts with a
+folder the agent can write to, so the unit starts `finish` with an empty environment and the script sets its
+own `PATH`. `gate-run` reads `agent.env` too and resets its `PATH` after that, for the same reason.
+
+- The cycle budget applies. The daily cycle cap does not block a one-shot job (the owner asked for it), but the
+  cycle is counted. The ledger line of the cycle carries `oneshot: <id>`.
+- During the job every owner message, notes included, is delivered mid-cycle, since no later cycle would read it.
+- Open owner issues wait for a normal cycle, like other open messages, unless the job names them. Naming
+  issues in a job is how to get them fixed now without resuming the team; the lead reports on those with
+  `owner-issues update` as usual.
+- The gate runs for the length of the job. Branches that were submitted before the halt and not yet judged are
+  tested and merged then, as they would be on a resume. Unfinished work (worktrees, `work/*` branches) is not
+  touched.
+- `gate-wait <topic>...` is for the lead: it waits for the verdict on the commits it submitted. One call waits
+  90 seconds at most, so that it fits in a tool call, and says when to call it again.
+- A halt stops the job like any cycle; a resume during the job turns it into a normal run.
+- If the job's cycle ends before the lead answered `done` or `declined` (a halt, a usage limit, the budget),
+  the message stays open. The owner can start the job again from the Inbox (`agent-kit-oneshot start` with
+  the same id), or resume the team: a normal cycle treats an open `oneshot` message as `priority`.
 
 A team unit counts as a token spender when it is listed in `/etc/agent-kit/token-units`, or when what it
 executes mentions `claude`; `/etc/agent-kit/keep-units` overrides both.

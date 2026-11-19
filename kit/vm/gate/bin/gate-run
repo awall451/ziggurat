@@ -56,6 +56,10 @@ if [ -z "$PROOF" ]; then
   [ -e "$STATE/gate/paused" ] && exit 0
 fi
 set -a; source "$ETC/agent.env"; set +a
+# agent.env is written for agent processes: its PATH starts with a folder the
+# agent can write to. This script is root, so it keeps its own PATH (the checks
+# get an explicit one below).
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 if [ -n "$PROOF" ]; then
   $GK -C "$BARE" fetch -q "$WORKSPACE" "+refs/heads/ready/$PROOF:refs/candidates/$PROOF" || { echo "fetch failed"; exit 1; }

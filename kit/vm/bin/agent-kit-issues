@@ -1,0 +1,73 @@
+#!/bin/bash
+# agent-kit-issues: the owner's side of the issue board. Run with sudo (the
+# console calls it over ssh). Agents cannot write to the issues folder, which
+# is what lets the lead trust what it finds there.
+#
+#   agent-kit-issues put <id> <kind>        issue archive on stdin (issue.md, shot.png, markup.png)
+#   agent-kit-issues set <id> <status>      owner moved it: new|in_progress|done|wontfix
+#   agent-kit-issues list                   ids, one per line
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+IS=$STATE/issues
+ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
+MAX_PNG=$((8 * 1024 * 1024))
+MAX_TEXT=65536
+
+die() { echo "agent-kit-issues: $*" >&2; exit 2; }
+umask 022
+
+case "${1:-}" in
+  put)
+    id=${2:-} kind=${3:-}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [[ $kind =~ ^(bug|polish|idea)$ ]] || die "kind must be bug, polish or idea"
+    [ ! -e "$IS/$id" ] || die "issue $id already exists"
+    install -d -m 755 "$IS" "$IS/.owner"
+    tmp=$IS/.tmp-$id
+    rm -rf -- "$tmp"
+    mkdir -m 700 "$tmp" || die "cannot create work folder"
+    trap 'rm -rf -- "$tmp"' EXIT
+    head -c $((MAX_PNG * 2 + MAX_TEXT + 65536)) | tar -x -C "$tmp" --no-same-owner --no-same-permissions 2>/dev/null \
+      || die "could not read the issue archive"
+    # Only these three plain files, nothing else.
+    bad=$(find "$tmp" -mindepth 1 ! \( -type f \( -name issue.md -o -name shot.png -o -name markup.png \) \) -print -quit)
+    [ -z "$bad" ] || die "unexpected entry in archive"
+    bad=$(find "$tmp" -mindepth 2 -print -quit)
+    [ -z "$bad" ] || die "unexpected entry in archive"
+    [ -f "$tmp/issue.md" ] || die "archive has no issue.md"
+    [ "$(stat -c %s "$tmp/issue.md")" -le "$MAX_TEXT" ] || die "issue text over 64 KB"
+    for f in shot.png markup.png; do
+      [ ! -e "$tmp/$f" ] || [ "$(stat -c %s "$tmp/$f")" -le "$MAX_PNG" ] || die "$f over 8 MB"
+    done
+    {
+      printf 'Ziggurat-Owner-Issue: 1\nId: %s\nKind: %s\nRaised: %s\n---\n' "$id" "$kind" "$(date -u +%FT%TZ)"
+      cat "$tmp/issue.md"
+    } > "$tmp/issue.tmp" && mv "$tmp/issue.tmp" "$tmp/issue.md"
+    chmod 755 "$tmp"
+    find "$tmp" -type f -exec chmod 644 {} +
+    mv "$tmp" "$IS/$id" || die "could not publish the issue"
+    trap - EXIT
+    echo "delivered issue $id kind=$kind"
+    ;;
+
+  set)
+    id=${2:-} status=${3:-}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [[ $status =~ ^(new|in_progress|done|wontfix)$ ]] || die "status must be new, in_progress, done or wontfix"
+    [ -d "$IS/$id" ] || die "no such issue: $id"
+    install -d -m 755 "$IS/.owner"
+    printf '%s %s\n' "$status" "$(date -u +%FT%TZ)" > "$IS/.owner/$id"
+    echo "set $id $status"
+    ;;
+
+  list)
+    shopt -s nullglob
+    for d in "$IS"/2*/; do basename "$d"; done
+    ;;
+
+  *)
+    die "usage: agent-kit-issues put <id> <kind> | set <id> <status> | list"
+    ;;
+esac

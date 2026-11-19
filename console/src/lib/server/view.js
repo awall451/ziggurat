@@ -5,6 +5,7 @@ import { summary } from './aggregate.js';
 import { tierNames } from './theme.js';
 import { listSessions } from './transcripts.js';
 import { openAskCount } from './feedback.js';
+import { openCount as openIssueCount } from './issues.js';
 
 const CHECKING = { reachable: null, state: 'checking', leadActive: false };
 
@@ -45,14 +46,19 @@ export async function projectView(project, { wait = 3500 } = {}) {
       haltAt: status.haltAt || null,
       gatePaused: !!status.gatePaused,
       kitVersion: status.kitVersion || null,
+      oneshot: status.oneshot || null,
       vmNow: status.vmNow || null,
       error: status.error || null
     },
     summary: sum,
     // Questions from the lead that the owner has not answered yet.
     asks: openAskCount(project),
+    // Owner issues not yet done or declined.
+    issues: openIssueCount(project),
     // Owner feedback and controls need the kit's 0.2 scripts on the VM.
     canControl: !!status.kitVersion,
+    // One-shot jobs need kit 0.4.
+    canOneshot: !!status.canOneshot,
     cycle: current
       ? { number: current.number, started: current.started, agents: current.agents }
       : sessions[0]

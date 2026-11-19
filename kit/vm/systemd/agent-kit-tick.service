@@ -1,6 +1,8 @@
 [Unit]
-Description=Agent kit: halt the team if a scheduled stop time has passed
+Description=Agent kit: halt the team if a scheduled stop time has passed, or a one-shot job lost its cycle
 
 [Service]
 Type=oneshot
+# "-": a problem here must never keep the scheduled stop below from running.
+ExecStart=-/opt/agent-kit/bin/agent-kit-oneshot reap
 ExecStart=/opt/agent-kit/bin/agent-kit-halt --if-due

@@ -2,7 +2,8 @@
 // with checked arguments, and every action is written to the audit log.
 import { kit } from './ssh.js';
 import { audit } from './audit.js';
-import { invalidateStatus } from './live.js';
+import { invalidateStatus, getStatus } from './live.js';
+import { sendOneshot, startOneshot, markStarted } from './feedback.js';
 import { readToken } from './token.js';
 
 export const CAP_KEYS = ['MAX_CYCLES_PER_DAY', 'CYCLE_BUDGET_USD', 'LEAD_MODEL', 'FALLBACK_MODEL'];
@@ -35,6 +36,47 @@ export function halt(user, project, reason) {
 
 export function resume(user, project) {
   return run(user, project, 'resume', 'agent-kit-resume', []);
+}
+
+/**
+ * One cycle for one job on a halted team; the VM halts the team again when it
+ * ends. The job travels as an owner message, so it shows in the Inbox with
+ * the lead's reply. A refusal by the VM throws (the caller reports it).
+ */
+export async function oneshot(user, project, { text, attachments }) {
+  const out = await sendOneshot(project, user, { text, attachments: Array.isArray(attachments) ? attachments.map(String) : [] });
+  return settle(user, project, out);
+}
+
+/** Start a stored job again: one that was not started, or whose cycle ended before the lead finished it. */
+export async function oneshotAgain(user, project, id) {
+  const out = await startOneshot(project, String(id || ''));
+  if (out.refused) throw new Error(out.error);
+  return settle(user, project, out, { again: true });
+}
+
+async function settle(user, project, out, shown = {}) {
+  const id = out.meta.id;
+  let started = out.started;
+  if (!started) {
+    // No clear answer (the line dropped, a timeout). The job may be running
+    // all the same: ask the VM before telling the owner it is not.
+    const status = await getStatus(project, { fresh: true });
+    if (status.oneshot?.id === id) {
+      markStarted(project, id);
+      started = true;
+    }
+  }
+  audit(user, project.id, 'oneshot-start', { id, ...shown }, { ok: started, detail: started ? null : out.error });
+  invalidateStatus(project.id);
+  return {
+    ok: true,
+    started,
+    id,
+    detail: started
+      ? 'One-shot job started. The team halts again when it ends.'
+      : `No clear answer from the VM (${out.error}). The job is kept in the Inbox: start it from there once the VM answers, or close it.`
+  };
 }
 
 export function haltAt(user, project, epoch, reason) {

@@ -1,0 +1,135 @@
+#!/bin/bash
+# agent-kit-oneshot: one cycle for one job from the owner, on a halted team.
+# Run with sudo (the console calls it over ssh).
+#
+#   agent-kit-oneshot start <id> <from>   job text on stdin, as for `agent-kit-inbox put`
+#   agent-kit-oneshot finish              halt again (run by agent-kit-lead.service when a cycle ends)
+#   agent-kit-oneshot reap                halt again if a job lost its cycle (run every minute by agent-kit-tick)
+#   agent-kit-oneshot show
+#
+# `start` stores the job as an owner message (tier `oneshot`), lets the gate
+# run, and starts exactly one lead cycle. The lead timer stays off and the
+# team's own units stay stopped. That cycle gets the job as its only work
+# (see `owner-inbox oneshot`). When it ends, for any reason, `finish` puts the
+# stop back. A halt during the job stops it like any cycle; a resume turns it
+# into a normal run.
+set -uo pipefail
+# `finish` runs as root at the end of every lead cycle. That unit's own
+# environment puts a folder the agent can write to first in PATH, so nothing
+# here may be looked up through an inherited PATH. (The unit also starts this
+# with an empty environment; AGENT_KIT_PATH is for the tests.)
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+LEAD=agent-kit-lead
+BIN=$(dirname "$(readlink -f "$0")")
+IN=$STATE/inbox
+MARK=$STATE/oneshot
+LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
+ID_RE='^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$'
+REAP_AFTER=120
+
+die() { echo "agent-kit-oneshot: $*" >&2; exit 2; }
+control() { # one line, swapped in whole
+  printf '%s\n' "$1" > "$STATE/control.tmp"
+  chmod 644 "$STATE/control.tmp"
+  mv "$STATE/control.tmp" "$STATE/control"
+}
+cycle_alive() {
+  case "$(systemctl is-active "$LEAD.service" 2>/dev/null)" in
+    active | activating | deactivating) return 0 ;;
+  esac
+  return 1
+}
+# Put the stop back after a job. Only undoes what `start` did: after a halt the
+# control file already says stop, and after a resume the owner wants the team
+# to keep running.
+halt_again() { # $1 = how it ended, for the control line
+  local id
+  read -r id _ < "$MARK"
+  rm -f "$MARK"
+  [[ ${id:-} =~ $ID_RE ]] || id=unknown
+  if grep -q '^run oneshot ' "$STATE/control" 2>/dev/null; then
+    control "stop one-shot job $id $1 $(date -Is)"
+    echo "one-shot job $id $1: halted again"
+  fi
+}
+
+case "${1:-show}" in
+  start)
+    id=${2:-} from=${3:-}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
+    exec 8> "$LOCK"
+    flock 8
+    # Only on a halted team: a team that is running takes inbox messages.
+    grep -q '^stop' "$STATE/control" 2>/dev/null || die "the team is not halted. Send an inbox message instead"
+    [ ! -e "$MARK" ] || die "a one-shot job is already in progress"
+    cycle_alive && die "a cycle is still running"
+    # The job is an owner message like any other: same checks, same root-owned
+    # place. When a job is started again it is already there.
+    stored=0
+    if [ ! -d "$IN/$id" ]; then
+      "$BIN/agent-kit-inbox" put "$id" oneshot "$from" > /dev/null || die "the job was not accepted"
+      stored=1
+    fi
+    [ -f "$IN/$id/message.md" ] || die "no such message: $id"
+    [ ! -e "$IN/.closed/$id" ] || die "that job is closed"
+    # A stop time that has already passed would keep the cycle from starting.
+    if [ -f "$STATE/halt-at" ]; then
+      read -r due _ < "$STATE/halt-at"
+      { [[ ${due:-} =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$due" ]; } || rm -f "$STATE/halt-at"
+    fi
+    before=$(head -c 300 "$STATE/control")
+    now=$(date -Is)
+    printf '%s %s\n' "$id" "$now" > "$MARK.tmp"
+    chmod 644 "$MARK.tmp"
+    mv "$MARK.tmp" "$MARK"
+    control "run oneshot $id $now"
+    if ! systemctl start --no-block "$LEAD.service" > /dev/null 2>&1; then
+      # Leave no trace: a job that could not start must not sit in the inbox
+      # and be picked up by some later cycle.
+      rm -f "$MARK"
+      control "$before"
+      [ "$stored" = 1 ] && rm -rf -- "${IN:?}/$id"
+      die "could not start the cycle. The team is still halted"
+    fi
+    echo "one-shot job $id started. The team halts again when it ends"
+    ;;
+
+  finish)
+    # No lock here: a halt holds it while it stops the lead service, and this
+    # runs as part of that stop. halt_again is safe without one.
+    [ -f "$MARK" ] || exit 0
+    halt_again ended
+    ;;
+
+  reap)
+    # A job whose cycle is gone without `finish` having run (the VM lost power
+    # mid-job) would leave the gate running and the job "in progress" for good.
+    [ -f "$MARK" ] || exit 0
+    exec 8> "$LOCK"
+    flock 8
+    [ -f "$MARK" ] || exit 0
+    cycle_alive && exit 0
+    # `start` returns before the cycle shows as running: give it time.
+    age=$(($(date +%s) - $(stat -c %Y "$MARK" 2>/dev/null || date +%s)))
+    [ "$age" -ge "$REAP_AFTER" ] || exit 0
+    halt_again "lost its cycle"
+    ;;
+
+  show)
+    if [ -f "$MARK" ]; then
+      read -r id since < "$MARK"
+      echo "one-shot job in progress: $id since $since"
+    else
+      echo "no one-shot job in progress"
+    fi
+    ;;
+
+  *)
+    die "usage: agent-kit-oneshot start <id> <from> | finish | reap | show"
+    ;;
+esac

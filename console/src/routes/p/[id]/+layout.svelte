@@ -13,6 +13,7 @@
     ['progress', 'Progress'],
     ['inbox', 'Inbox'],
     ['notes', 'Notes'],
+    ['issues', 'Issues'],
     ['gallery', 'Gallery'],
     ['digest', 'Digest'],
     ['usage', 'Usage'],
@@ -78,12 +79,14 @@
     <div class="note s-failed">VM not reachable{p.status.error ? ` (${p.status.error})` : ''}. Showing the last pulled data.</div>
   {:else if p.status.state === 'halted'}
     <div class="note dim">Halted: <span class="mono">{p.status.control}</span></div>
+  {:else if p.status.oneshot}
+    <div class="note dim">One-shot job in progress. The team halts again when this cycle ends.</div>
   {/if}
 
   <div class="tabs">
     {#each TABS as [slug, label] (slug)}
       <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
-        {label}{#if slug === 'inbox' && p.asks}<span class="count">{p.asks}</span>{/if}
+        {label}{#if slug === 'inbox' && p.asks}<span class="count">{p.asks}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{/if}
       </a>
     {/each}
     <span class="grow"></span>

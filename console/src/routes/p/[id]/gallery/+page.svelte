@@ -1,5 +1,7 @@
 <script>
+  import { invalidateAll } from '$app/navigation';
   import Icon from '$lib/components/Icon.svelte';
+  import MarkupEditor from '$lib/components/MarkupEditor.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -14,12 +16,47 @@
   const src = (date, file) => `/p/${p.id}/media/shots/${date}/${encodeURIComponent(file)}`;
   const title = (file) => file.replace(/\.png$/, '').replace(/^\d+-/, '').replace(/[-_]/g, ' ');
 
+  // Same rule as the server's screenKey(): a note belongs to the screen, not the file.
+  const screen = (file) => file.replace(/\.png$/i, '').replace(/^\d+-/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const dot = (file) => {
+    const s = data.issues?.[screen(file)];
+    if (!s) return null;
+    return s.open ? { cls: 'open', text: `${s.open} open issue${s.open > 1 ? 's' : ''}` } : { cls: 'resolved', text: `${s.resolved} resolved issue${s.resolved > 1 ? 's' : ''}` };
+  };
+
+  let menu = $state(null);
+  let noting = $state(null);
+  let flash = $state('');
+
+  async function raise(file, { title: t, body, kind, markup, blob }) {
+    let markupPng = null;
+    if (blob) {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      markupPng = btoa(bin);
+    }
+    const r = await fetch(`/p/${p.id}/gallery/issue`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: t, body, kind, markup, markupPng, date: current.date, file })
+    });
+    const res = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(res.message || 'Could not raise the issue');
+    noting = null;
+    flash = res.delivered ? 'Issue raised and sent to the lead.' : 'Issue raised. It will be sent when the VM is reachable (retry from the Issues tab).';
+    await invalidateAll();
+  }
+
   function key(e) {
-    if (e.key === 'Escape') big = null;
+    if (e.key === 'Escape') {
+      big = null;
+      menu = null;
+    }
   }
 </script>
 
-<svelte:window onkeydown={key} />
+<svelte:window onkeydown={key} onclick={() => (menu = null)} />
 
 {#if !current}
   <div class="panel empty">
@@ -42,6 +79,7 @@
       </select>
     </label>
     <span class="dim small">{current.files.length} screenshots from the newest passing build on {current.date}</span>
+    {#if flash}<span class="small s-done">{flash} <a href="/p/{p.id}/issues">Open Issues</a></span>{/if}
   </div>
 
   <div class="shots">
@@ -61,10 +99,27 @@
             <img src={src(current.date, f)} alt={title(f)} loading="lazy" />
           </button>
         </div>
-        <figcaption class="small">{title(f)}</figcaption>
+        <figcaption class="small">
+          <span class="opts">
+            <button class="ham" aria-label="Options for {title(f)}" aria-haspopup="menu" aria-expanded={menu === f} onclick={(e) => { e.stopPropagation(); menu = menu === f ? null : f; }}>☰</button>
+            {#if menu === f}
+              <div class="menu panel lit" role="menu">
+                <button role="menuitem" onclick={() => { menu = null; noting = f; }}>Leave a note…</button>
+                {#if dot(f)}<a role="menuitem" href="/p/{p.id}/issues">View issues ({dot(f).text})</a>{/if}
+                <button role="menuitem" onclick={() => { menu = null; big = src(current.date, f); }}>Open full size</button>
+              </div>
+            {/if}
+          </span>
+          <span class="name">{title(f)}</span>
+          {#if dot(f)}<span class="dot {dot(f).cls}" title={dot(f).text} aria-label={dot(f).text}></span>{/if}
+        </figcaption>
       </figure>
     {/each}
   </div>
+{/if}
+
+{#if noting}
+  <MarkupEditor src={src(current.date, noting)} name={title(noting)} onsave={(d) => raise(noting, d)} oncancel={() => (noting = null)} />
 {/if}
 
 {#if big}
@@ -136,7 +191,70 @@
   }
   figcaption {
     color: var(--ink-2);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .name {
     text-transform: capitalize;
+  }
+  .opts {
+    position: relative;
+    display: flex;
+  }
+  .ham {
+    width: 24px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    line-height: 1;
+  }
+  .ham:hover,
+  .ham[aria-expanded='true'] {
+    color: var(--ink);
+    border-color: var(--line);
+  }
+  .menu {
+    position: absolute;
+    bottom: 26px;
+    left: 0;
+    z-index: 20;
+    min-width: 180px;
+    padding: 4px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel-solid);
+  }
+  .menu > * {
+    text-align: left;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+  }
+  .menu > *:hover {
+    background: rgba(var(--glow), 0.14);
+  }
+  .dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .dot.open {
+    background: var(--warn);
+    box-shadow: 0 0 8px var(--warn);
+  }
+  .dot.resolved {
+    background: var(--good);
   }
   .lightbox {
     position: fixed;
