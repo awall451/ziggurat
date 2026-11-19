@@ -1,0 +1,32 @@
+# Ziggurat Console: one container on the workstation. It reaches the sandbox
+# VMs only by ssh/rsync as the caller; nothing on a VM can reach it.
+#
+# All real paths come from an env file kept outside the repo (see
+# compose.env.example). Folders are mounted at the same path as on the host, so
+# projects.json means the same thing inside and outside the container.
+services:
+  ziggurat:
+    build:
+      context: ..
+      dockerfile: console/Dockerfile
+    image: ziggurat-console
+    container_name: ${CONSOLE_NAME:-ziggurat}
+    # Default bridge: works on hosts with no free Docker address pools.
+    network_mode: bridge
+    ports:
+      # Localhost only: put a reverse proxy in front for anything wider.
+      - "127.0.0.1:${CONSOLE_PORT:-8440}:3000"
+    environment:
+      CONSOLE_CONFIG_DIR: ${CONSOLE_CONFIG_DIR:?}
+      CONSOLE_DATA_DIR: ${CONSOLE_DATA_DIR:?}
+      CONSOLE_USER_HEADER: ${CONSOLE_USER_HEADER:-}
+    volumes:
+      - ${CONSOLE_CONFIG_DIR:?}:${CONSOLE_CONFIG_DIR:?}
+      - ${CONSOLE_DATA_DIR:?}:${CONSOLE_DATA_DIR:?}
+      - ${FLEET_DATA:?}:${FLEET_DATA:?}
+      - ${TRANSCRIPTS_DIR:?}:${TRANSCRIPTS_DIR:?}
+      # A small ssh folder made for the console (config + known_hosts), and the
+      # one key it may use. Not your whole ~/.ssh.
+      - ${CONSOLE_SSH_DIR:?}:/home/node/.ssh:ro
+      - ${CONSOLE_SSH_KEY:?}:/run/console/ssh_key:ro
+    restart: unless-stopped

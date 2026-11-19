@@ -1,0 +1,26 @@
+{
+  "projects": [
+    {
+      "id": "myproject",
+      "name": "My project",
+      "description": "What this team is building",
+      "theme": "plain",
+      "accent": "#4fd8ff",
+      "hidden": false,
+      "pull": true,
+      "ssh": { "alias": "myproject" },
+      "kit": {
+        "state": "/var/lib/agent-kit",
+        "leadUnit": "agent-kit-lead",
+        "agentHome": "/home/agent",
+        "workspace": "/home/agent/myproject",
+        "bare": "/srv/myproject.git"
+      },
+      "paths": {
+        "transcripts": "/data/boxes/myproject/projects",
+        "fleet": "/data/boxes/myproject/fleet"
+      },
+      "agentAliases": {}
+    }
+  ]
+}

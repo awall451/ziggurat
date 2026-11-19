@@ -9,5 +9,7 @@ WorkingDirectory=/home/agent
 EnvironmentFile=/etc/agent-kit/agent.env
 ExecStart=/opt/agent-kit/bin/lead-cycle
 TimeoutStartSec=12h
+# A halt stops the whole cycle; lead-cycle gets a minute to write its ledger line.
+TimeoutStopSec=60
 Nice=5
 MemoryMax=10G

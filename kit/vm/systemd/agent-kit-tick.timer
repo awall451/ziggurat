@@ -1,0 +1,11 @@
+[Unit]
+Description=Agent kit: check for a scheduled stop every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=10s
+Persistent=true
+Unit=agent-kit-tick.service
+
+[Install]
+WantedBy=timers.target

@@ -4,10 +4,25 @@
 # Expects: kit files next to this script, the project workspace already at
 # $WORKSPACE (owned by `agent`), Claude Code + Node installed for `agent`.
 # Idempotent. Leaves the lead timer DISABLED and control=stop: the owner starts it.
+#
+# Updating a VM that already runs the kit:
+#   sudo bash install.sh --upgrade                 kit scripts and units only
+#   sudo bash install.sh --upgrade <project-dir>   also the project's prompt and gate files
+# An upgrade never touches the workspace repo, the canonical repo, the
+# control file, project.env, agent.env or caps.env. Do it while the team is halted.
 set -euo pipefail
 KIT=$(cd "$(dirname "$0")" && pwd)
-PDIR=$(cd "${1:?usage: install.sh <project-dir>}" && pwd)
-source "$PDIR/project.env"
+UPGRADE=0
+if [ "${1:-}" = "--upgrade" ]; then UPGRADE=1; shift; fi
+if [ "$UPGRADE" = 1 ]; then
+  [ -f /etc/agent-kit/project.env ] || { echo "--upgrade needs an installed kit (/etc/agent-kit/project.env)"; exit 1; }
+  PDIR=
+  if [ -n "${1:-}" ]; then PDIR=$(cd "$1" && pwd); fi
+  source /etc/agent-kit/project.env
+else
+  PDIR=$(cd "${1:?usage: install.sh [--upgrade] <project-dir>}" && pwd)
+  source "$PDIR/project.env"
+fi
 : "${PROJECT:?}" "${WORKSPACE:?}" "${BARE:?}" "${STATE:?}"
 
 echo "== packages"
@@ -32,15 +47,38 @@ safe_add agent "$BARE"
 
 echo "== /opt/agent-kit (root-owned, read-only to agents)"
 install -d -m 755 /opt/agent-kit/bin /opt/agent-kit/gate/bin /opt/agent-kit/gate/checks
-[ -f "$PDIR/gate-checks" ] || { echo "project dir needs a gate-checks script (see examples/)"; exit 1; }
+if [ -n "$PDIR" ]; then
+  [ -f "$PDIR/gate-checks" ] || { echo "project dir needs a gate-checks script (see examples/)"; exit 1; }
+fi
 install -m 755 "$KIT"/bin/* /opt/agent-kit/bin/
 install -m 755 "$KIT"/gate/bin/* /opt/agent-kit/gate/bin/
-# The project defines what "done" means: its gate-checks script.
-install -m 755 "$PDIR/gate-checks" /opt/agent-kit/gate/bin/gate-checks
-if [ -d "$PDIR/checks" ]; then install -m 644 "$PDIR"/checks/* /opt/agent-kit/gate/checks/; fi
-install -m 644 "$PDIR/CHARTER.md" "$PDIR/GATE-CONTRACT.md" "$PDIR/lead-cycle.md" /opt/agent-kit/
-for b in gate-status agent-kit-status agent-kit-stop; do ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b; done
+install -m 644 "$KIT/VERSION" /opt/agent-kit/VERSION
+# Hook settings for the lead's session. A file that is not a JSON object would
+# stop the lead from starting, so check it first.
+jq -e 'type == "object"' "$KIT/lead-settings.json" >/dev/null || { echo "lead-settings.json is not a JSON object"; exit 1; }
+install -m 644 "$KIT/lead-settings.json" /opt/agent-kit/lead-settings.json
+if [ -n "$PDIR" ]; then
+  # The project defines what "done" means: its gate-checks script.
+  install -m 755 "$PDIR/gate-checks" /opt/agent-kit/gate/bin/gate-checks
+  if [ -d "$PDIR/checks" ]; then install -m 644 "$PDIR"/checks/* /opt/agent-kit/gate/checks/; fi
+  install -m 644 "$PDIR/CHARTER.md" "$PDIR/GATE-CONTRACT.md" "$PDIR/lead-cycle.md" /opt/agent-kit/
+fi
+for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
+         agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox owner-inbox; do
+  ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
+done
 
+echo "== state dirs"
+install -d -m 755 "$STATE" "$STATE/gate"
+install -d -m 755 -o agent -g agent "$STATE/ledger"
+# Owner inbox: root-owned, so a file there can only come from the owner.
+install -d -m 755 "$STATE/inbox" "$STATE/inbox/.inject" "$STATE/inbox/.closed"
+# Outbox: the lead's replies and questions.
+install -d -m 755 -o agent -g agent "$STATE/outbox" "$STATE/outbox/.seen"
+[ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
+chmod 644 "$STATE/control"
+
+if [ "$UPGRADE" = 0 ]; then
 echo "== /etc/agent-kit"
 install -d -m 755 /etc/agent-kit
 install -m 644 "$PDIR/project.env" /etc/agent-kit/project.env
@@ -56,12 +94,6 @@ if [ ! -d /opt/ms-playwright ] && [ -d /home/agent/.cache/ms-playwright ]; then
   cp -a /home/agent/.cache/ms-playwright /opt/ms-playwright
   chown -R root:root /opt/ms-playwright; chmod -R a+rX /opt/ms-playwright
 fi
-
-echo "== state dirs"
-install -d -m 755 "$STATE" "$STATE/gate"
-install -d -m 755 -o agent -g agent "$STATE/ledger"
-[ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
-chmod 644 "$STATE/control"
 
 echo "== agent workspace: team, docs, settings"
 AS="sudo -u agent -H"
@@ -113,10 +145,15 @@ elif [ -f "$WORKSPACE/package.json" ]; then
 fi
 [ -f "$STATE/gate/baseline-tests" ] && [ "$(cat "$STATE/gate/baseline-tests")" != 0 ] || echo "${TESTS:-0}" > "$STATE/gate/baseline-tests"
 echo "   main: $($GK -C "$BARE" log --oneline -1 main)   baseline tests: $(cat "$STATE/gate/baseline-tests")"
+fi # end of first-install-only steps
 
 echo "== systemd"
 install -m 644 "$KIT"/systemd/* /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now agent-kit-gate.timer >/dev/null
-echo "   gate timer enabled. lead timer NOT enabled (owner starts it)."
+systemctl enable --now agent-kit-gate.timer agent-kit-tick.timer >/dev/null
+if [ "$UPGRADE" = 1 ]; then
+  echo "   kit $(cat "$KIT/VERSION") installed. Lead timer and control file left as they were."
+else
+  echo "   gate timer enabled. lead timer NOT enabled (owner starts it)."
+fi
 echo "== done"

@@ -1,0 +1,6 @@
+[Unit]
+Description=Agent kit: halt the team if a scheduled stop time has passed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agent-kit/bin/agent-kit-halt --if-due

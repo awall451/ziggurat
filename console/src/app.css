@@ -1,0 +1,314 @@
+/* Every colour is a variable, so another theme only needs a new block of
+   values under a different [data-theme]. --accent is set per project. */
+:root,
+:root[data-theme='deep'] {
+  --bg: #050b17;
+  --bg-dot: #12305a;
+  --bar: #071225;
+  --panel: rgba(12, 30, 60, 0.72);
+  --panel-solid: #0a1a33;
+  --well: #06101f;
+  --line: #1b4470;
+  --line-strong: #2f86b8;
+  --glow: 79, 216, 255;
+  --cyan: #4fd8ff;
+  --cyan-soft: #9fe6ff;
+  --ink: #dcefff;
+  --ink-strong: #ffffff;
+  --ink-2: #8fb3d9;
+  --muted: #6f93bb;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --critical: #f87171;
+  --accent: #4fd8ff;
+  /* names the chart helper reads */
+  --surface-1: #0a1a33;
+  --grid: #16365e;
+  --axis: #35608f;
+  --series-1: #4fd8ff;
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-head: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--bg-dot) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-attachment: fixed;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--cyan-soft);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-head);
+  color: var(--ink-strong);
+  font-weight: 600;
+  margin: 0;
+}
+h1 {
+  font-size: 28px;
+}
+h2 {
+  font-size: 18px;
+}
+h3 {
+  font-size: 13px;
+  font-family: var(--font-ui);
+  color: var(--ink);
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+.dim {
+  color: var(--ink-2);
+}
+.small {
+  font-size: 12px;
+}
+
+/* Glass panel: the standard surface. */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  backdrop-filter: blur(10px);
+}
+.panel.lit {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 28px rgba(var(--glow), 0.16);
+}
+.well {
+  background: var(--well);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: rgba(var(--glow), 0.08);
+  cursor: pointer;
+  font-weight: 500;
+}
+.btn:hover {
+  background: rgba(var(--glow), 0.16);
+}
+.btn.quiet {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+select.field,
+input.field,
+textarea.field {
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.pill.running {
+  color: var(--cyan);
+  box-shadow: 0 0 14px rgba(var(--glow), 0.4);
+}
+.pill.idle {
+  color: var(--ink-2);
+}
+.pill.halted {
+  color: var(--warn);
+}
+.pill.unreachable,
+.pill.failed {
+  color: var(--critical);
+}
+.pill.done {
+  color: var(--good);
+}
+.pill.interrupted {
+  color: var(--warn);
+}
+.pill.waiting,
+.pill.queued {
+  color: var(--cyan-soft);
+}
+
+.s-running,
+.s-waiting {
+  color: var(--cyan);
+}
+.s-done {
+  color: var(--good);
+}
+.s-failed {
+  color: var(--critical);
+}
+.s-interrupted {
+  color: var(--warn);
+}
+.s-queued {
+  color: var(--ink-2);
+}
+
+table.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.grid th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-2);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.grid td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(27, 68, 112, 0.5);
+  vertical-align: top;
+}
+table.grid td.num,
+table.grid th.num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+.scroll-x {
+  overflow-x: auto;
+}
+
+/* Rendered markdown from notes, digests and reports: calm, readable. */
+.md {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-family: var(--font-head);
+  color: var(--ink-strong);
+  margin: 1.2em 0 0.4em;
+}
+.md h1 {
+  font-size: 20px;
+}
+.md h2 {
+  font-size: 17px;
+}
+.md h3,
+.md h4 {
+  font-size: 15px;
+}
+.md p,
+.md ul,
+.md ol {
+  margin: 0.5em 0;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--well);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.md pre {
+  background: var(--well);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.md pre code {
+  background: none;
+  padding: 0;
+}
+.md table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.md th,
+.md td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+}
+.md blockquote {
+  margin: 0.5em 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--ink-2);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+  .pulse {
+    display: none;
+  }
+}

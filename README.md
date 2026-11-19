@@ -39,12 +39,12 @@ Most "autonomous coding" failures come from one thing: **the agent that did the 
 
 | Path | What |
 |---|---|
-| [`kit/vm/`](kit/vm) | Installed inside each sandbox VM: the cycle runner, the gate, kill switch, status commands, systemd timers |
+| [`kit/vm/`](kit/vm) | Installed inside each sandbox VM: the cycle runner, the gate, the owner inbox, halt and resume, status commands, systemd timers |
 | [`examples/web-game/`](examples/web-game) | A TypeScript/Vite browser game: charter, gate checks (type check, unit tests, headless boot + fuzz, smoke playthrough), team |
 | [`examples/ps1-cpp/`](examples/ps1-cpp) | A PlayStation 1 game in C++20 (psyqo): charter, gate checks (host tests, PS1 build, headless-emulator playthrough, disc image), toolchain recipe, team |
 | [`sandbox/proxmox/`](sandbox/proxmox) | Ansible for the isolated network, the egress proxy gateway and one VM per project, with a wall check that proves isolation from inside |
-| [`workstation/`](workstation) | Pull agent data home (append-only, pull-only) and write a morning digest with a spoken brief |
-| [`dashboard/`](dashboard) | A web page per box: spoken brief, screenshots over time, usage, gate verdicts, the lead's plan, QA issues, trial comparisons |
+| [`console/`](console) | One web app for all your teams: projects, the live agent hierarchy of a cycle, feedback to the lead with replies, progress, usage, halt and resume. Reaches the VMs only as the caller |
+| [`workstation/`](workstation) | A morning digest per project, with a spoken brief, written from the data the console pulled |
 | [`themes/`](themes) | Display names for the roles: `plain`, `tolkien`, `borg`, `orchestra`, `gothic`, `cathedral`, `starship`, `norse`, `heist`, `greek`, `monastery`. Behaviour never changes with a theme |
 | [`tools/render-team.py`](tools/render-team.py) | Renders a project folder for a theme |
 | [`docs/`](docs) | [Architecture](docs/architecture.md) · [Getting started](docs/getting-started.md) · [Lessons](docs/lessons.md) · [Results](docs/results.md) · [Roadmap](docs/roadmap.md) |

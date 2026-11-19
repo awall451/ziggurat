@@ -1,0 +1,46 @@
+#!/bin/bash
+# agent-kit-halt-at: schedule a halt for a fixed time. Run with sudo.
+# The daily cycle cap counts cycles, not hours; use this for a time window.
+#
+#   agent-kit-halt-at set <unix-seconds> [reason words]
+#   agent-kit-halt-at clear
+#   agent-kit-halt-at show
+#
+# agent-kit-tick.timer checks every minute and runs the halt when the time has
+# come. The time is kept in a file, so it survives a reboot.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+F=$STATE/halt-at
+
+case "${1:-show}" in
+  set)
+    [[ ${2:-} =~ ^[0-9]{9,11}$ ]] || { echo "usage: agent-kit-halt-at set <unix-seconds> [reason]" >&2; exit 2; }
+    [ "$2" -gt "$(date +%s)" ] || { echo "that time is already past" >&2; exit 2; }
+    shift
+    when=$1
+    shift
+    why=$(printf '%s' "${*:-owner}" | tr -c 'A-Za-z0-9 .,:()_/@-' ' ' | cut -c1-160)
+    printf '%s %s\n' "$when" "$why" > "$F.tmp"
+    chmod 644 "$F.tmp"
+    mv "$F.tmp" "$F"
+    echo "halt scheduled for $(date -d "@$when" -Is)"
+    ;;
+  clear)
+    rm -f "$F"
+    echo "no halt scheduled"
+    ;;
+  show)
+    if [ -f "$F" ]; then
+      read -r when why < "$F"
+      echo "halt scheduled for $(date -d "@$when" -Is 2>/dev/null || echo "$when"): ${why:-}"
+    else
+      echo "no halt scheduled"
+    fi
+    ;;
+  *)
+    echo "usage: agent-kit-halt-at set <unix-seconds> [reason] | clear | show" >&2
+    exit 2
+    ;;
+esac
