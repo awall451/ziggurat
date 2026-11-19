@@ -6,16 +6,24 @@
       "pveHost": "192.0.2.10",
       "pveUser": "root",
       "bastion": "",
+      "pveHostKey": "",
+      "pveLanIp": "192.0.2.10",
+      "lanGateway": "192.0.2.1",
       "bridge": "vmbr1",
       "subnetPrefix": "10.66.0",
       "gatewayVmid": 110,
       "gatewayLanIp": "192.0.2.20",
+      "gatewayHostKey": "",
+      "adminUser": "admin",
       "templateVmid": 9000,
       "vmidMin": 300,
       "vmidMax": 399,
+      "criticalVmids": [],
       "storage": "local-lvm",
-      "adminUser": "admin",
-      "adminSshPubkey": "~/.ssh/id_ed25519.pub"
+      "snippetsStorage": "local",
+      "snippetsDir": "/var/lib/vz/snippets",
+      "poolWarnPct": 80,
+      "poolBlockPct": 90
     }
   ]
 }

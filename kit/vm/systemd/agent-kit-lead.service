@@ -7,6 +7,9 @@ Type=oneshot
 User=agent
 WorkingDirectory=/home/agent
 EnvironmentFile=/etc/agent-kit/agent.env
+# A subscription token, when one is stored (agent-kit-auth). Without the file
+# the agent's own login is used.
+EnvironmentFile=-/etc/agent-kit/auth.env
 ExecStart=/opt/agent-kit/bin/lead-cycle
 # After a one-shot job the team halts again (does nothing for a normal cycle).
 # This runs as root, so it must not get this unit's environment: agent.env puts

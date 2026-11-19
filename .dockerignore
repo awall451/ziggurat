@@ -3,3 +3,4 @@ node_modules
 console/node_modules
 console/build
 console/.svelte-kit
+.claude

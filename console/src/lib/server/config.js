@@ -7,6 +7,15 @@ import path from 'node:path';
 export const CONFIG_DIR = path.resolve(process.env.CONSOLE_CONFIG_DIR || './config');
 export const DATA_DIR = path.resolve(process.env.CONSOLE_DATA_DIR || './data');
 export const THEMES_DIR = path.resolve(process.env.ZIGGURAT_THEMES_DIR || '../themes');
+// Creating projects (and everything that talks to a Proxmox host) is off unless asked for.
+export const DEPLOY_ENABLED = process.env.CONSOLE_DEPLOY === '1';
+// Folders pulled data may be written to; set by the compose file.
+export const FLEET_ROOT = process.env.FLEET_DATA ? path.resolve(process.env.FLEET_DATA) : null;
+export const TRANSCRIPTS_ROOT = process.env.TRANSCRIPTS_DIR ? path.resolve(process.env.TRANSCRIPTS_DIR) : null;
+// A read-only folder with one sub-folder per planned project (team/, seed/, files/).
+export const PROJECTS_DIR = process.env.CONSOLE_PROJECTS_DIR ? path.resolve(process.env.CONSOLE_PROJECTS_DIR) : null;
+// The repository's own files the console runs or copies: playbooks, kit, examples, tools.
+export const REPO_DIR = path.resolve(process.env.CONSOLE_REPO_DIR || '..');
 
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
@@ -64,30 +73,76 @@ export function getProject(id) {
   return listProjects().find((p) => p.id === id) || null;
 }
 
-export function saveProject(project) {
-  if (!ID_RE.test(project.id || '')) throw new Error('invalid project id');
-  const file = path.join(CONFIG_DIR, 'projects.json');
-  const raw = readJson(file, { projects: [] });
-  const i = raw.projects.findIndex((p) => p.id === project.id);
-  if (i >= 0) raw.projects[i] = { ...raw.projects[i], ...project };
-  else raw.projects.push(project);
+/** Entries exactly as stored (no defaults filled in), for the editor. */
+export function rawProjects() {
+  return readJson(path.join(CONFIG_DIR, 'projects.json'), { projects: [] }).projects || [];
+}
+
+/** Where a project's pulled data may live (see schema.validateProject). */
+export function pathRoots() {
+  return { allowed: [DATA_DIR, FLEET_ROOT, TRANSCRIPTS_ROOT].filter(Boolean), forbidden: [CONFIG_DIR] };
+}
+
+// One list file with entries keyed by id. `replace` swaps the whole entry
+// (the editor); without it the given fields are merged into the stored one.
+function saveEntry(name, entry, replace) {
+  if (!ID_RE.test(entry.id || '')) throw new Error(`invalid ${name.slice(0, -1)} id`);
+  const file = path.join(CONFIG_DIR, `${name}.json`);
+  const raw = readJson(file, { [name]: [] });
+  raw[name] ||= [];
+  const i = raw[name].findIndex((e) => e.id === entry.id);
+  if (i >= 0) raw[name][i] = replace ? entry : { ...raw[name][i], ...entry };
+  else raw[name].push(entry);
   writeJson(file, raw);
+}
+
+/** Removes the registry entry only. Nothing on a VM or a host is touched. */
+function deleteEntry(name, id) {
+  const file = path.join(CONFIG_DIR, `${name}.json`);
+  const raw = readJson(file, { [name]: [] });
+  const before = (raw[name] || []).length;
+  raw[name] = (raw[name] || []).filter((e) => e.id !== id);
+  if (raw[name].length === before) return false;
+  writeJson(file, raw);
+  return true;
+}
+
+export function saveProject(project, { replace = false } = {}) {
+  saveEntry('projects', project, replace);
   return getProject(project.id);
+}
+
+export function deleteProject(id) {
+  return deleteEntry('projects', id);
 }
 
 export function listTargets() {
   return readJson(path.join(CONFIG_DIR, 'targets.json'), { targets: [] }).targets || [];
 }
 
-export function saveTarget(target) {
-  if (!ID_RE.test(target.id || '')) throw new Error('invalid target id');
-  const file = path.join(CONFIG_DIR, 'targets.json');
-  const raw = readJson(file, { targets: [] });
-  const i = raw.targets.findIndex((t) => t.id === target.id);
-  if (i >= 0) raw.targets[i] = { ...raw.targets[i], ...target };
-  else raw.targets.push(target);
-  writeJson(file, raw);
-  return target;
+export function getTarget(id) {
+  return listTargets().find((t) => t.id === id) || null;
+}
+
+export function saveTarget(target, { replace = false } = {}) {
+  saveEntry('targets', target, replace);
+  return getTarget(target.id);
+}
+
+export function deleteTarget(id) {
+  return deleteEntry('targets', id);
+}
+
+export function listThemes() {
+  try {
+    return fs
+      .readdirSync(THEMES_DIR)
+      .filter((f) => /^[a-z0-9-]{1,40}\.yml$/.test(f))
+      .map((f) => f.slice(0, -4))
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 const DEFAULT_PRICING = {

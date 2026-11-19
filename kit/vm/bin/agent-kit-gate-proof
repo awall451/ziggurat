@@ -1,0 +1,107 @@
+#!/bin/bash
+# agent-kit-gate-proof: show that this project's gate does its job. Run with sudo.
+#
+#   agent-kit-gate-proof run      do the proof, print the result as one JSON line
+#   agent-kit-gate-proof status   print the last result
+#
+# What it proves, on the real gate with its real checks:
+#   1. a harmless good change is merged (one line in docs/agents/GATE-PROOF.md);
+#   2. a change that deletes a test file is refused. The file is named by
+#      GATE_PROOF_DELETE in project.env; without it this part is skipped.
+#
+# Only for a halted team (control says stop): nothing else may be changing the
+# repository meanwhile. The team is not started and control is not touched; the
+# gate judges exactly the two proof branches (gate-run --proof), then both
+# branches are removed again. Exit 0 only if everything came out as expected.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+OPT=${AGENT_KIT_OPT:-/opt/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+OUT=$STATE/gate/proof.json
+
+if [ "$(id -u)" = 0 ]; then as_agent() { sudo -u agent -H "$@"; }; else as_agent() { "$@"; }; fi
+AG() { as_agent git -C "$WORKSPACE" "$@"; }
+WHO=(-c "user.name=owner (gate proof)" -c "user.email=owner@$PROJECT.invalid")
+
+case "${1:-run}" in
+  status)
+    if [ -f "$OUT" ]; then cat "$OUT"; else echo '{"ok":null,"error":"no proof has been run yet"}'; fi
+    exit 0
+    ;;
+  run) ;;
+  *)
+    echo "usage: agent-kit-gate-proof run | status" >&2
+    exit 2
+    ;;
+esac
+
+fail() { jq -cn --arg e "$1" --arg at "$(date -Is)" '{ok:false, at:$at, error:$e, good:null, drop:null}' | tee "$OUT"; chmod 644 "$OUT" 2>/dev/null; exit 1; }
+mkdir -p "$STATE/gate"
+grep -q '^stop' "$STATE/control" 2>/dev/null || fail "the team is not halted; halt it first (agent-kit-halt)"
+
+stamp=$(date +%s)
+verdict() { # topic -> its verdict file as compact JSON, or {}
+  local f="$STATE/gate/results/$1.json"
+  if [ -f "$f" ]; then jq -c '{status, detail, sha}' "$f"; else echo '{}'; fi
+}
+# Make one commit on top of gate/main in a throwaway worktree and point ready/<topic> at it.
+submit() { # topic, then a command run inside the worktree that makes the change
+  local topic=$1 tmp
+  shift
+  tmp=$(as_agent mktemp -d) || return 1
+  AG fetch -q gate || return 1
+  AG worktree add -q --detach "$tmp/w" gate/main || return 1
+  (cd "$tmp/w" && as_agent "$@") || { AG worktree remove --force "$tmp/w"; return 1; }
+  as_agent git -C "$tmp/w" add -A
+  as_agent git -C "$tmp/w" "${WHO[@]}" commit -q -m "gate proof: $topic" || { AG worktree remove --force "$tmp/w"; return 1; }
+  AG branch -f "ready/$topic" "$(as_agent git -C "$tmp/w" rev-parse HEAD)" > /dev/null
+  AG worktree remove --force "$tmp/w"
+  as_agent rmdir "$tmp" 2> /dev/null
+  "$OPT/gate/bin/gate-run" --proof "$topic"
+}
+cleanup() { for t in "$@"; do AG branch -D "ready/$t" > /dev/null 2>&1; done; }
+
+# ---- 1. a good change must be merged --------------------------------------
+good=gate-proof-good-$stamp
+submit "$good" bash -c 'mkdir -p docs/agents && echo "- gate proof at $(date -Is): a harmless change went through the gate" >> docs/agents/GATE-PROOF.md' \
+  || { cleanup "$good"; fail "could not submit the good change"; }
+g=$(verdict "$good")
+good_ok=false
+[ "$(jq -r '.status // ""' <<< "$g")" = merged ] && good_ok=true
+
+# ---- 2. deleting a test must be refused -----------------------------------
+drop=gate-proof-drop-$stamp
+d=null
+drop_ok=true
+note=""
+target=${GATE_PROOF_DELETE:-}
+if [ "$good_ok" != true ]; then
+  note="the good change was not merged, so the second part was not tried"
+elif [ -z "$target" ]; then
+  note="GATE_PROOF_DELETE is not set in project.env: the test-deletion part was skipped"
+elif ! [[ $target =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ $target == *..* ]] || [[ $target == /* ]]; then
+  drop_ok=false
+  note="GATE_PROOF_DELETE is not a plain path inside the repository"
+else
+  AG fetch -q gate
+  if ! AG cat-file -e "gate/main:$target" 2> /dev/null; then
+    note="$target is not in the repository any more: the test-deletion part was skipped"
+  else
+    main_before=$(AG rev-parse gate/main)
+    submit "$drop" git rm -q -- "$target" || { cleanup "$good" "$drop"; fail "could not submit the test-deleting change"; }
+    d=$(verdict "$drop")
+    AG fetch -q gate
+    # Refused means: judged as failed, and main did not move.
+    [ "$(jq -r '.status // ""' <<< "$d")" = failed ] && [ "$(AG rev-parse gate/main)" = "$main_before" ] || drop_ok=false
+  fi
+fi
+cleanup "$good" "$drop"
+
+ok=false
+[ "$good_ok" = true ] && [ "$drop_ok" = true ] && ok=true
+jq -cn --argjson ok "$ok" --arg at "$(date -Is)" --argjson good "$g" --argjson drop "$d" --arg note "$note" --arg file "$target" \
+  --arg main "$(AG rev-parse --short gate/main 2> /dev/null)" --arg tests "$(cat "$STATE/gate/baseline-tests" 2> /dev/null)" \
+  '{ok:$ok, at:$at, good:$good, drop:$drop, deleted:(if $file == "" then null else $file end), note:(if $note == "" then null else $note end), main:$main, tests:($tests | tonumber? // null)}' | tee "$OUT"
+chmod 644 "$OUT" 2> /dev/null
+[ "$ok" = true ]

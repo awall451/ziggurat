@@ -13,6 +13,8 @@ Update a VM that already runs the kit with `sudo bash vm/install.sh --upgrade` w
 | `vm/bin/agent-kit-oneshot` | one cycle for one job from the owner on a halted team, then halted again (`start`, `finish`, `reap`) |
 | `vm/bin/gate-wait` | for the lead: wait for the gate's verdict on submitted branches (used in a one-shot job) |
 | `vm/bin/agent-kit-caps`, `agent-kit-gate`, `agent-kit-units` | brakes and models, gate pause, the team's own units |
+| `vm/bin/agent-kit-gate-proof` | for a halted team: proves the gate merges a harmless change and refuses a change that deletes a test (`GATE_PROOF_DELETE` in `project.env`); uses `gate-run --proof`, never starts the team |
+| `vm/bin/agent-kit-auth` | how the agents sign in to Claude: `status`, `set-token` (a subscription token from `claude setup-token`, on stdin), `clear`. Never prints the token; never accepts an API key |
 | `vm/bin/agent-kit-inbox` | owner side of the inbox: checked delivery of a message, close |
 | `vm/bin/owner-inbox`, `owner-inbox-hook`, `vm/lead-settings.json` | lead side: read, reply, ask; mid-cycle delivery to the lead's session |
 | `vm/bin/agent-kit-issues`, `owner-issues` | owner issues: checked delivery and owner moves; the lead's list, show, update and prompt |

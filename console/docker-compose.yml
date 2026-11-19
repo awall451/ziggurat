@@ -20,11 +20,19 @@ services:
       CONSOLE_CONFIG_DIR: ${CONSOLE_CONFIG_DIR:?}
       CONSOLE_DATA_DIR: ${CONSOLE_DATA_DIR:?}
       CONSOLE_USER_HEADER: ${CONSOLE_USER_HEADER:-}
+      CONSOLE_DEPLOY: ${CONSOLE_DEPLOY:-}
+      CONSOLE_PROJECTS_DIR: ${CONSOLE_PROJECTS_DIR:-}
+      # The data folders again, so saved entries can be kept inside them.
+      FLEET_DATA: ${FLEET_DATA:?}
+      TRANSCRIPTS_DIR: ${TRANSCRIPTS_DIR:?}
     volumes:
       - ${CONSOLE_CONFIG_DIR:?}:${CONSOLE_CONFIG_DIR:?}
       - ${CONSOLE_DATA_DIR:?}:${CONSOLE_DATA_DIR:?}
       - ${FLEET_DATA:?}:${FLEET_DATA:?}
       - ${TRANSCRIPTS_DIR:?}:${TRANSCRIPTS_DIR:?}
+      # Planned projects (team/, seed/, files/ per project), read-only. Only
+      # used when creating projects; without it this is an empty folder.
+      - ${CONSOLE_PROJECTS_DIR:-${CONSOLE_DATA_DIR}/projects}:${CONSOLE_PROJECTS_DIR:-${CONSOLE_DATA_DIR}/projects}:ro
       # A small ssh folder made for the console (config + known_hosts), and the
       # one key it may use. Not your whole ~/.ssh.
       - ${CONSOLE_SSH_DIR:?}:/home/node/.ssh:ro

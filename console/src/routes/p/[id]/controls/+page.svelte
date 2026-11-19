@@ -1,6 +1,7 @@
 <script>
   import { invalidateAll } from '$app/navigation';
   import { when } from '$lib/format.js';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -106,6 +107,17 @@
     };
   }
 
+  function askToken() {
+    confirm = {
+      title: `Give ${p.name} the saved Claude token?`,
+      body: 'Stores the subscription token from the console\'s config folder on this VM. The team then signs in with it instead of its own login, from the next cycle. The token is not shown anywhere.',
+      word: 'Apply token',
+      run: () => act({ action: 'apply-token' }, 'token')
+    };
+  }
+
+  const SIGN_IN = { 'claude.ai': 'a login as the agent user', oauth_token: 'the stored subscription token', api_key: 'an API key', none: 'nothing' };
+
   function schedule() {
     const t = Math.floor(new Date(stopAt).getTime() / 1000);
     if (!t) {
@@ -135,7 +147,22 @@
     'oneshot-again': 'One-shot job, started again',
     'message-send': 'Sent a message',
     'message-retry': 'Retried a message',
-    'message-close': 'Closed a message'
+    'message-close': 'Closed a message',
+    'apply-token': 'Applied the saved Claude token',
+    'deploy-draft': 'New project: checked the team',
+    'deploy-dry-run': 'New project: dry run',
+    'deploy-dry-run-end': 'New project: dry run ended',
+    'deploy-create': 'New project: creating the VM',
+    'deploy-create-end': 'New project: VM run ended',
+    'deploy-install': 'New project: installing the team',
+    'deploy-install-end': 'New project: install ended',
+    'deploy-login-check': 'New project: checked the sign-in',
+    'deploy-apply-token': 'New project: applied the saved Claude token',
+    'deploy-abandon': 'New project: given up',
+    'deploy-gate-proof': 'New project: gate proof started',
+    'deploy-gate-proof-end': 'New project: gate proof ended',
+    'project-add': 'Added to the registry',
+    'project-save': 'Changed the registry entry'
   };
   const args = (a) =>
     Object.entries(a || {})
@@ -188,7 +215,7 @@
         when it ends. For feedback and fixes you want now without letting the team run on.
       </p>
       {#if !p.canOneshot}
-        <p class="dim">This needs kit 0.3 on the VM (it runs {st.kitVersion || 'an older kit'}). Upgrade the kit to use it.</p>
+        <p class="dim">This needs kit 0.4 on the VM (it runs {st.kitVersion || 'an older kit'}). Upgrade the kit to use it.</p>
       {:else if st.oneshot}
         <p>In progress since {when(st.oneshot.since)}. One job at a time.</p>
       {:else if st.state === 'unreachable' || st.state === 'checking'}
@@ -280,6 +307,31 @@
   </div>
 
   <section class="panel block">
+    <h2>Claude sign-in</h2>
+    {#if c.auth}
+      <p>
+        {#if c.auth.loggedIn && !c.auth.apiKeySet}
+          Signed in with {SIGN_IN[c.auth.authMethod] || c.auth.authMethod}{c.auth.plan ? ` (${c.auth.plan} plan)` : ''}.
+          {#if c.auth.expiresAt && c.auth.authMethod === 'claude.ai'}<span class="dim">The login runs until {when(c.auth.expiresAt)}.</span>{/if}
+        {:else if c.auth.apiKeySet}
+          <span class="s-failed">An API key is configured for the agents. The kit does not use API keys: remove it on the VM.</span>
+        {:else}
+          <span class="s-failed">Not signed in. The team cannot run until it is.</span>
+        {/if}
+      </p>
+      <p class="dim small">
+        {c.auth.tokenStored ? 'A subscription token is stored on the VM.' : 'No token is stored on the VM.'}
+        {data.tokenSaved ? '' : 'No token is saved in the console (claude-token in its config folder).'}
+      </p>
+      {#if data.tokenSaved}
+        <div><button class="btn quiet" onclick={askToken} disabled={!!busy}>{c.auth.tokenStored ? 'Replace the token on the VM…' : 'Apply the saved token…'}</button></div>
+      {/if}
+    {:else}
+      <p class="dim">This VM's kit cannot report its sign-in yet (needs kit 0.3 or later).</p>
+    {/if}
+  </section>
+
+  <section class="panel block">
     <h2>The team's own services</h2>
     <p class="dim small">Jobs the team installed for itself. A halt stops only the ones that run Claude.</p>
     {#if c.units.length}
@@ -327,19 +379,7 @@
   </div>
 </section>
 
-{#if confirm}
-  <div class="modal" role="dialog" aria-modal="true" aria-label={confirm.title}>
-    <button class="shade" onclick={() => (confirm = null)} aria-label="Cancel"></button>
-    <div class="panel lit box">
-      <h2>{confirm.title}</h2>
-      <p>{confirm.body}</p>
-      <div class="actions">
-        <button class="btn quiet" onclick={() => (confirm = null)} disabled={!!busy}>Cancel</button>
-        <button class="btn {confirm.danger ? 'stop' : 'go'}" onclick={confirm.run} disabled={!!busy}>{busy ? 'Working…' : confirm.word}</button>
-      </div>
-    </div>
-  </div>
-{/if}
+<ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
 
 <style>
   .cols {
@@ -364,19 +404,6 @@
   }
   .warn {
     border-color: var(--warn);
-  }
-  .note {
-    padding: 10px 14px;
-    margin-bottom: 12px;
-    font-size: 13px;
-  }
-  .note.bad {
-    border-color: var(--critical);
-    color: var(--critical);
-  }
-  .note.good {
-    border-color: #2f7d5a;
-    color: var(--good);
   }
   .stack {
     display: flex;
@@ -428,50 +455,7 @@
     resize: vertical;
     min-height: 120px;
   }
-  .btn.stop {
-    border-color: var(--critical);
-    background: rgba(248, 113, 113, 0.12);
-    color: #ffd6d6;
-  }
-  .btn.go {
-    border-color: var(--good);
-    background: rgba(74, 222, 128, 0.12);
-    color: #d6ffe4;
-  }
-  .btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
   .nowrap {
     white-space: nowrap;
-  }
-  .modal {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  .shade {
-    position: absolute;
-    inset: 0;
-    background: rgba(2, 6, 14, 0.8);
-    border: 0;
-  }
-  .box {
-    position: relative;
-    max-width: 520px;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    background: var(--panel-solid);
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
   }
 </style>

@@ -4,7 +4,8 @@
 #   $ZIGGURAT_LEAK_PATTERNS, or ../ops/config/leak-patterns.txt next to this repo.
 # One extended regex per line; lines starting with # are ignored.
 set -euo pipefail
-root=$(git rev-parse --show-toplevel)
+# The main checkout, also when this runs inside a linked worktree.
+root=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
 pf=${ZIGGURAT_LEAK_PATTERNS:-$root/../ops/config/leak-patterns.txt}
 if [ ! -f "$pf" ]; then
   echo "pre-commit: no leak pattern file at $pf (set ZIGGURAT_LEAK_PATTERNS). Skipping leak check." >&2

@@ -41,10 +41,16 @@
       {#if project}
         <a href="/">Projects</a><span class="dim">/</span><span class="here">{project.name}</span>
         <span class="chip mono">{project.theme}</span>
+      {:else if page.url.pathname.startsWith('/new')}
+        <a href="/">Projects</a><span class="dim">/</span><span class="here">New project</span>
+      {:else if page.url.pathname.startsWith('/settings')}
+        <a href="/">Projects</a><span class="dim">/</span><span class="here">Settings</span>
       {:else}
         <span class="here">Projects</span>
       {/if}
     </nav>
+    <span class="grow"></span>
+    <a class="small" href="/settings">Settings</a>
   </header>
   <main>
     {@render children()}
@@ -97,6 +103,9 @@
     align-items: center;
     gap: 8px;
     min-width: 0;
+  }
+  .grow {
+    flex: 1;
   }
   .here {
     font-weight: 500;

@@ -7,6 +7,7 @@
 // parser is tolerant: unknown lines are skipped, missing fields become null.
 // Files only grow, so each one is folded incrementally from a byte offset.
 import fs from 'node:fs';
+import { maskSecrets } from './mask.js';
 import path from 'node:path';
 
 const SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -34,12 +35,14 @@ function newFold() {
 }
 
 function textOf(content) {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return maskSecrets(content);
   if (!Array.isArray(content)) return '';
-  return content
-    .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
-    .map((b) => b.text)
-    .join('\n');
+  return maskSecrets(
+    content
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('\n')
+  );
 }
 
 function feedLine(f, line) {
@@ -96,7 +99,7 @@ function feedLine(f, line) {
             });
           }
         } else if (b.type === 'text' && b.text) {
-          f.lastText = f.lastTextMsg === id ? `${f.lastText}\n${b.text}` : b.text;
+          f.lastText = maskSecrets(f.lastTextMsg === id ? `${f.lastText}\n${b.text}` : b.text);
           f.lastTextMsg = id;
         }
       }

@@ -40,6 +40,9 @@ export async function POST({ params, request, locals }) {
       case 'gate':
         out = await controls.gate(user, project, !!b.on, b.reason);
         break;
+      case 'apply-token':
+        out = await controls.applyToken(user, project);
+        break;
       default:
         error(400, 'Unknown action');
     }

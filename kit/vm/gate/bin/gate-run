@@ -11,31 +11,63 @@
 #   - candidate must be a descendant of current main (agents rebase first)
 #   - all gate-checks steps pass (install, typecheck, unit, build, boot-fuzz, smoke)
 #   - passed unit-test count must not drop below main's
+#
+# gate-run --proof <topic>   (used by agent-kit-gate-proof, run by the owner)
+#   Judges exactly one branch, ready/<topic>, even while the team is halted or
+#   the gate is paused. The same checks and rules apply. A halted project's gate
+#   can be proven this way without starting the team.
 set -uo pipefail
-source /etc/agent-kit/project.env
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+OPT=${AGENT_KIT_OPT:-/opt/agent-kit}
+source "$ETC/project.env"
 
-exec 9>/run/agent-kit-gate.lock
-flock -n 9 || exit 0
+PROOF=
+if [ "${1:-}" = "--proof" ]; then
+  PROOF=${2:-}
+  [[ $PROOF =~ ^gate-proof-[a-z0-9-]{1,40}$ ]] || { echo "usage: gate-run --proof gate-proof-<name>" >&2; exit 2; }
+fi
 
-GK="sudo -u gatekeeper -H git"   # bare-repo ops: gatekeeper never runs agent code
-GR="sudo -u gaterun -H git"      # candidate checkout: gaterun runs agent code, owns nothing
+exec 9>"${AGENT_KIT_RUN:-/run}/agent-kit-gate.lock"
+if [ -n "$PROOF" ]; then
+  flock -w 900 9 || { echo "the gate is busy" >&2; exit 1; }
+else
+  flock -n 9 || exit 0
+fi
+
+if [ "$(id -u)" = 0 ]; then
+  GK="sudo -u gatekeeper -H git"   # bare-repo ops: gatekeeper never runs agent code
+  GR="sudo -u gaterun -H git"      # candidate checkout: gaterun runs agent code, owns nothing
+  as_gaterun() { sudo -u gaterun -H env "$@"; }
+else
+  # Not root: only the kit's own tests run it this way, in a temp folder.
+  GK="git" GR="git"
+  as_gaterun() { env "$@"; }
+fi
 RES=$STATE/gate/results LOGS=$STATE/gate/logs WORKROOT=$STATE/gate/work
 mkdir -p "$RES" "$LOGS" "$WORKROOT"
 chmod 755 "$STATE/gate" "$RES" "$LOGS"
-chown gaterun: "$WORKROOT"
+[ "$(id -u)" = 0 ] && chown gaterun: "$WORKROOT"
 BASELINE=$STATE/gate/baseline-tests
 [ -f "$BASELINE" ] || echo 0 > "$BASELINE"
 
-grep -q '^stop' "$STATE/control" 2>/dev/null && exit 0
-# The gate can also be paused on its own (agent-kit-gate pause).
-[ -e "$STATE/gate/paused" ] && exit 0
-set -a; source /etc/agent-kit/agent.env; set +a
+if [ -z "$PROOF" ]; then
+  grep -q '^stop' "$STATE/control" 2>/dev/null && exit 0
+  # The gate can also be paused on its own (agent-kit-gate pause).
+  [ -e "$STATE/gate/paused" ] && exit 0
+fi
+set -a; source "$ETC/agent.env"; set +a
 # agent.env is written for agent processes: its PATH starts with a folder the
 # agent can write to. This script is root, so it keeps its own PATH (the checks
 # get an explicit one below).
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-$GK -C "$BARE" fetch -q --prune "$WORKSPACE" "+refs/heads/ready/*:refs/candidates/*" || { echo "fetch failed"; exit 1; }
+if [ -n "$PROOF" ]; then
+  $GK -C "$BARE" fetch -q "$WORKSPACE" "+refs/heads/ready/$PROOF:refs/candidates/$PROOF" || { echo "fetch failed"; exit 1; }
+  REFS=refs/candidates/$PROOF
+else
+  $GK -C "$BARE" fetch -q --prune "$WORKSPACE" "+refs/heads/ready/*:refs/candidates/*" || { echo "fetch failed"; exit 1; }
+  REFS=refs/candidates/
+fi
 
 result() { # name sha status detail
   jq -n --arg n "$1" --arg s "$2" --arg st "$3" --arg d "$4" --arg at "$(date -Is)" \
@@ -45,7 +77,7 @@ result() { # name sha status detail
   echo "$(date -Is) $1 $2 $3 $4" >> "$STATE/gate/history.log"
 }
 
-for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' refs/candidates/); do
+for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' "$REFS"); do
   topic=${ref#refs/candidates/}
   sha=$($GK -C "$BARE" rev-parse "$ref")
   main=$($GK -C "$BARE" rev-parse refs/heads/main)
@@ -64,14 +96,14 @@ for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' refs/candidates/)
   fi
 
   work=${WORKROOT:?}/${sha:?} out=${LOGS:?}/${sha:?}-out
-  rm -rf -- "$work" "$out"; mkdir -p "$out"; chown gaterun: "$out"
+  rm -rf -- "$work" "$out"; mkdir -p "$out"; [ "$(id -u)" = 0 ] && chown gaterun: "$out"
   $GR init -q "$work" \
     && $GR -C "$work" fetch -q "$BARE" "$ref" \
     && $GR -C "$work" checkout -q --detach "$sha" \
     || { result "$topic" "$sha" failed "gate could not check out candidate"; continue; }
-  sudo -u gaterun -H env HTTP_PROXY="$HTTP_PROXY" HTTPS_PROXY="$HTTPS_PROXY" NO_PROXY="$NO_PROXY" \
-       PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" PATH="/usr/local/bin:/usr/bin:/bin" \
-       timeout 1800 /opt/agent-kit/gate/bin/gate-checks "$work" "$out" > "$LOGS/$sha.log" 2>&1
+  as_gaterun HTTP_PROXY="${HTTP_PROXY:-}" HTTPS_PROXY="${HTTPS_PROXY:-}" NO_PROXY="${NO_PROXY:-}" \
+       PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-}" PATH="/usr/local/bin:/usr/bin:/bin" \
+       timeout 1800 "$OPT/gate/bin/gate-checks" "$work" "$out" > "$LOGS/$sha.log" 2>&1
   rc=$?
   chmod -R a+rX "$out"; chmod 644 "$LOGS/$sha.log"
   tests=$(grep -o 'TESTS_PASSED=[0-9]*' "$LOGS/$sha.log" | tail -1 | cut -d= -f2); tests=${tests:-0}
