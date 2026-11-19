@@ -39,7 +39,7 @@
   {#if !shown.length}
     <div class="panel empty">
       <h2>No projects yet</h2>
-      <p class="dim">Add one to <span class="mono">projects.json</span> in the console's config folder.</p>
+      <p class="dim">Add one under <a href="/settings">Settings</a>, or in <span class="mono">projects.json</span> in the console's config folder.</p>
     </div>
   {/if}
 

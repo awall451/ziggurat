@@ -76,6 +76,7 @@ It listens on `127.0.0.1:8440`. Put it behind your VPN or a reverse proxy; do no
 | `hidden` | Hide the card unless "Show hidden" is ticked |
 | `pull` | `false` to stop the background pull (a VM that is switched off) |
 | `ssh.alias` | Host name in the console's ssh config |
+| `ssh.host`, `ssh.user`, `ssh.jump` | Instead of an alias: address, login and `[user@]host` to jump through |
 | `kit.*` | Only if the VM differs from the defaults (`state`, `workspace`, `bare`, `leadUnit`, `agentHome`) |
 | `paths.transcripts`, `paths.fleet` | Where pulled data for this project is kept |
 | `agentAliases` | Maps older agent ids to the official ones, so old cycles get the right names |
@@ -83,10 +84,56 @@ It listens on `127.0.0.1:8440`. Put it behind your VPN or a reverse proxy; do no
 `pricing.json` holds the price table used for the estimates (USD per million tokens, first matching model
 wins). Estimates are API-equivalent figures, not a bill.
 
+### Settings page and JSON API
+
+**Settings** (top right) edits `projects.json` and `targets.json`: a form per entry, the whole entry as
+JSON, and "Remove entry". Removing an entry only takes it out of the list; the console never deletes a VM or
+pulled data. Every entry is checked field by field before it is saved, and every change is in the audit log.
+
+The same through the API (JSON bodies, `Content-Type: application/json`):
+
+| | |
+|---|---|
+| `GET /api/projects`, `POST /api/projects` | list, add |
+| `GET`, `PUT`, `DELETE /api/projects/<id>` | read, replace, remove one entry |
+| `GET /api/targets`, `POST /api/targets` | list, add (needs `CONSOLE_DEPLOY=1`) |
+| `GET`, `PUT`, `DELETE /api/targets/<id>` | read, replace, remove one entry |
+| `POST /api/targets/<id>/check` | read-only look at the target's Proxmox host |
+
+Requests that change something need an `Origin` header that matches the console's address (browsers add
+it; with curl pass `-H "Origin: http://127.0.0.1:8440"`).
+
+### Deploy targets (off by default)
+
+A target is a Proxmox host where `sandbox/proxmox` has already set up the isolated bridge and the gateway.
+Targets are the base for creating projects from the console. They are off unless `CONSOLE_DEPLOY=1` is set,
+because using one means **the console's ssh key logs in to that Proxmox host as an administrator**. Until
+you turn it on, the console only ever talks to the sandbox VMs.
+
+`targets.json` (one entry per host; `console/config.example/targets.json`):
+
+| Field | Meaning |
+|---|---|
+| `id`, `name` | |
+| `pveHost`, `pveUser` | Address and login of the Proxmox host (`root` by default) |
+| `bastion` | Optional `[user@]host` to jump through; its host key must be in the console's `known_hosts` |
+| `pveHostKey` | The host's public key: `ssh-keyscan -t ed25519 <host>`, compare it with the host's own `/etc/ssh/ssh_host_ed25519_key.pub`, then paste type and key (no host name). The console never trusts a host on first contact |
+| `pveLanIp`, `lanGateway` | Addresses a sandboxed VM must fail to reach (the host itself, your router) |
+| `bridge`, `subnetPrefix` | The isolated bridge and the first three numbers of its subnet. The gateway is `.1`; a VM gets `.(vmid - vmidMin + 10)` |
+| `gatewayVmid`, `gatewayLanIp`, `gatewayHostKey` | The gateway container; new VMs are reached through its LAN address |
+| `adminUser` | The admin login created in new VMs |
+| `templateVmid`, `vmidMin`, `vmidMax` | The cloud-init template and the id range for agent VMs |
+| `criticalVmids` | Ids the console must never act on |
+| `storage`, `snippetsStorage`, `snippetsDir` | Disk storage, and where cloud-init snippets go |
+| `poolWarnPct`, `poolBlockPct` | Storage fill levels for a warning (80) and for refusing a deploy (90) |
+
+"Check target" runs one fixed, read-only script on the host (`qm list`, `pct list`, storage, memory, the
+bridge, the gateway, the template) and shows what it found. It changes nothing.
+
 ## Who can use it
 
-There is no login. Anyone who can open the page can message a lead as the owner, halt or resume a team and
-read everything the agents read. Keep it on a private network. What is built in:
+There is no login. Anyone who can open the page can message a lead as the owner, halt or resume a team,
+change the project list and read everything the agents read. Keep it on a private network. What is built in:
 
 - the container listens on localhost only;
 - every request that changes something must come from the page's own origin, so another web page cannot fire
