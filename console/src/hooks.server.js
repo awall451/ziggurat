@@ -1,8 +1,11 @@
 import { error } from '@sveltejs/kit';
 import { userFor } from '$lib/server/user.js';
 import { startScheduler } from '$lib/server/pull.js';
+import { recover as recoverDeploys } from '$lib/server/deploy.js';
 
 startScheduler();
+// A deploy run that a restart cut off is recorded as failed (nothing is retried).
+recoverDeploys().catch((e) => console.error('deploy: recovery failed', e));
 
 // Origins allowed to send requests that change something. The page's own
 // origin is always allowed; add others (comma separated) only if needed.

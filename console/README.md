@@ -127,6 +127,37 @@ you turn it on, the console only ever talks to the sandbox VMs.
 | `storage`, `snippetsStorage`, `snippetsDir` | Disk storage, and where cloud-init snippets go |
 | `poolWarnPct`, `poolBlockPct` | Storage fill levels for a warning (80) and for refusing a deploy (90) |
 
+### Creating a project (with `CONSOLE_DEPLOY=1`)
+
+"New project" on the start page makes a new sandbox VM for a team:
+
+1. **The form.** A name, and what the team starts from: one of your project folders
+   (`CONSOLE_PROJECTS_DIR/<name>/team/`, usually with `seed/` beside it for the starting repo) or an example
+   that ships a seed. The charter can be edited in place. Target, size, theme, models and brakes are under
+   "Advanced".
+2. **The check.** The console reads the team without running anything from it: required files, agent
+   headers, no links, size limits. It writes `project.env` itself; a bundle's own env files are read as
+   plain `KEY=value` lines and anything else is refused, because the kit later sources them as root in the VM.
+3. **Dry run.** Asks the host again (id free, name free, storage below the block line), then runs
+   `sandbox/proxmox/playbooks/create-agent-vm.yml` with `--check`. It settles the VM id and address and
+   changes nothing. It does not prove that the VM will build.
+4. **Create project.** Open for 15 minutes after a dry run of exactly the same inputs. Runs the playbook for
+   real with the id the dry run settled on, with live output: clone, cloud-init, the isolation check from
+   inside the VM, the VM-to-VM block, a `provisioned` snapshot. The VM's ssh host key is read through
+   Proxmox and stored.
+
+What the console will not do: destroy or roll back a VM, touch an id outside the target's range or in
+`criticalVmids`, touch an id that is already in use, run two deploys at once, or start a team. After a failed
+run it shows how far the run got and the commands to clean up by hand. A run that failed after the clone
+finished can be continued; a VM that failed its isolation check cannot.
+
+Each deploy keeps its inputs, the staged team and every run (inventory, variables, events, output) under
+`console-data/deploys/<id>/`. Nothing there is deleted automatically.
+
+API: `GET/POST /api/deploys`, `GET/DELETE /api/deploys/<id>` (DELETE closes the record only),
+`POST /api/deploys/<id>/dry-run|create|continue`, `GET /api/deploys/<id>/events?run=<run>` (server-sent
+events), `GET /api/deploy-sources`.
+
 "Check target" runs one fixed, read-only script on the host (`qm list`, `pct list`, storage, memory, the
 bridge, the gateway, the template) and shows what it found. It changes nothing.
 

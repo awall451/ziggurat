@@ -25,6 +25,7 @@ packages:
   - tmux
   - htop
   - build-essential
+  - nftables
 
 write_files:
   - path: /etc/environment
@@ -50,6 +51,31 @@ write_files:
     content: |
       LAN_GW={{ lan_gateway }}
       PVE_IP={{ pve_host_ip }}
+      GW_IP={{ agent_gw_bridge_ip }}
+      PROXY_URL={{ agent_proxy_url }}
+      PEER_IPS="{{ agent_peer_ips | default('') }}"
+  # Every agent VM shares one bridge. This VM talks to the gateway only: other
+  # agent VMs are dropped in both directions, and so is all IPv6 (the proxy is
+  # IPv4; link-local IPv6 would otherwise still reach the neighbours).
+  - path: /etc/nftables.conf
+    permissions: "0755"
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+      table inet vmwall {
+        chain input {
+          type filter hook input priority filter; policy accept;
+          iifname "lo" accept
+          ip saddr {{ agent_subnet_prefix }}.0/24 ip saddr != {{ agent_gw_bridge_ip }} drop
+          meta nfproto ipv6 drop
+        }
+        chain output {
+          type filter hook output priority filter; policy accept;
+          oifname "lo" accept
+          ip daddr {{ agent_subnet_prefix }}.0/24 ip daddr != { {{ agent_gw_bridge_ip }}, {{ vm_ip }} } drop
+          meta nfproto ipv6 drop
+        }
+      }
   - path: /usr/local/bin/agent-wall-check
     permissions: "0755"
     content: |
@@ -84,6 +110,9 @@ runcmd:
       export HTTPS_PROXY={{ agent_proxy_url }} HTTP_PROXY={{ agent_proxy_url }}
       curl -fsSL https://claude.ai/install.sh | bash \
         || npm install -g --prefix "$HOME/.local" @anthropic-ai/claude-code
+  # Last, so a mistake in the rules cannot break the installs above. The
+  # playbook reads the loaded rules as root before it takes the snapshot.
+  - [ systemctl, enable, --now, nftables ]
   - [ bash, -c, "mkdir -p /var/lib/agent-sandbox && date -Is > /var/lib/agent-sandbox/provisioned" ]
 
 final_message: "agent VM {{ vm.vmid }} ({{ vm.name }}) cloud-init done after $UPTIME s"

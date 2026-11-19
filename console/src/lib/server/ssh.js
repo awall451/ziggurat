@@ -109,6 +109,29 @@ export function hostArgs({ host, user, jump }) {
   return { args, dest: `${user}@${host}` };
 }
 
+/**
+ * The same strict options as one shell-quoted string, for an Ansible inventory
+ * (`ansible_ssh_common_args`). Ansible adds the key and the destination itself.
+ */
+export function ansibleSshArgs({ jump } = {}) {
+  const { args } = hostArgs({ host: 'placeholder', user: 'root', jump });
+  const keep = [];
+  for (let i = 0; i < args.length; i += 2) {
+    // Connection sharing is left to Ansible's own settings.
+    if (args[i] === '-o' && /^Control(Master|Path|Persist)=/.test(args[i + 1])) continue;
+    keep.push(args[i], args[i + 1]);
+  }
+  return keep.map((a) => (/^[A-Za-z0-9@%+=:,._/-]+$/.test(a) ? a : q(a))).join(' ');
+}
+
+/** The public half of the console's key ("<type> <key>"), derived from the private key. */
+export async function publicKey() {
+  const res = await collect('ssh-keygen', ['-y', '-f', SSH_KEY], { timeout: 10000 });
+  const line = res.stdout.trim().split('\n')[0] || '';
+  if (res.code !== 0 || !KEYLINE_RE.test(line.split(' ').slice(0, 2).join(' '))) throw new Error('could not read the console ssh key');
+  return line.split(' ').slice(0, 2).join(' ');
+}
+
 /** Run a bash script built by the console on such a host. The script travels on stdin. */
 export function hostScript(spec, script, opts = {}) {
   const { args, dest } = hostArgs(spec);

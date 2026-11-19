@@ -12,6 +12,10 @@ export const DEPLOY_ENABLED = process.env.CONSOLE_DEPLOY === '1';
 // Folders pulled data may be written to; set by the compose file.
 export const FLEET_ROOT = process.env.FLEET_DATA ? path.resolve(process.env.FLEET_DATA) : null;
 export const TRANSCRIPTS_ROOT = process.env.TRANSCRIPTS_DIR ? path.resolve(process.env.TRANSCRIPTS_DIR) : null;
+// A read-only folder with one sub-folder per planned project (team/, seed/, files/).
+export const PROJECTS_DIR = process.env.CONSOLE_PROJECTS_DIR ? path.resolve(process.env.CONSOLE_PROJECTS_DIR) : null;
+// The repository's own files the console runs or copies: playbooks, kit, examples, tools.
+export const REPO_DIR = path.resolve(process.env.CONSOLE_REPO_DIR || '..');
 
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 

@@ -41,6 +41,8 @@
       {#if project}
         <a href="/">Projects</a><span class="dim">/</span><span class="here">{project.name}</span>
         <span class="chip mono">{project.theme}</span>
+      {:else if page.url.pathname.startsWith('/new')}
+        <a href="/">Projects</a><span class="dim">/</span><span class="here">New project</span>
       {:else if page.url.pathname.startsWith('/settings')}
         <a href="/">Projects</a><span class="dim">/</span><span class="here">Settings</span>
       {:else}

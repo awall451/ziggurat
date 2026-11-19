@@ -74,7 +74,7 @@ Done: projects, live topology with history, progress, usage, owner inbox with re
 halt/resume and brakes, all through fixed kit scripts.
 
 Later:
-- Create a project from the console: pick a target, run the sandbox playbooks, install the kit and a team bundle.
+- Create a project from the console. Done so far: deploy targets, the team check, a dry run and the VM itself (with live output). Still to do: install the kit and a team bundle, sign Claude in, register the project.
 - A login in front (an auth proxy header is already honoured) and a dedicated, restricted ssh key.
 - A side chat with the lead that forks its session, for questions that need an answer now.
 - A full transcript viewer per agent, context shown as a share of the model's limit, and services used.
