@@ -134,11 +134,13 @@
       when: vm_probe.rc == 0
 
     - name: Other agent VMs on the bridge (the new VM must not reach them)
+      # One listing instead of a status call per id: that took most of a minute.
       ansible.builtin.shell: |
-        for i in $(seq {{ agent_vmid_min }} {{ agent_vmid_max }}); do
-          [ "$i" = "{{ vm.vmid }}" ] && continue
-          if qm status $i >/dev/null 2>&1; then printf '%s ' "{{ agent_subnet_prefix }}.$((i - {{ agent_vmid_min }} + 10))"; fi
-        done
+        set -o pipefail
+        qm list | awk -v min={{ agent_vmid_min | int }} -v max={{ agent_vmid_max | int }} -v self={{ vm.vmid | int }} -v p={{ agent_subnet_prefix }} \
+          'NR > 1 && $1 ~ /^[0-9]+$/ && $1 >= min && $1 <= max && $1 != self { printf "%s.%d ", p, $1 - min + 10 }'
+      args:
+        executable: /bin/bash
       register: peers_out
       changed_when: false
       check_mode: false
