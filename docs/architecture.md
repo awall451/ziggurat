@@ -69,6 +69,29 @@ cannot make a root process read something else.
   owner closes it. Owner messages rank above the lead's roadmap and below the charter and gate contract.
 - The lead never waits for the owner: a question must state its default, and work goes on with it.
 
+## Owner issues
+
+Tickets for the lead, separate from the inbox. The owner raises one from a Gallery screenshot (tile menu ☰ →
+"Leave a note"), drawing boxes, ellipses or freehand marks on it. The console's Issues tab shows them as a
+board: New, In progress, Done (won't fix sits in Done).
+
+| Path | Owner | Purpose |
+|---|---|---|
+| `/var/lib/agent-kit/issues/<id>/issue.md`, `shot.png`, `markup.png` | root | The issue, the screenshot, and the screenshot with the owner's markup flattened on it |
+| `/var/lib/agent-kit/issues/.owner/<id>` | root | `<status> <date>` when the owner moved the issue on the board |
+| `/var/lib/agent-kit/issues-out/<id>.md` | `agent` | The lead's latest update: `Status: in_progress`, `done` or `wontfix`, optional `Fixed-shot:` |
+
+- `agent-kit-issues put` (root, called by the console) accepts only `issue.md`, `shot.png` and `markup.png`.
+  `agent-kit-issues set` records an owner move.
+- Every cycle, `lead-cycle` appends `owner-issues prompt` after the inbox: the protocol and all open issues.
+  Issues are never injected mid-cycle; they weigh like a `note`.
+- The lead always triages: assigns the issue to the team (`in_progress`), reports `done` with an optional newer
+  gallery shot (the console shows before and after), or `wontfix` with a reason.
+- The newer of the owner's move and the lead's update wins, on the VM and in the console.
+- In the console an issue is tied to its gallery *screen* (the file name without its number prefix), not to
+  one day's file, so a tile keeps its dot after screenshots are regenerated: amber while any issue for that
+  screen is open, green once all are resolved. Console copies live in `DATA_DIR/issues/<project>/`.
+
 ## Controls
 
 All root-owned, all run from outside by the owner (or the console):

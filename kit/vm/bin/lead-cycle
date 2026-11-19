@@ -53,10 +53,13 @@ export ZIGGURAT_LEAD_SESSION=$sid
 printf '%s %s\n' "$sid" "$start" > "$STATE/ledger/current"
 
 # The prompt is the team's lead-cycle.md plus the owner-inbox protocol and any
-# open owner messages.
+# open owner messages, then the owner-issues protocol and any open issues.
 prompt=$(cat "$KIT/lead-cycle.md")
 if [ -x "$KIT/bin/owner-inbox" ]; then
   inbox=$("$KIT/bin/owner-inbox" prompt 2>/dev/null) && [ -n "$inbox" ] && prompt+=$'\n\n'"$inbox"
+fi
+if [ -x "$KIT/bin/owner-issues" ]; then
+  issues=$("$KIT/bin/owner-issues" prompt 2>/dev/null) && [ -n "$issues" ] && prompt+=$'\n\n'"$issues"
 fi
 if [ -n "$oneshot" ]; then
   # The job and its rules go last, and a notice that this is a one-shot cycle
