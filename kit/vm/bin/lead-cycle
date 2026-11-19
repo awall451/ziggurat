@@ -68,12 +68,15 @@ if grep -qiE "usage limit|session limit|weekly limit|limit reached|hit your .*li
    && [ "$(jq -r '.num_turns // 0' "$run.json" 2>/dev/null || echo 0)" -le 2 ]; then
   limited=true
 fi
-if ! jq -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" \
+# A cycle that was stopped leaves an empty result file. jq prints nothing for
+# an empty file and still exits 0, so check for content first: otherwise a
+# halted cycle would get no ledger line at all.
+if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" \
       --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted \
   '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
     cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
     session:(.session_id // $sid), is_error:(.is_error // null),
-    summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; then
+    summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; }; then
   jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --argjson rc $rc \
      --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --arg err "$(tail -c 600 "$run.err")" \
      '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,

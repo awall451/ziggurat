@@ -104,7 +104,8 @@
             <td class="num">{num(c.turns)}</td>
             <td class="num">{usd(c.costUsd)}</td>
             <td class="nowrap">
-              {#if c.limited}<span class="s-interrupted">usage limit, not counted</span>
+              {#if c.halted}<span class="s-interrupted">halted by you</span>
+              {:else if c.limited}<span class="s-interrupted">usage limit, not counted</span>
               {:else if c.rc === 0 && !c.isError}<span class="s-done">finished</span>
               {:else}<span class="s-failed">ended with an error</span>{/if}
             </td>

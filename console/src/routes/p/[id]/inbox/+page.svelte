@@ -126,13 +126,14 @@
         <p class="dim">Its VM runs a kit without the owner inbox (or cannot be reached). Upgrade the kit to send messages here.</p>
       </div>
     {:else}
-      <section class="panel block lit" id="compose" class:drag={dragging} ondragover={(e) => { e.preventDefault(); dragging = true; }} ondragleave={() => (dragging = false)} ondrop={drop} role="group" aria-label="New message">
+      <section class="block" id="compose">
         <div class="row">
           <h2>{replyTo ? `Answer ${lead}'s question` : `Message to ${lead}`}</h2>
           {#if replyTo}
             <button class="btn quiet small" onclick={() => (replyTo = null)}>Not an answer</button>
           {/if}
         </div>
+      <div class="panel block lit" class:drag={dragging} ondragover={(e) => { e.preventDefault(); dragging = true; }} ondragleave={() => (dragging = false)} ondrop={drop} role="group" aria-label="New message">
         {#if replyTo}
           <div class="well quote small"><span class="dim">Answering:</span> {replyTo.text.slice(0, 240)}{replyTo.text.length > 240 ? '…' : ''}</div>
         {/if}
@@ -175,6 +176,7 @@
           <p class="s-failed small">The VM cannot be reached. The message is saved here and can be retried.</p>
         {/if}
         {#if problem}<p class="s-failed small" role="alert">{problem}</p>{/if}
+      </div>
       </section>
     {/if}
 

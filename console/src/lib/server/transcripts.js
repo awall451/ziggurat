@@ -340,7 +340,8 @@ export function listSessions(project, status = null) {
       ended: led?.end || st.mtime.toISOString(),
       agents,
       live,
-      state: live ? 'running' : led ? (led.rc === 0 && !led.is_error ? 'done' : 'failed') : 'interrupted',
+      // A cycle the owner halted is interrupted, not failed.
+      state: live ? 'running' : led ? (led.halted ? 'interrupted' : led.rc === 0 && !led.is_error ? 'done' : 'failed') : 'interrupted',
       number: led?.number ?? null,
       costUsd: led?.cost_usd ?? null,
       turns: led?.turns ?? null,
@@ -402,7 +403,17 @@ export function sessionTree(project, sid, { status = null, pricing, labeler }) {
     ...labeler('lead', 0),
     description: null,
     requestedModel: null,
-    status: live ? (leadSum.waitingOn ? 'waiting' : 'running') : ledger ? (ledger.rc === 0 && !ledger.is_error ? 'done' : 'failed') : 'interrupted',
+    status: live
+      ? leadSum.waitingOn
+        ? 'waiting'
+        : 'running'
+      : ledger
+        ? ledger.halted
+          ? 'interrupted'
+          : ledger.rc === 0 && !ledger.is_error
+            ? 'done'
+            : 'failed'
+        : 'interrupted',
     branch: main.gitBranch,
     worktree: null,
     cwd: main.cwd,

@@ -50,6 +50,7 @@ export function readCycles(fleet) {
         turns: c.turns ?? null,
         session: c.session ?? null,
         limited: !!c.limited,
+        halted: !!c.halted,
         counted: c.counted !== false,
         isError: !!c.is_error,
         summary: c.summary || ''
