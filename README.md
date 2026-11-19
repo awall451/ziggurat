@@ -35,31 +35,22 @@ Most "autonomous coding" failures come from one thing: **the agent that did the 
 ## How it works
 
 ```mermaid
-flowchart LR
-    subgraph you["Your side"]
-        owner(["You"])
-        console["Console<br/>one web app for all teams"]
-        owner --- console
-    end
+flowchart TB
+    owner["You"] --- console["Console<br/>one web app for all teams"]
+    console -- "ssh as you: read state, pull data,<br/>fixed control scripts" --> lead
 
     subgraph vm["Sandbox VM, one per project"]
-        direction TB
-        lead["Lead"]
-        areas["Area leads"]
-        workers["Builders and scouts"]
-        gate{{"The gate<br/>root-owned"}}
-        main[("main")]
-        lead --> areas --> workers
-        workers -. "ready/ branch" .-> gate
-        gate -- "all checks pass" --> main
+        lead["Lead"] --> areas["Area leads"] --> workers["Builders and scouts"]
+        workers -. "ready/ branch" .-> gate{{"The gate<br/>root-owned"}}
+        gate -- "all checks pass" --> main["main"]
         gate -. "verdict" .-> lead
     end
 
-    proxy["Gateway<br/>domain allow-list"]
-    net(("Model API<br/>package registries"))
+    main ~~~ proxy
+    vm -- "the only way out" --> proxy["Gateway<br/>domain allow-list"]
+    proxy --> net["Model API,<br/>package registries"]
 
-    console -- "ssh as you:<br/>read state, pull data,<br/>fixed control scripts" --> vm
-    vm -- "only way out" --> proxy --> net
+    style vm fill:none,stroke:#8b949e,stroke-dasharray:5 5,color:#8b949e
 ```
 
 Nothing on a VM can reach your side. The console connects to the VM as you; the VM never connects back.
@@ -146,7 +137,7 @@ The next cycle starts 15 minutes after the last one ended, until a daily cap, a 
 
 ```mermaid
 flowchart TD
-    c(["ready/topic appears in the team's workspace"]) --> f["Gate fetches it into the canonical repo<br/>(a repo the agents can read, not write)"]
+    c["ready/topic appears in the team's workspace"] --> f["Gate fetches it into the canonical repo<br/>(a repo the agents can read, not write)"]
     f --> b{"Based on<br/>current main?"}
     b -- no --> rej["rejected: rebase and resubmit"]
     b -- yes --> co["Fresh checkout as gaterun,<br/>a user that owns nothing"]
@@ -177,8 +168,8 @@ flowchart LR
         gw["Gateway<br/>proxy with an allow-list"]
     end
     lan["Your LAN, router,<br/>hypervisor"]
-    web(("Everything else<br/>on the internet"))
-    ok(("Allowed domains:<br/>model API, registries"))
+    web["Everything else<br/>on the internet"]
+    ok["Allowed domains:<br/>model API, registries"]
 
     vm1 -- "proxy only" --> gw
     vm2 -- "proxy only" --> gw
@@ -186,6 +177,8 @@ flowchart LR
     vm1 x--x vm2
     vm1 x--x lan
     gw x--x web
+
+    style bridge fill:none,stroke:#8b949e,stroke-dasharray:5 5,color:#8b949e
 ```
 
 - The VM has **no default route**. The gateway does not forward packets; it only proxies requests to listed domains.
@@ -240,7 +233,6 @@ The team runs without you. These are the ways to steer it, from lightest to heav
 
 ```mermaid
 stateDiagram-v2
-    direction LR
     [*] --> Halted: installed
     Halted --> Running: Resume
     Halted --> OneShot: One-shot job
@@ -260,18 +252,18 @@ The brakes are on the same page: cycles per day, a budget per cycle, the lead's 
 With deploy targets turned on, the console makes the sandbox for you. Two clicks, about five minutes, and the result is a team that is installed, signed in, proven and **halted**. Starting it is always your decision.
 
 ```mermaid
-flowchart LR
-    f["Form:<br/>name, team, goal"] --> c["Team check<br/>nothing is run"]
-    c --> d["Dry run<br/>changes nothing"]
-    d -- "Create project" --> v["VM cloned<br/>and booted"]
+flowchart TD
+    f["Form: name, team, goal"] --> c["Team check (nothing is run)"]
+    c --> d["Dry run (changes nothing)"]
+    d -- "Create project" --> v["VM cloned and booted"]
     v --> w{"Wall check<br/>from inside"}
+    w -- "fails" --> x["Hard stop: the VM is never used"]
     w -- "holds" --> s["Snapshot"]
-    w -- "fails" --> x(["Hard stop:<br/>never used"])
-    s --> i["Kit, team and<br/>starting repo installed"]
-    i --> a["Claude signed in<br/>(subscription)"]
-    a --> r["Registered<br/>in the console"]
+    s --> i["Kit, team and starting repo installed"]
+    i --> a["Claude signed in (subscription)"]
+    a --> r["Registered in the console"]
     r --> p["Gate proof"]
-    p --> h(["Ready,<br/>team halted"])
+    p --> h["Ready, team halted"]
 ```
 
 <p align="center"><img src="docs/img/new-project-ready.webp" alt="The end of a deploy: the plan with VM id, address and size, then a green panel saying the project is ready, the team is halted, and the gate proof passed with one change merged and one refused" width="100%"></p>
