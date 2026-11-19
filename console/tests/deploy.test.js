@@ -443,7 +443,8 @@ describe('install, sign-in and registration', () => {
     fs.writeFileSync(process.env.FAKE_INSTALL_MODE, 'refused');
     const d = await created();
     expect(d.state).toBe('install-failed');
-    expect(d.failure.needsRollback).toBe(false);
+    // The playbook refused because something is already installed: the VM has to go back to its snapshot.
+    expect(d.failure.needsRollback).toBe(true);
     fs.writeFileSync(process.env.FAKE_GUESTS, '');
     expect((await status(() => deploy.startInstall(user, 'demo')))[1]).toMatch(/not there under the name demo/);
   });

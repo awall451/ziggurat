@@ -584,7 +584,8 @@ async function finished(id, run) {
         task: run.failedTask?.task || null,
         stage,
         // Once the first step ran, the VM is no longer clean: back to the snapshot first.
-        needsRollback: stage != null || run.status !== 'failed',
+        // The same holds when the playbook refused because an earlier attempt left its mark.
+        needsRollback: stage != null || run.status !== 'failed' || /^Nothing may be installed yet/.test(run.failedTask?.task || ''),
         rollback: d.vm?.vmid ? [`qm rollback ${d.vm.vmid} provisioned`, `qm start ${d.vm.vmid}`] : [],
         cleanup: t && d.vm?.vmid ? cleanupCommands(t, d.vm.vmid) : []
       };
