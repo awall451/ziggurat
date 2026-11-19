@@ -14,6 +14,9 @@ import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
 
 export const TIERS = ['note', 'priority', 'urgent'];
+// A one-shot job is stored and shown like a message, but it is not a tier the
+// owner picks in the Inbox: it starts a cycle (see sendOneshot, startOneshot).
+export const ONESHOT = 'oneshot';
 const OWNER_ID = /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/;
 const ASK_ID = /^[0-9]{8}T[0-9]{6}Z-a-[a-z0-9-]{1,40}$/;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
@@ -93,6 +96,87 @@ function tarStream(dir) {
  */
 export async function send(project, user, { tier, text, attachments = [], inReplyTo = null }) {
   if (!TIERS.includes(tier)) throw new Error('Unknown tier');
+  return deliver(project, store(project, user, { tier, text, attachments, inReplyTo }));
+}
+
+/**
+ * A new one-shot job on a halted team: the text becomes an owner message and
+ * the VM runs one cycle for it, then halts again.
+ *
+ * Three outcomes:
+ * - started: the job is in the Inbox like any message;
+ * - the VM said no (not halted, a cycle still running): throws, and nothing
+ *   is kept, here or on the VM, so the owner can change something and start
+ *   again from the same form with the same attachments;
+ * - no clear answer (the line dropped): the job is kept as "not started",
+ *   since it may have reached the VM. Returns {started: false}.
+ */
+export async function sendOneshot(project, user, { text, attachments = [] }) {
+  const id = store(project, user, { tier: ONESHOT, text, attachments, inReplyTo: null }, { keepDrafts: true });
+  const out = await startOneshot(project, id);
+  if (out.refused) {
+    fs.rmSync(path.join(sentDir(project), id), { recursive: true, force: true });
+    throw new Error(out.error);
+  }
+  // From here on the stored job holds the files.
+  for (const token of attachments) fs.rmSync(path.join(draftDir(project), token), { recursive: true, force: true });
+  return out;
+}
+
+/**
+ * Start the cycle for a stored one-shot job: a first try, a job that was not
+ * started, or one whose cycle ended without the lead finishing it. The VM
+ * takes the message from stdin if it does not have it yet.
+ */
+export async function startOneshot(project, id) {
+  if (!OWNER_ID.test(id)) throw new Error('Bad message id');
+  const dir = path.join(sentDir(project), id);
+  const file = path.join(dir, 'meta.json');
+  const meta = readJson(file);
+  if (!meta || meta.tier !== ONESHOT) throw new Error('No such one-shot job');
+  if (meta.closed) throw new Error('That job is closed');
+  if (/^(done|declined)$/.test(replyStatus(project, id) || '')) throw new Error('That job is already answered');
+  const res = await kit(project, 'agent-kit-oneshot', ['start', id, senderOf(meta)], { inputStream: tarStream(dir), timeout: 300000 });
+  const started = res.code === 0;
+  const error = started ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-300);
+  if (started) markStarted(project, id);
+  else if (!meta.delivered) {
+    // A job that ran before stays "delivered"; only a first start can be "not started".
+    meta.error = error;
+    fs.writeFileSync(file, JSON.stringify(meta, null, 2));
+  }
+  return { meta: readJson(file) || meta, started, refused: !started && vmSaidNo(res.code), error };
+}
+
+/**
+ * Did the VM itself refuse, before anything happened there? The kit scripts
+ * and sudo exit with small codes (1, 2; 126 and 127 for a missing script).
+ * Above that the script was killed part-way (128 + signal), 255 is ssh
+ * failing and -1 a timeout or a spawn error: then nothing is known about what
+ * happened on the VM.
+ */
+export function vmSaidNo(code) {
+  return Number.isInteger(code) && code >= 1 && code <= 127;
+}
+
+/** The VM is running this job (it said so, or its status shows it). */
+export function markStarted(project, id) {
+  if (!OWNER_ID.test(id)) throw new Error('Bad message id');
+  const file = path.join(sentDir(project), id, 'meta.json');
+  const meta = readJson(file);
+  if (!meta) throw new Error('No such message');
+  const now = new Date().toISOString();
+  meta.delivered = true;
+  meta.error = null;
+  meta.deliveredAt ??= now;
+  meta.startedAt = now;
+  fs.writeFileSync(file, JSON.stringify(meta, null, 2));
+  return meta;
+}
+
+const senderOf = (meta) => (/^[A-Za-z0-9._@-]{1,80}$/.test(meta.from) ? meta.from : 'owner');
+
+function store(project, user, { tier, text, attachments, inReplyTo }, { keepDrafts = false } = {}) {
   const body = String(text || '').trim();
   if (!body) throw new Error('Write a message first');
   if (body.length > MAX_TEXT) throw new Error('Message is too long');
@@ -113,13 +197,13 @@ export async function send(project, user, { tier, text, attachments = [], inRepl
     let name = f.name;
     for (let i = 2; files.includes(name); i++) name = `${i}-${f.name}`.slice(0, 100);
     fs.copyFileSync(path.join(from, f.name), path.join(dir, 'att', name));
-    fs.rmSync(from, { recursive: true, force: true });
+    if (!keepDrafts) fs.rmSync(from, { recursive: true, force: true });
     files.push(name);
   }
   const meta = { id, tier, from: user.name, sentAt: new Date().toISOString(), inReplyTo, delivered: false, error: null, closed: false };
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2));
   sweepDrafts(project);
-  return deliver(project, id);
+  return id;
 }
 
 /** Push a stored message to the VM (also used to retry). */
@@ -128,9 +212,11 @@ export async function deliver(project, id) {
   const dir = path.join(sentDir(project), id);
   const meta = readJson(path.join(dir, 'meta.json'));
   if (!meta) throw new Error('No such message');
+  // Delivering a one-shot job starts a cycle: that is the owner's decision,
+  // made on purpose (startOneshot), never a side effect of a retry.
+  if (meta.tier === ONESHOT) throw new Error('A one-shot job is started, not sent: use Start on the job');
   if (meta.delivered) return meta;
-  const from = /^[A-Za-z0-9._@-]{1,80}$/.test(meta.from) ? meta.from : 'owner';
-  const res = await kit(project, 'agent-kit-inbox', ['put', id, meta.tier, from, meta.inReplyTo || '-'], {
+  const res = await kit(project, 'agent-kit-inbox', ['put', id, meta.tier, senderOf(meta), meta.inReplyTo || '-'], {
     inputStream: tarStream(dir),
     timeout: 300000
   });
@@ -151,9 +237,13 @@ export async function close(project, id) {
   const file = path.join(sentDir(project), id, 'meta.json');
   const meta = readJson(file);
   if (!meta) throw new Error('No such message');
-  if (meta.delivered) {
+  // A one-shot job that shows as "not started" may be on the VM all the same
+  // (the line dropped after it was stored). Close it there too, or a later
+  // cycle would find it open and do it.
+  if (meta.delivered || meta.tier === ONESHOT) {
     const res = await kit(project, 'agent-kit-inbox', ['close', id]);
-    if (res.code !== 0) throw new Error((res.stderr || 'could not close on the VM').trim().slice(-200));
+    const neverArrived = !meta.delivered && /no such message/.test(res.stderr || '');
+    if (res.code !== 0 && !neverArrived) throw new Error((res.stderr || 'could not close on the VM').trim().slice(-200));
   }
   meta.closed = true;
   meta.closedAt = new Date().toISOString();
@@ -199,6 +289,12 @@ function parseHeaderFile(file, max = 200_000) {
     if (j > 0) fields[line.slice(0, j).toLowerCase()] = line.slice(j + 2).trim();
   }
   return { fields, body: body.trim() };
+}
+
+/** The lead's reply status for a message, from the pulled outbox (agent-written: parsed as data). */
+function replyStatus(project, id) {
+  const reply = parseHeaderFile(path.join(outboxDir(project), `${id}.md`));
+  return reply && /^(done|planned|declined)$/.test(reply.fields.status || '') ? reply.fields.status : null;
 }
 
 /** Everything the Inbox tab shows, newest first. */
@@ -248,6 +344,8 @@ export function threads(project) {
       delivered: !!meta.delivered,
       error: meta.error || null,
       closed: !!meta.closed,
+      // One-shot jobs: when the console last started its cycle.
+      startedAt: meta.startedAt || null,
       seen: seen.includes(id),
       nudged: seen.filter((n) => n.startsWith(`${id}@`)).length,
       reply: status ? { status, date: reply.fields.date || null, text: reply.body, attachments: listFiles(path.join(out, `${id}.d`)) } : null,

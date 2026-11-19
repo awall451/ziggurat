@@ -15,6 +15,11 @@
   let stopAt = $state('');
   let stopWhy = $state('');
   let edits = $state({});
+  let jobText = $state('');
+  let jobFiles = $state([]); // {token, name, size} once uploaded
+  let jobPicker = $state();
+  const lead = $derived(p.tiers[0]);
+  const canStartJob = $derived(st.state === 'halted' && !st.oneshot);
 
   async function act(body, label) {
     busy = label;
@@ -24,10 +29,14 @@
       const res = await fetch(`/p/${p.id}/controls/act`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.message || 'The action failed');
-      done = out.detail || 'Done';
+      // A one-shot job without a clear answer from the VM is not a success.
+      if (out.started === false) problem = out.detail;
+      else done = out.detail || 'Done';
       await invalidateAll();
+      return out;
     } catch (e) {
       problem = e.message;
+      return null;
     } finally {
       busy = '';
       confirm = null;
@@ -49,6 +58,51 @@
       body: `The ${p.tiers[0]} starts a cycle right away and keeps going until the daily cap, a scheduled stop or a halt. This spends subscription usage: check your weekly limit first.`,
       word: 'Resume team',
       run: () => act({ action: 'resume' }, 'resume')
+    };
+  }
+
+  // Attachments use the Inbox upload: a one-shot job is stored as an owner message.
+  async function attach(list) {
+    problem = '';
+    for (const f of list) {
+      if (jobFiles.length >= 8) {
+        problem = 'At most 8 attachments per job.';
+        break;
+      }
+      if (f.size > 20 * 1024 * 1024) {
+        problem = `${f.name} is over 20 MB.`;
+        continue;
+      }
+      const res = await fetch(`/p/${p.id}/inbox/attach?name=${encodeURIComponent(f.name || 'pasted.png')}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: f
+      });
+      if (res.ok) jobFiles = [...jobFiles, await res.json()];
+      else problem = `Could not upload ${f.name}.`;
+    }
+  }
+  function pasteJob(e) {
+    const got = [...(e.clipboardData?.files || [])];
+    if (got.length) {
+      e.preventDefault();
+      attach(got);
+    }
+  }
+  function askJob() {
+    confirm = {
+      title: `Start a one-shot job on ${p.name}?`,
+      body: `${lead} starts one cycle now, for this job only: it plans the tasks, hands them to the team, sees them through the gate and replies in the Inbox. Then the team is halted again and no further cycle starts. This spends subscription usage, up to the budget per cycle (${c.caps.CYCLE_BUDGET_USD ? `$${c.caps.CYCLE_BUDGET_USD}` : 'see Brakes'}). Unfinished work left by an interrupted cycle is not touched. The gate runs during the job, so branches that were already submitted before the halt are tested and merged as usual.`,
+      word: 'Start the job',
+      run: async () => {
+        // A refusal keeps the form as it is, to start again. Otherwise the job
+        // is in the Inbox now (started, or kept there as not started).
+        const out = await act({ action: 'oneshot', text: jobText, attachments: jobFiles.map((f) => f.token) }, 'oneshot');
+        if (out) {
+          jobText = '';
+          jobFiles = [];
+        }
+      }
     };
   }
 
@@ -76,6 +130,9 @@
     'set-cap': 'Changed a setting',
     'gate-pause': 'Paused the gate',
     'gate-resume': 'Resumed the gate',
+    'oneshot-start': 'Started a one-shot job',
+    oneshot: 'One-shot job',
+    'oneshot-again': 'One-shot job, started again',
     'message-send': 'Sent a message',
     'message-retry': 'Retried a message',
     'message-close': 'Closed a message'
@@ -106,8 +163,13 @@
         State: <span class="pill {st.state}">{st.state}</span>
         {#if st.control}<span class="mono"> {st.control}</span>{/if}
       </p>
-      {#if st.state === 'halted' || !st.timerEnabled}
-        <p>The team is stopped. Nothing spends tokens until you resume it.</p>
+      {#if st.oneshot}
+        <p>
+          A one-shot job is in progress. The team halts again when this cycle ends. Follow it under Topology; {lead}'s reply and any
+          questions come to the <a href="/p/{p.id}/inbox">Inbox</a>.
+        </p>
+      {:else if st.state === 'halted' || !st.timerEnabled}
+        <p>The team is stopped. Nothing spends tokens until you resume it{p.canOneshot ? ' or start a one-shot job' : ''}.</p>
         <div><button class="btn go" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
       {/if}
       {#if st.state !== 'halted'}
@@ -116,6 +178,54 @@
           <input class="field" bind:value={haltReason} placeholder="Weekly usage" maxlength="120" />
         </label>
         <div><button class="btn stop" onclick={askHalt} disabled={!!busy}>Halt now…</button></div>
+      {/if}
+    </section>
+
+    <section class="panel block" id="oneshot">
+      <h2>One-shot job</h2>
+      <p class="dim small">
+        One cycle for the work you describe here, on a halted team. {lead} plans it, the team does it, and the team is halted again
+        when it ends. For feedback and fixes you want now without letting the team run on.
+      </p>
+      {#if !p.canOneshot}
+        <p class="dim">This needs kit 0.3 on the VM (it runs {st.kitVersion || 'an older kit'}). Upgrade the kit to use it.</p>
+      {:else if st.oneshot}
+        <p>In progress since {when(st.oneshot.since)}. One job at a time.</p>
+      {:else if st.state === 'unreachable' || st.state === 'checking'}
+        <p class="dim">The VM is not answering{st.state === 'checking' ? ' yet' : ''}. A job can be started once it does.</p>
+      {:else if !canStartJob}
+        <p class="dim">
+          Only for a halted team. This one is {st.state}: send an <a href="/p/{p.id}/inbox">Inbox</a> message instead, or halt it first.
+        </p>
+      {:else}
+        <label class="stack">
+          <span class="small dim">The job: one task or several, as much detail as you like</span>
+          <textarea
+            class="field"
+            rows="7"
+            bind:value={jobText}
+            onpaste={pasteJob}
+            maxlength="60000"
+            placeholder={'1. The field menu closes when I press Triangle twice.\n2. The title music is too loud next to the effects.\n3. Make the dialogue box border one pixel thinner.'}
+          ></textarea>
+        </label>
+        {#if jobFiles.length}
+          <ul class="files">
+            {#each jobFiles as f, i (f.token)}
+              <li class="well">
+                <span class="mono small">{f.name}</span>
+                <button class="x" onclick={() => (jobFiles = jobFiles.filter((_, j) => j !== i))} aria-label="Remove {f.name}">×</button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <div class="jobrow">
+          <input bind:this={jobPicker} type="file" multiple hidden onchange={(e) => { attach([...e.currentTarget.files]); e.currentTarget.value = ''; }} />
+          <button class="btn quiet" onclick={() => jobPicker.click()} disabled={!!busy}>Attach files</button>
+          <span class="dim small">Or paste a screenshot. Up to 8, 20 MB each.</span>
+          <span class="grow"></span>
+          <button class="btn go" onclick={askJob} disabled={!!busy || !jobText.trim()}>Start one-shot job…</button>
+        </div>
       {/if}
     </section>
 
@@ -281,6 +391,42 @@
   .pair.tight {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
+  }
+  .files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .files li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+  }
+  .x {
+    background: none;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .jobrow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .grow {
+    flex: 1;
+  }
+  textarea.field {
+    resize: vertical;
+    min-height: 120px;
   }
   .btn.stop {
     border-color: var(--critical);

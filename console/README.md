@@ -13,12 +13,12 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 | Projects | A card per project: state, current or last cycle, gate main, tests, 24 h estimate, merged/failed, what waits on you |
 | Topology | The lead, area leads and builders/scouts of a cycle as a stepped tree. Click an agent for its model, context size, the brief it was given, tools used, branch and final report. Live while a cycle runs; any past cycle can be picked |
 | Progress | Cycles, cost estimates, tests on main over time, gate verdicts |
-| Inbox | Messages to the lead in three tiers, with attachments; the lead's replies; questions the lead asks you |
+| Inbox | Messages to the lead in three tiers, with attachments; the lead's replies; questions the lead asks you; one-shot jobs, which can be started again from here |
 | Notes | The lead's plan (`STATE.md`), journal, QA issues, other docs on main |
 | Gallery | Screenshots the gate took of the newest passing build, by day |
 | Digest | The morning digest and its spoken version (written by `workstation/agent-digest`) |
 | Usage | Tokens and cost estimates by model, role and cycle, computed from the transcripts |
-| Controls | Halt, resume, stop at a set time, cycle cap, budget, models, gate pause, audit log |
+| Controls | Halt, resume, a one-shot job (one cycle for the work you describe, then halted again), stop at a set time, cycle cap, budget, models, gate pause, audit log |
 
 ## How it gets its data
 

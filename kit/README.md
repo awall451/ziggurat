@@ -10,12 +10,14 @@ Update a VM that already runs the kit with `sudo bash vm/install.sh --upgrade` w
 | `vm/bin/lead-cycle` | one headless lead cycle (budget, daily cap, usage-limit backoff, ledger, owner inbox) |
 | `vm/bin/gate-status`, `agent-kit-status` | verdicts, owner overview |
 | `vm/bin/agent-kit-halt`, `agent-kit-resume`, `agent-kit-halt-at` | stop now, undo a stop, stop at a set time (`agent-kit-stop` is the old name for halt) |
+| `vm/bin/agent-kit-oneshot` | one cycle for one job from the owner on a halted team, then halted again (`start`, `finish`, `reap`) |
+| `vm/bin/gate-wait` | for the lead: wait for the gate's verdict on submitted branches (used in a one-shot job) |
 | `vm/bin/agent-kit-caps`, `agent-kit-gate`, `agent-kit-units` | brakes and models, gate pause, the team's own units |
 | `vm/bin/agent-kit-inbox` | owner side of the inbox: checked delivery of a message, close |
 | `vm/bin/owner-inbox`, `owner-inbox-hook`, `vm/lead-settings.json` | lead side: read, reply, ask; mid-cycle delivery to the lead's session |
 | `vm/gate/bin/gate-run` | the gate: fetch `ready/*`, test as `gaterun`, fast-forward `main` |
 | `vm/agent.env` | proxy, PATH, model and safety env for agent processes |
-| `vm/systemd/` | `agent-kit-lead` (cycles), `agent-kit-gate` (every 2 min) and `agent-kit-tick` (scheduled stop) timers |
+| `vm/systemd/` | `agent-kit-lead` (cycles), `agent-kit-gate` (every 2 min) and `agent-kit-tick` (scheduled stop, lost one-shot jobs) timers |
 | `vm/tests/run.sh` | script tests; run anywhere with `bash kit/vm/tests/run.sh` |
 
 The project folder supplies `CHARTER.md`, `GATE-CONTRACT.md`, `lead-cycle.md`,

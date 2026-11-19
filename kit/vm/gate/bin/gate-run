@@ -30,6 +30,10 @@ grep -q '^stop' "$STATE/control" 2>/dev/null && exit 0
 # The gate can also be paused on its own (agent-kit-gate pause).
 [ -e "$STATE/gate/paused" ] && exit 0
 set -a; source /etc/agent-kit/agent.env; set +a
+# agent.env is written for agent processes: its PATH starts with a folder the
+# agent can write to. This script is root, so it keeps its own PATH (the checks
+# get an explicit one below).
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 $GK -C "$BARE" fetch -q --prune "$WORKSPACE" "+refs/heads/ready/*:refs/candidates/*" || { echo "fetch failed"; exit 1; }
 

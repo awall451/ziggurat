@@ -1,8 +1,9 @@
 #!/bin/bash
-# Tests for the kit's owner-inbox, hook, caps, schedule and unit-scan scripts.
+# Tests for the kit's owner-inbox, hook, caps, schedule, one-shot and unit-scan scripts.
 # Runs anywhere, as any user, in a temp folder:   bash kit/vm/tests/run.sh
 # (Scripts that drive systemd, agent-kit-halt and agent-kit-resume, are only
-# syntax-checked here; they are exercised on a real VM.)
+# syntax-checked here; they are exercised on a real VM. agent-kit-oneshot runs
+# against a stub systemctl.)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 BIN=$HERE/../bin
@@ -149,6 +150,188 @@ check "unit whose script runs claude" 'grep -q "^strategist.service token " <<< 
 check "plain service is left alone" 'grep -q "^bot.service other " <<< "$units"'
 check "keep list wins" 'grep -q "^report.service keep " <<< "$units"'
 check "token list adds a unit" 'grep -q "^listed.service token " <<< "$units"'
+
+echo "== agent-kit-oneshot"
+# systemctl is replaced by a stub that records its calls. The script sets its
+# own PATH (it runs as root), so the stub goes in through AGENT_KIT_PATH.
+FB=$T/fakebin
+mkdir -p "$FB"
+cat > "$FB/systemctl" <<'EOF'
+#!/bin/bash
+echo "$*" >> "$FAKE_LOG"
+case "$1" in
+  is-active) echo "${FAKE_ACTIVE:-inactive}" ;;
+  start) [ -z "${FAKE_START_FAIL:-}" ] ;;
+esac
+EOF
+chmod 755 "$FB/systemctl"
+export AGENT_KIT_LOCK=$T/ctl.lock FAKE_LOG=$T/systemctl.log
+shot() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-oneshot" "$@"; }
+job() { tar -c -C "$T/work/j" . | shot start "$1" owner; }
+J=20260101T120000Z-o-job1 J2=20260101T120100Z-o-job2
+mkdir -p "$T/work/j"; echo "Fix the menu bug and soften the title music. Code word BASALT." > "$T/work/j/body.md"
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+refuse "one-shot on a team that is not halted" job $J
+check "a refused job stores nothing" '[ ! -e "$S/inbox/$J" ] && [ ! -e "$S/oneshot" ]'
+echo "stop owner halt for the night 2026-01-01T00:00:00+00:00" > "$S/control"
+FAKE_ACTIVE=active refuse "one-shot while a cycle is still running" job $J
+refuse "one-shot with a bad id" job ../../etc/x
+echo "1000000000 old window" > "$S/halt-at"
+job $J > /dev/null
+check "job stored as an owner message" 'grep -q "^Tier: oneshot$" "$S/inbox/$J/message.md" && grep -q BASALT "$S/inbox/$J/message.md"'
+check "marker names the job" '[ "$(cut -d" " -f1 "$S/oneshot")" = "$J" ]'
+check "control lets this one cycle and the gate run" 'grep -q "^run oneshot $J " "$S/control"'
+check "one cycle started, timer left alone" 'grep -qx "start --no-block agent-kit-lead.service" "$FAKE_LOG" && ! grep -q "enable" "$FAKE_LOG"'
+check "the job is not injected mid-cycle" '[ ! -e "$S/inbox/.inject/$J" ]'
+check "a stop time already past is dropped" '[ ! -e "$S/halt-at" ]'
+refuse "second job while one is in progress" job $J2
+rules=$("$BIN/owner-inbox" oneshot $J)
+check "lead gets the one-shot rules with the job id" 'grep -q "## One-shot job" <<< "$rules" && grep -q "owner-inbox reply $J done" <<< "$rules" && grep -q "gate-wait" <<< "$rules"'
+check "the rules carry the job itself" 'grep -q BASALT <<< "$rules"'
+headline=$("$BIN/owner-inbox" oneshot $J --head)
+check "the notice for the top of the prompt names the job and protects leftover work" 'grep -q "Read this first" <<< "$headline" && grep -q "$J" <<< "$headline" && grep -q "do not resume, finish, rebase or remove" <<< "$headline"'
+refuse "one-shot rules with an unknown option" "$BIN/owner-inbox" oneshot $J --tail
+check "the job text is in the lead's prompt" '"$BIN/owner-inbox" prompt | grep -q BASALT'
+refuse "one-shot rules for a message that does not exist" "$BIN/owner-inbox" oneshot 20250101T000000Z-o-nope
+NJ=20260101T120200Z-o-midjob
+tarball n | "$BIN/agent-kit-inbox" put $NJ note owner > /dev/null
+check "a note during a one-shot job is delivered mid-cycle" '[ "$(cat "$S/inbox/.inject/$NJ")" = note ] && hook LEAD null | grep -q "NOTE: weigh it"'
+shot finish > /dev/null
+check "the end of the job halts the team again" 'grep -q "^stop one-shot job $J ended " "$S/control" && [ ! -e "$S/oneshot" ]'
+before=$(cat "$S/control")
+shot finish > /dev/null
+check "a normal cycle's end changes nothing" '[ "$(cat "$S/control")" = "$before" ]'
+FAKE_START_FAIL=1 refuse "cycle that cannot start" job $J2
+check "a failed start leaves the team halted" '[ "$(cat "$S/control")" = "$before" ] && [ ! -e "$S/oneshot" ]'
+check "a failed start leaves no job in the inbox" '[ ! -e "$S/inbox/$J2" ]'
+FAKE_START_FAIL=1 refuse "cycle that cannot start, for a job already stored" job $J
+check "a job that was stored before is kept when its restart fails" '[ -f "$S/inbox/$J/message.md" ]'
+job $J2 > /dev/null
+check "a job that did not start can be retried" 'grep -q "^run oneshot $J2 " "$S/control"'
+echo "run 2026-01-01T01:00:00+00:00" > "$S/control"   # what agent-kit-resume writes
+shot finish > /dev/null
+check "after a resume the job's end does not halt" 'grep -q "^run 2026" "$S/control" && [ ! -e "$S/oneshot" ]'
+job $J > /dev/null 2>&1
+echo "stop owner halt mid job 2026-01-01T02:00:00+00:00" > "$S/control"   # what agent-kit-halt writes
+shot finish > /dev/null
+check "after a halt the job's end keeps the owner's reason" 'grep -q "^stop owner halt mid job" "$S/control"'
+# A job whose cycle is gone without `finish` (the VM lost power).
+job $J > /dev/null 2>&1
+FAKE_ACTIVE=active shot reap > /dev/null
+check "reap leaves a job with a running cycle alone" '[ -e "$S/oneshot" ]'
+shot reap > /dev/null
+check "reap gives a job that was only just started time" '[ -e "$S/oneshot" ] && grep -q "^run oneshot $J " "$S/control"'
+touch -d "10 minutes ago" "$S/oneshot"
+FAKE_ACTIVE=active shot reap > /dev/null
+check "reap leaves an old job alone while its cycle runs" '[ -e "$S/oneshot" ]'
+shot reap > /dev/null
+check "reap halts again when the cycle is gone" '[ ! -e "$S/oneshot" ] && grep -q "^stop one-shot job $J lost its cycle " "$S/control"'
+before=$(cat "$S/control")
+shot reap > /dev/null
+check "reap without a job changes nothing" '[ "$(cat "$S/control")" = "$before" ]'
+"$BIN/agent-kit-inbox" close $J2 > /dev/null 2>&1 || { mkdir -p "$T/work/c"; cp "$T/work/j/body.md" "$T/work/c/"; tar -c -C "$T/work/c" . | "$BIN/agent-kit-inbox" put $J2 oneshot owner > /dev/null; "$BIN/agent-kit-inbox" close $J2 > /dev/null; }
+refuse "starting a job the owner has closed" job $J2
+check "a refused start changes nothing" '[ "$(cat "$S/control")" = "$before" ] && [ ! -e "$S/oneshot" ]'
+
+# The end of every cycle runs `finish` as root, with an environment whose PATH
+# starts with a folder the agent can write to. Nothing planted there may run.
+mkdir -p "$T/evil"
+for tool in dirname readlink date grep rm mv chmod head stat flock systemctl; do
+  printf '#!/bin/bash\necho "$0" >> "%s/planted"\nexit 1\n' "$T" > "$T/evil/$tool"
+done
+chmod 755 "$T/evil"/*
+PATH=$T/evil:$PATH "$BIN/agent-kit-oneshot" finish > /dev/null 2>&1
+check "finish ignores programs planted in an inherited PATH" '[ ! -e "$T/planted" ]'
+check "the unit runs finish with an empty environment" 'grep -q "^ExecStopPost=+/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/agent-kit/bin/agent-kit-oneshot finish$" "$HERE/../systemd/agent-kit-lead.service"'
+check "the gate keeps its own PATH after reading agent.env" 'sed -n "/source \/etc\/agent-kit\/agent.env/,\$p" "$HERE/../gate/bin/gate-run" | grep -qx "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+check "a failing reap cannot block the scheduled stop" 'grep -qx "ExecStart=-/opt/agent-kit/bin/agent-kit-oneshot reap" "$HERE/../systemd/agent-kit-tick.service" && grep -qx "ExecStart=/opt/agent-kit/bin/agent-kit-halt --if-due" "$HERE/../systemd/agent-kit-tick.service"'
+
+# A long job: the list of open messages cuts it, and says so; the rules carry all of it.
+LJ=20260101T130000Z-o-longjob
+mkdir -p "$T/work/long/att"
+{ head -c 7000 /dev/zero | tr '\0' a; echo; echo "Last task: TAILWORD."; } > "$T/work/long/body.md"
+echo png > "$T/work/long/att/title.png"
+tar -c -C "$T/work/long" . | "$BIN/agent-kit-inbox" put $LJ oneshot owner > /dev/null
+listing=$("$BIN/owner-inbox" prompt)
+check "a cut message says that it was cut and how to read the rest" '! grep -q TAILWORD <<< "$listing" && grep -q "cut here.*owner-inbox show $LJ" <<< "$listing"'
+check "a short message is not marked as cut" '[ "$(grep -c "cut here" <<< "$listing")" = 1 ]'
+rules=$("$BIN/owner-inbox" oneshot $LJ)
+check "a long job reaches the lead whole, with its attachments" 'grep -q TAILWORD <<< "$rules" && grep -q "att/title.png" <<< "$rules"'
+"$BIN/agent-kit-inbox" close $LJ > /dev/null
+
+check "halt and resume drop the marker" 'grep -q "rm -f \"\$STATE/oneshot\"" "$BIN/agent-kit-halt" && grep -q "rm -f \"\$STATE/oneshot\"" "$BIN/agent-kit-resume"'
+
+echo "== gate-wait"
+git init -q "$T/ws"
+git -C "$T/ws" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m one
+git -C "$T/ws" branch ready/menu
+git -C "$T/ws" branch ready/music
+sha=$(git -C "$T/ws" rev-parse ready/menu)
+mkdir -p "$S/gate/results"
+verdict() { jq -n --arg t "$1" --arg s "$2" --arg st "$3" '{topic:$t, sha:$s, status:$st, detail:"detail", log:"/log"}' > "$S/gate/results/$1.json"; }
+verdict menu "$sha" merged
+echo "run 2026-01-01T03:00:00+00:00" > "$S/control"
+out=$("$BIN/gate-wait" menu)
+check "verdict for the submitted commit is printed" 'grep -q "MERGED.*menu" <<< "$out"'
+"$BIN/gate-wait" --max 0 menu music > /dev/null; rc=$?
+check "a missing verdict means: still waiting" '[ "$rc" = 3 ]'
+verdict music 0000000000000000000000000000000000000000 failed
+"$BIN/gate-wait" --max 0 music > /dev/null; rc=$?
+check "a verdict for an older commit does not count" '[ "$rc" = 3 ]'
+echo "stop owner 2026-01-01T04:00:00+00:00" > "$S/control"
+out=$("$BIN/gate-wait" music); rc=$?
+check "no waiting on a paused gate" '[ "$rc" = 3 ] && grep -q "gate is paused" <<< "$out"'
+check "one call fits in a default two-minute tool call" '[ "$(sed -n "s/^max=\([0-9]*\)$/\1/p" "$BIN/gate-wait")" -le 100 ]'
+refuse "topic that was never submitted" "$BIN/gate-wait" nothing-here
+refuse "topic with shell text" "$BIN/gate-wait" 'x; id'
+
+echo "== lead-cycle"
+# A stub `claude` keeps the prompt it was given and answers like a finished cycle.
+K=$T/kit
+mkdir -p "$K"
+ln -s "$BIN" "$K/bin"
+echo "TEAM-CYCLE-TEXT: step 1, resume or remove leftover worktrees." > "$K/lead-cycle.md"
+cat > "$FB/claude" <<'EOF'
+#!/bin/bash
+while [ $# -gt 0 ]; do [ "$1" = -p ] && { printf '%s' "$2" > "$FAKE_PROMPT"; break; }; shift; done
+echo '{"total_cost_usd":0.5,"num_turns":9,"result":"cycle summary","is_error":false}'
+EOF
+chmod 755 "$FB/claude"
+export FAKE_PROMPT=$T/prompt.txt
+cycle() { rm -f "$FAKE_PROMPT"; AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-cycle"; }
+LC=20260101T140000Z-o-cyclejob
+mkdir -p "$T/work/lc"; echo "Make the title louder. Code word GNEISS." > "$T/work/lc/body.md"
+echo "stop owner halt 2026-01-01T05:00:00+00:00" > "$S/control"
+tar -c -C "$T/work/lc" . | shot start $LC owner > /dev/null
+# The daily cap is used up: six counted cycles today.
+mkdir -p "$S/ledger"
+for i in 1 2 3 4 5 6; do jq -nc --arg d "$(date +%F)" '{date:$d, counted:true}'; done > "$S/ledger/cycles.jsonl"
+out=$(cycle 2>&1)
+check "a one-shot cycle runs although the daily cap is used up" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$LC" <<< "$out"'
+check "its prompt starts with the notice, before the team's own text" '[ "$(head -c 16 "$FAKE_PROMPT")" = "**Read this firs" ] && [ "$(grep -n "Read this first" "$FAKE_PROMPT" | head -1 | cut -d: -f1)" -lt "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" ]'
+check "its prompt ends with the job and the rules" '[ "$(grep -n "## One-shot job" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "## Owner inbox" "$FAKE_PROMPT" | cut -d: -f1)" ] && grep -q GNEISS "$FAKE_PROMPT" && [ "$(tail -1 "$FAKE_PROMPT")" = "Then end the cycle. Do not look for more work." ]'
+check "the ledger line names the job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = "$LC" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .turns)" = 9 ]'
+check "no cycle is left marked as in progress" '[ ! -e "$S/ledger/current" ]'
+# A marker that does not agree with the control file must not change a normal cycle.
+echo "run 2026-01-01T06:00:00+00:00" > "$S/control"
+out=$(cycle 2>&1)
+check "a normal cycle still stops at the daily cap" 'grep -q "daily cycle cap reached" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
+out=$(cycle 2>&1)
+check "a stale marker does not make a normal cycle a one-shot" '[ -s "$FAKE_PROMPT" ] && ! grep -q "One-shot job\|Read this first" "$FAKE_PROMPT" && grep -q "oneshot=no" <<< "$out"'
+check "a normal cycle's prompt starts with the team's own text" '[ "$(head -c 15 "$FAKE_PROMPT")" = "TEAM-CYCLE-TEXT" ]'
+check "a normal cycle's ledger line names no job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = null ]'
+echo "stop owner 2026-01-01T07:00:00+00:00" > "$S/control"
+out=$(cycle 2>&1)
+check "no cycle on a halted team" 'grep -q "control=stop" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+# A one-shot whose job cannot be read must not run as a normal cycle.
+rm -f "$S/oneshot"
+tar -c -C "$T/work/lc" . | shot start $LC owner > /dev/null
+mv "$K/bin" "$K/bin.off"; mkdir "$K/bin"
+out=$(cycle 2>&1)
+check "a one-shot cycle without its job does not run" 'grep -q "could not build its prompt" <<< "$out" && [ ! -e "$FAKE_PROMPT" ] && [ ! -e "$S/ledger/current" ]'
+rmdir "$K/bin"; mv "$K/bin.off" "$K/bin"
+shot finish > /dev/null
 
 echo "== syntax"
 for f in "$BIN"/* "$HERE/../install.sh" "$HERE/../gate/bin/gate-run"; do

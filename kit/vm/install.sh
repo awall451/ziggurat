@@ -64,7 +64,7 @@ if [ -n "$PDIR" ]; then
   install -m 644 "$PDIR/CHARTER.md" "$PDIR/GATE-CONTRACT.md" "$PDIR/lead-cycle.md" /opt/agent-kit/
 fi
 for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
-         agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox owner-inbox; do
+         agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot owner-inbox gate-wait; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 

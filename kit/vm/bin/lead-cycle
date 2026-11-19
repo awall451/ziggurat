@@ -2,10 +2,13 @@
 # lead-cycle: one headless lead cycle. Runs as `agent` from agent-kit-lead.service.
 # Root-owned; config in /etc/agent-kit/project.env, owner's changes in caps.env.
 set -uo pipefail
-source /etc/agent-kit/project.env
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+KIT=${AGENT_KIT_HOME:-/opt/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
 # Brakes and models changed by the owner (agent-kit-caps) win over the defaults.
 # shellcheck source=/dev/null
-[ -f /etc/agent-kit/caps.env ] && source /etc/agent-kit/caps.env
+[ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
 LEDGER=$STATE/ledger/cycles.jsonl
 mkdir -p "$STATE/ledger/runs"
 
@@ -16,12 +19,24 @@ if [ -f "$STATE/halt-at" ]; then
   if [[ ${due:-} =~ ^[0-9]+$ ]] && [ "$(date +%s)" -ge "$due" ]; then echo "scheduled stop time has passed: not running"; exit 0; fi
 fi
 
+# A one-shot job (agent-kit-oneshot): this cycle works on one owner message and
+# the team halts again when it ends. The marker and the control line are both
+# root-owned and must agree, so a stale marker cannot change a normal cycle.
+oneshot=
+if [ -f "$STATE/oneshot" ]; then
+  read -r oneshot _ < "$STATE/oneshot"
+  { [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$ ]] && grep -q "^run oneshot $oneshot " "$STATE/control" 2>/dev/null \
+    && [ -f "$STATE/inbox/$oneshot/message.md" ]; } || oneshot=
+fi
+
 today=$(date +%F)
 # Only real work counts toward the daily cap: attempts that hit a usage limit
 # (counted:false) must not use it up while waiting for the window to reset.
 n_today=$(jq -s --arg d "$today" '[.[] | select(.date == $d and .counted != false)] | length' "$LEDGER" 2>/dev/null)
 n_today=${n_today:-0}
-if [ "$n_today" -ge "$MAX_CYCLES_PER_DAY" ]; then
+# The daily cap is a brake on unattended cycles. A one-shot job is the owner
+# asking for this cycle, so it runs even when the cap is used up (it still counts).
+if [ -z "$oneshot" ] && [ "$n_today" -ge "$MAX_CYCLES_PER_DAY" ]; then
   echo "daily cycle cap reached ($n_today/$MAX_CYCLES_PER_DAY)"; exit 0
 fi
 
@@ -39,12 +54,24 @@ printf '%s %s\n' "$sid" "$start" > "$STATE/ledger/current"
 
 # The prompt is the team's lead-cycle.md plus the owner-inbox protocol and any
 # open owner messages.
-prompt=$(cat /opt/agent-kit/lead-cycle.md)
-if [ -x /opt/agent-kit/bin/owner-inbox ]; then
-  inbox=$(/opt/agent-kit/bin/owner-inbox prompt 2>/dev/null) && [ -n "$inbox" ] && prompt+=$'\n\n'"$inbox"
+prompt=$(cat "$KIT/lead-cycle.md")
+if [ -x "$KIT/bin/owner-inbox" ]; then
+  inbox=$("$KIT/bin/owner-inbox" prompt 2>/dev/null) && [ -n "$inbox" ] && prompt+=$'\n\n'"$inbox"
+fi
+if [ -n "$oneshot" ]; then
+  # The job and its rules go last, and a notice that this is a one-shot cycle
+  # goes before the team's own instructions, which say the opposite in places.
+  # Without them this would be a normal cycle the owner did not ask for.
+  head=$("$KIT/bin/owner-inbox" oneshot "$oneshot" --head 2>/dev/null)
+  job=$("$KIT/bin/owner-inbox" oneshot "$oneshot" 2>/dev/null)
+  if [ -z "$head" ] || [ -z "$job" ]; then
+    rm -f "$STATE/ledger/current"
+    echo "one-shot job $oneshot: could not build its prompt: not running"; exit 1
+  fi
+  prompt=$head$'\n\n'$prompt$'\n\n'$job
 fi
 settings=()
-[ -f /opt/agent-kit/lead-settings.json ] && settings=(--settings /opt/agent-kit/lead-settings.json)
+[ -f "$KIT/lead-settings.json" ] && settings=(--settings "$KIT/lead-settings.json")
 
 export CLAUDE_CODE_RETRY_WATCHDOG=1
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
@@ -71,16 +98,17 @@ fi
 # A cycle that was stopped leaves an empty result file. jq prints nothing for
 # an empty file and still exits 0, so check for content first: otherwise a
 # halted cycle would get no ledger line at all.
-if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" \
+if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" \
       --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted \
   '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
+    oneshot:(if $oneshot == "" then null else $oneshot end),
     cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
     session:(.session_id // $sid), is_error:(.is_error // null),
     summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; }; then
-  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --argjson rc $rc \
+  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --argjson rc $rc \
      --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --arg err "$(tail -c 600 "$run.err")" \
      '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
-       session:$sid, summary:((if $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
+       oneshot:(if $oneshot == "" then null else $oneshot end), session:$sid, summary:((if $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
 fi
-echo "cycle done rc=$rc limited=$limited halted=$halted in $((SECONDS - t0))s"
+echo "cycle done rc=$rc limited=$limited halted=$halted oneshot=${oneshot:-no} in $((SECONDS - t0))s"
 exit 0

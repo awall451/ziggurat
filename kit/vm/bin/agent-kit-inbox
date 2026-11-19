@@ -4,6 +4,7 @@
 # lead trust what it finds there.
 #
 #   agent-kit-inbox put <id> <tier> <from> [<ask-id>]   message on stdin (see below)
+#                                                       (tier `oneshot` is set by agent-kit-oneshot)
 #   agent-kit-inbox close <id>                          owner is done with this message
 #   agent-kit-inbox list                                ids, one per line
 #
@@ -28,7 +29,7 @@ case "${1:-}" in
   put)
     id=${2:-} tier=${3:-} from=${4:-} reply_to=${5:--}
     [[ $id =~ $ID_RE ]] || die "bad id"
-    [[ $tier =~ ^(note|priority|urgent)$ ]] || die "tier must be note, priority or urgent"
+    [[ $tier =~ ^(note|priority|urgent|oneshot)$ ]] || die "tier must be note, priority or urgent"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     [ "$reply_to" = "-" ] || [[ $reply_to =~ $ASK_RE ]] || die "bad ask id"
     [ ! -e "$IN/$id" ] || die "message $id already exists"
@@ -70,8 +71,14 @@ case "${1:-}" in
     find "$tmp" -type f -exec chmod 644 {} +
     mv "$tmp" "$IN/$id" || die "could not publish the message"
     trap - EXIT
-    # note = read at the next cycle start only; the others are also delivered mid-cycle.
-    if [ "$tier" != note ]; then printf '%s\n' "$tier" > "$IN/.inject/$id"; fi
+    # note = read at the next cycle start only; priority and urgent are also
+    # delivered mid-cycle. During a one-shot job no cycle follows, so a note
+    # (the owner answering a question, say) is delivered mid-cycle as well.
+    # A one-shot job itself is in its cycle's prompt and needs no delivery.
+    case "$tier" in
+      priority | urgent) printf '%s\n' "$tier" > "$IN/.inject/$id" ;;
+      note) [ ! -e "$STATE/oneshot" ] || printf 'note\n' > "$IN/.inject/$id" ;;
+    esac
     echo "delivered $id tier=$tier attachments=$n"
     ;;
 

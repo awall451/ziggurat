@@ -22,6 +22,12 @@ export async function POST({ params, request, locals }) {
       case 'resume':
         out = await controls.resume(user, project);
         break;
+      case 'oneshot':
+        out = await controls.oneshot(user, project, { text: b.text, attachments: b.attachments });
+        break;
+      case 'oneshot-again':
+        out = await controls.oneshotAgain(user, project, b.id);
+        break;
       case 'halt-at':
         out = await controls.haltAt(user, project, b.epoch, b.reason);
         break;

@@ -78,6 +78,8 @@
     <div class="note s-failed">VM not reachable{p.status.error ? ` (${p.status.error})` : ''}. Showing the last pulled data.</div>
   {:else if p.status.state === 'halted'}
     <div class="note dim">Halted: <span class="mono">{p.status.control}</span></div>
+  {:else if p.status.oneshot}
+    <div class="note dim">One-shot job in progress. The team halts again when this cycle ends.</div>
   {/if}
 
   <div class="tabs">

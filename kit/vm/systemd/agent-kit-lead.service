@@ -8,6 +8,10 @@ User=agent
 WorkingDirectory=/home/agent
 EnvironmentFile=/etc/agent-kit/agent.env
 ExecStart=/opt/agent-kit/bin/lead-cycle
+# After a one-shot job the team halts again (does nothing for a normal cycle).
+# This runs as root, so it must not get this unit's environment: agent.env puts
+# a folder the agent can write to first in PATH.
+ExecStopPost=+/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/agent-kit/bin/agent-kit-oneshot finish
 TimeoutStartSec=12h
 # A halt stops the whole cycle; lead-cycle gets a minute to write its ledger line.
 TimeoutStopSec=60

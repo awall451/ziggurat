@@ -71,7 +71,7 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 ## 4. Console: what is next
 
 Done: projects, live topology with history, progress, usage, owner inbox with replies and questions,
-halt/resume and brakes, all through fixed kit scripts.
+halt/resume and brakes, one-shot jobs on a halted team, all through fixed kit scripts.
 
 Later:
 - Create a project from the console: pick a target, run the sandbox playbooks, install the kit and a team bundle.

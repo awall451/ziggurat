@@ -45,6 +45,7 @@ export async function projectView(project, { wait = 3500 } = {}) {
       haltAt: status.haltAt || null,
       gatePaused: !!status.gatePaused,
       kitVersion: status.kitVersion || null,
+      oneshot: status.oneshot || null,
       vmNow: status.vmNow || null,
       error: status.error || null
     },
@@ -53,6 +54,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     asks: openAskCount(project),
     // Owner feedback and controls need the kit's 0.2 scripts on the VM.
     canControl: !!status.kitVersion,
+    // One-shot jobs need kit 0.3.
+    canOneshot: !!status.canOneshot,
     cycle: current
       ? { number: current.number, started: current.started, agents: current.agents }
       : sessions[0]

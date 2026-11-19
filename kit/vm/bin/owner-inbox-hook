@@ -49,7 +49,11 @@ for id in "${waiting[@]}"; do
     # The lead itself. noclobber makes "first one wins" atomic when several
     # tool calls finish at the same moment.
     (set -o noclobber; : > "$S/outbox/.seen/$id") 2>/dev/null || continue
-    if [ "$tier" = urgent ]; then how="URGENT: handle this before you start any new work."; else how="PRIORITY: finish what is running, then plan this into this cycle or the next."; fi
+    case "$tier" in
+      urgent) how="URGENT: handle this before you start any new work." ;;
+      note) how="NOTE: weigh it in the work of this cycle." ;;
+      *) how="PRIORITY: finish what is running, then plan this into this cycle or the next." ;;
+    esac
     out+="[agent-kit owner notice] OWNER MESSAGE $id arrived. $how Read it in full with: owner-inbox show $id"$'\n'
     out+="$(sed '1,/^---$/d' "$msg" | head -c 1500)"$'\n\n'
   elif [ "$tier" = urgent ]; then

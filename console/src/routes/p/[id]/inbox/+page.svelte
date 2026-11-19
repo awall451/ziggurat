@@ -25,7 +25,7 @@
   let showClosed = $state(false);
   let picker = $state();
 
-  const messages = $derived(data.messages.filter((m) => showClosed || m.open || m.error));
+  const messages = $derived(data.messages.filter((m) => showClosed || m.open || (m.error && !m.closed)));
   const hiddenCount = $derived(data.messages.length - messages.length);
 
   async function upload(list) {
@@ -98,6 +98,38 @@
     }
   }
 
+  // A one-shot job can be started again while it is open: one that was not
+  // started, or whose cycle ended before the lead finished it. Starting spends
+  // usage, so it is asked for and goes through the Controls action (audited).
+  // The status shown can be a few seconds old. A job started a moment ago is
+  // running, whatever that status still says.
+  const justStarted = (m) => m.tier === 'oneshot' && !!m.startedAt && p.now - Date.parse(m.startedAt) < 90_000;
+  const canStart = (m) =>
+    m.tier === 'oneshot' && p.canOneshot && m.open && p.status.state === 'halted' && !p.status.oneshot && !justStarted(m) && (m.delivered || m.error);
+  async function startJob(m) {
+    const ok = window.confirm(
+      `Start this one-shot job on ${p.name}?\n\n${lead} runs one cycle for it, then the team is halted again. This spends subscription usage.`
+    );
+    if (!ok || busy) return;
+    busy = true;
+    problem = '';
+    try {
+      const res = await fetch(`/p/${p.id}/controls/act`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'oneshot-again', id: m.id })
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.message || 'The job could not be started');
+      if (out.started === false) problem = out.detail;
+      await invalidateAll();
+    } catch (e) {
+      problem = e.message;
+    } finally {
+      busy = false;
+    }
+  }
+
   function answer(ask) {
     replyTo = ask;
     tier = 'priority';
@@ -109,10 +141,15 @@
   const REPLY_WORD = { done: 'Done', planned: 'Planned', declined: 'Declined' };
 
   function stateOf(m) {
-    if (m.error) return ['failed', 'Not delivered'];
+    if (m.closed && !m.delivered) return ['idle', 'Closed by you'];
+    if (m.error) return ['failed', m.tier === 'oneshot' ? 'Not started' : 'Not delivered'];
+    if (m.tier === 'oneshot' && !m.reply && !m.closed && (p.status.oneshot?.id === m.id || justStarted(m))) return ['running', `${lead} is working on it`];
     if (!m.delivered) return ['queued', 'Sending'];
     if (m.reply) return [m.reply.status === 'declined' ? 'interrupted' : 'done', `${lead} replied: ${REPLY_WORD[m.reply.status].toLowerCase()}`];
     if (m.closed) return ['idle', 'Closed by you'];
+    // Delivered means its cycle was started. Halted again with no reply: the
+    // cycle ended first (usage limit, budget, a halt).
+    if (m.tier === 'oneshot' && p.status.state === 'halted') return ['interrupted', 'Its cycle ended without a reply'];
     if (m.seen) return ['waiting', `Seen by ${lead}`];
     return ['idle', p.status.state === 'halted' ? 'On the VM, read on resume' : 'On the VM, not read yet'];
   }
@@ -171,7 +208,13 @@
         </div>
 
         {#if p.status.state === 'halted'}
-          <p class="dim small">The team is halted. The message is delivered now and read when you resume.</p>
+          <p class="dim small">
+            The team is halted, so no cycle is running and all three kinds behave the same: the message is stored on the VM now and
+            {lead} reads it at the start of the first cycle after you resume. Sending it starts nothing and spends nothing.
+            {#if p.canOneshot}To have something done now without resuming the team, start a <a href="/p/{p.id}/controls#oneshot">one-shot job</a>.{/if}
+          </p>
+        {:else if p.status.oneshot}
+          <p class="dim small">A one-shot job is in progress. Whatever kind you pick, the message reaches {lead} during this cycle.</p>
         {:else if p.status.state === 'unreachable'}
           <p class="s-failed small">The VM cannot be reached. The message is saved here and can be retried.</p>
         {/if}
@@ -191,7 +234,7 @@
         {@const [cls, word] = stateOf(m)}
         <article class="panel msg">
           <header>
-            <span class="pill tp-{m.tier}">{m.tier}</span>
+            <span class="pill tp-{m.tier}">{m.tier === 'oneshot' ? 'one-shot job' : m.tier}</span>
             <span class="pill {cls}">{word}</span>
             {#if m.nudged}<span class="dim small">{m.nudged} agent{m.nudged > 1 ? 's' : ''} told to wrap up</span>{/if}
             <span class="grow"></span>
@@ -229,7 +272,8 @@
           {/if}
           {#if m.error || (m.open && m.delivered)}
             <footer>
-              {#if m.error}<button class="btn quiet small" onclick={() => act('send', { retry: m.id })}>Retry</button>{/if}
+              {#if m.error && m.tier !== 'oneshot'}<button class="btn quiet small" onclick={() => act('send', { retry: m.id })}>Retry</button>{/if}
+              {#if canStart(m)}<button class="btn quiet small" onclick={() => startJob(m)} disabled={busy}>{m.delivered ? 'Start it again…' : 'Start the job…'}</button>{/if}
               {#if m.open && !m.closed}<button class="btn quiet small" onclick={() => act('close', { id: m.id })}>Close message</button>{/if}
             </footer>
           {/if}
@@ -442,6 +486,9 @@
   }
   .tp-priority {
     color: var(--warn);
+  }
+  .tp-oneshot {
+    color: var(--good);
   }
   .tp-urgent {
     color: var(--critical);

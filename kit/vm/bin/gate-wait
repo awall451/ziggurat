@@ -1,0 +1,57 @@
+#!/bin/bash
+# gate-wait [--max <seconds>] <topic>...   wait for the gate's verdict on ready/<topic> branches.
+#
+# For a cycle that no later cycle follows (a one-shot job): the lead has to see
+# the verdicts itself. Waits until every topic has a verdict for the commit its
+# ready branch points at, then prints them. Readable by everyone, changes nothing.
+#
+# Exit 0: every topic has a verdict. Exit 3: some still wait after --max
+# seconds; run it again. The default is 90: a tool call is cut off after two
+# minutes unless the caller asks for longer, and a call that is cut off tells
+# the lead nothing.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+R=$STATE/gate/results
+max=90
+if [ "${1:-}" = "--max" ]; then
+  [[ ${2:-} =~ ^[0-9]{1,5}$ ]] || { echo "usage: gate-wait [--max <seconds>] <topic>..." >&2; exit 2; }
+  max=$2
+  shift 2
+fi
+[ $# -gt 0 ] || { echo "usage: gate-wait [--max <seconds>] <topic>..." >&2; exit 2; }
+
+topics=()
+for t in "$@"; do
+  t=${t#ready/}
+  [[ $t =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]] || { echo "bad topic: $t" >&2; exit 2; }
+  git -C "$WORKSPACE" rev-parse -q --verify "refs/heads/ready/$t" > /dev/null 2>&1 || { echo "no branch ready/$t in $WORKSPACE" >&2; exit 2; }
+  topics+=("$t")
+done
+
+# A verdict counts only if it is for the commit the branch points at now.
+judged() {
+  local f=$R/${1//\//_}.json sha
+  sha=$(git -C "$WORKSPACE" rev-parse "refs/heads/ready/$1" 2>/dev/null)
+  [ -f "$f" ] && [ "$(jq -r '.sha // ""' "$f" 2>/dev/null)" = "$sha" ]
+}
+
+end=$((SECONDS + max))
+while :; do
+  waiting=()
+  for t in "${topics[@]}"; do judged "$t" || waiting+=("$t"); done
+  [ ${#waiting[@]} -eq 0 ] && break
+  if grep -q '^stop' "$STATE/control" 2>/dev/null || [ -e "$STATE/gate/paused" ]; then
+    echo "the gate is paused: no verdict will come for: ${waiting[*]}"
+    exit 3
+  fi
+  if [ "$SECONDS" -ge "$end" ]; then
+    echo "still waiting after ${max}s for: ${waiting[*]}  (run gate-wait again)"
+    exit 3
+  fi
+  sleep "${GATE_WAIT_STEP:-15}"
+done
+for t in "${topics[@]}"; do
+  jq -r '"\(.status|ascii_upcase)\t\(.topic)\t\(.sha[0:9])  \(.detail)\n  log: \(.log)"' "$R/${t//\//_}.json"
+done
