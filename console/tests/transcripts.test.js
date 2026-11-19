@@ -80,6 +80,16 @@ describe('listSessions', () => {
     expect(rows[0]).toMatchObject({ state: 'interrupted', number: 2, agents: 2 });
   });
 
+  it('shows a cycle that ended after the last ledger pull as ending, not interrupted', () => {
+    const ended = fs.statSync(path.join(project.paths.transcripts, project.slug, `${SID}.jsonl`)).mtimeMs;
+    // The ledger was copied before the cycle ended: its line may just not be here yet.
+    expect(listSessions(project, null, { ledgerAt: ended - 1000 })[0].state).toBe('ending');
+    // Copied well after: no line means the cycle really was cut off.
+    expect(listSessions(project, null, { ledgerAt: ended + 600_000 })[0].state).toBe('interrupted');
+    // A cycle the ledger knows keeps its outcome either way.
+    expect(listSessions(project, null, { ledgerAt: ended - 1000 })[1].state).toBe('done');
+  });
+
   it('marks the session in progress as running', () => {
     const rows = listSessions(project, { leadActive: true, session: SID });
     expect(rows[0]).toMatchObject({ live: true, state: 'running' });
@@ -89,6 +99,13 @@ describe('listSessions', () => {
 describe('sessionTree', () => {
   it('rejects ids that are not session ids', () => {
     expect(sessionTree(project, '../etc', { pricing, labeler })).toBeNull();
+  });
+
+  it('marks the lead ending while its ledger line may not be pulled yet', () => {
+    const ended = fs.statSync(path.join(project.paths.transcripts, project.slug, `${SID}.jsonl`)).mtimeMs;
+    expect(sessionTree(project, SID, { pricing, labeler, ledgerAt: ended - 1000 }).nodes[0].status).toBe('ending');
+    expect(sessionTree(project, SID, { pricing, labeler, ledgerAt: ended + 600_000 }).nodes[0].status).toBe('interrupted');
+    expect(sessionTree(project, SID, { pricing, labeler }).nodes[0].status).toBe('interrupted');
   });
 
   it('builds lead, area lead and scout with the right parents', () => {

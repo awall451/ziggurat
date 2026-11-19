@@ -212,7 +212,8 @@
     stroke-width: 2;
     filter: drop-shadow(0 0 5px var(--cyan));
   }
-  .link.l-queued {
+  .link.l-queued,
+  .link.l-ending {
     stroke-dasharray: 5 6;
   }
   .link.l-interrupted {

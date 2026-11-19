@@ -5,6 +5,8 @@
 //              notes, screenshots of the newest passing build, all transcripts
 //   fast pass  every ~15 s while someone is looking at a running project:
 //              just the files of the cycle in progress
+//   end pass   a slow pass as soon as a cycle is seen to have ended, so its
+//              ledger line (cost, outcome) arrives with its last transcript
 //
 // Never deletes, never copies symlinks, and reads agent-owned trees as the
 // agent user, so a misbehaving VM cannot remove, redirect or over-read files.
@@ -20,11 +22,15 @@ const SLOW_EVERY = 15 * 60_000;
 const FAST_EVERY = 15_000;
 const VIEW_WINDOW = 45_000; // a project counts as "being looked at" this long after a request
 
-const state = new Map(); // id -> {slowAt, fastAt, slow, fast, error, viewedAt}
+// ledgerAt: when the last slow pass that copied the ledger began. A cycle that
+// ended after that has no line here yet (transcripts.js shows it as ending).
+// liveSession: the cycle last seen running, to notice when it ends.
+// again: a slow pass was asked for while one ran that began too early.
+const state = new Map(); // id -> {slowAt, fastAt, slow, fast, error, viewedAt, ledgerAt, liveSession, again}
 
 function st(id) {
   let s = state.get(id);
-  if (!s) state.set(id, (s = { slowAt: 0, fastAt: 0, slow: null, fast: null, error: null, viewedAt: 0 }));
+  if (!s) state.set(id, (s = { slowAt: 0, fastAt: 0, slow: null, fast: null, error: null, viewedAt: 0, ledgerAt: null, liveSession: null, again: false }));
   return s;
 }
 
@@ -65,6 +71,8 @@ async function slowPass(project) {
     s.error = status.error || 'unreachable';
     return;
   }
+  // The status is fresh: whatever cycle ended before it is in the ledger now.
+  s.liveSession = status.leadActive ? status.session || true : null;
   const k = project.kit;
   const fleet = project.paths.fleet;
   fs.mkdirSync(project.paths.transcripts, { recursive: true });
@@ -75,10 +83,12 @@ async function slowPass(project) {
   if (errText(t)) errors.push(`transcripts: ${errText(t)}`);
 
   // World-readable state files; `current` only exists on newer kits.
+  const ledgerStart = Date.now();
   const f = await pull(project, [`${k.state}/ledger/cycles.jsonl`, `${k.state}/gate/history.log`, `${k.state}/control`], fleet, {
     maxSize: '32m'
   });
   if (errText(f)) errors.push(`state: ${errText(f)}`);
+  else s.ledgerAt = ledgerStart;
 
   if (status.shotsDir) {
     const day = new Date().toISOString().slice(0, 10);
@@ -109,16 +119,41 @@ async function fastPass(project, session) {
   if (errText(res)) s.error = `live: ${errText(res)}`;
 }
 
-function runSlow(project) {
+/** @param {{again?: boolean}} opts again: if a pass is running, run another after it */
+function runSlow(project, { again = false } = {}) {
   const s = st(project.id);
-  if (s.slow) return s.slow;
+  if (s.slow) {
+    if (again) s.again = true;
+    return s.slow;
+  }
+  s.again = false;
   s.slow = slowPass(project)
     .catch((e) => (s.error = String(e.message || e)))
     .finally(() => {
       s.slowAt = Date.now();
       s.slow = null;
+      if (s.again) runSlow(project);
     });
   return s.slow;
+}
+
+/**
+ * Notice a cycle ending: the lead was running at the last look and is not now.
+ * Its ledger line is written before the service stops, so a pass started now
+ * has it. A pass already running may have copied the ledger too early: run
+ * another after it. Returns true when a pass was asked for.
+ */
+function watchEnd(project, status) {
+  if (!status?.reachable) return false;
+  const s = st(project.id);
+  if (status.leadActive) {
+    s.liveSession = status.session || true;
+    return false;
+  }
+  if (!s.liveSession) return false;
+  s.liveSession = null;
+  runSlow(project, { again: true });
+  return true;
 }
 
 function runFast(project, session) {
@@ -140,6 +175,7 @@ export function touch(project, status = peekStatus(project.id)) {
   const s = st(project.id);
   s.viewedAt = Date.now();
   if (project.pull === false && !status?.reachable) return;
+  if (watchEnd(project, status)) return;
   if (Date.now() - s.slowAt > SLOW_EVERY) runSlow(project);
   else if (status?.leadActive && status.session && Date.now() - s.fastAt > FAST_EVERY) runFast(project, status.session);
 }
@@ -152,6 +188,11 @@ export function pullInfo(id) {
     pulling: !!(s.slow || s.fast),
     error: s.error
   };
+}
+
+/** When the last ledger copy began (ms), or null if none has been made yet. */
+export function ledgerPulledAt(id) {
+  return st(id).ledgerAt;
 }
 
 /** Force a full pull now (the Refresh button). */
@@ -168,6 +209,7 @@ export function startScheduler() {
     for (const p of listProjects()) {
       if (p.pull === false) continue;
       const s = st(p.id);
+      if (watchEnd(p, peekStatus(p.id))) continue;
       if (Date.now() - s.slowAt > SLOW_EVERY) runSlow(p);
       else if (Date.now() - s.viewedAt < VIEW_WINDOW) {
         const status = peekStatus(p.id);

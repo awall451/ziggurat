@@ -214,7 +214,8 @@ textarea.field {
   color: var(--warn);
 }
 .pill.waiting,
-.pill.queued {
+.pill.queued,
+.pill.ending {
   color: var(--cyan-soft);
 }
 
@@ -231,7 +232,8 @@ textarea.field {
 .s-interrupted {
   color: var(--warn);
 }
-.s-queued {
+.s-queued,
+.s-ending {
   color: var(--ink-2);
 }
 
