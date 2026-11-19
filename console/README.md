@@ -146,6 +146,28 @@ you turn it on, the console only ever talks to the sandbox VMs.
    inside the VM, the VM-to-VM block, a `provisioned` snapshot. The VM's ssh host key is read through
    Proxmox and stored.
 
+5. **Install.** Starts by itself once the VM is ready: `sandbox/install/install-team.yml` copies the kit, the
+   rendered team and the seed in, copies the project's `files/` folder (if it has one) to
+   `/root/provision-files`, runs the team's `provision.sh` as root (its text is shown before the dry run),
+   runs the kit installer and checks that the team is installed and stopped.
+6. **Claude sign-in.** With a token saved as `claude-token` in the config folder (one line, from
+   `claude setup-token`, mode 600), the VM gets it and the deploy finishes without you. Without one, the page
+   shows three things to paste on your workstation (an ssh config entry, the VM's host key, one command) and
+   a "check now" button. The check is `claude auth status` on the VM; it spends no tokens.
+7. **Registered, halted.** The project is added to `projects.json` and shows up like any other. Its lead
+   timer is off. Starting the team is your Resume on its Controls tab; the console never does that.
+
+About the token: it is read only to hand it to a VM. It goes to the VM on stdin inside a task whose output is
+never logged, and it is never written to a run folder, the audit log or a page. On the VM it sits in the
+agents' environment, so an agent that prints its environment writes it into its transcript; the console
+hides anything shaped like a token wherever it shows transcript text. One token for several VMs means one
+leak exposes all of them. A project's Controls tab shows how its team is signed in and can apply the saved
+token to a VM with kit 0.3 or later.
+
+A failed install does not harm the VM's snapshot. The page shows
+`qm rollback <vmid> provisioned && qm start <vmid>` for you to run, then "Retry the install", which reads the
+team from its folder again.
+
 What the console will not do: destroy or roll back a VM, touch an id outside the target's range or in
 `criticalVmids`, touch an id that is already in use, run two deploys at once, or start a team. After a failed
 run it shows how far the run got and the commands to clean up by hand. A run that failed after the clone
@@ -155,7 +177,7 @@ Each deploy keeps its inputs, the staged team and every run (inventory, variable
 `console-data/deploys/<id>/`. Nothing there is deleted automatically.
 
 API: `GET/POST /api/deploys`, `GET/DELETE /api/deploys/<id>` (DELETE closes the record only),
-`POST /api/deploys/<id>/dry-run|create|continue`, `GET /api/deploys/<id>/events?run=<run>` (server-sent
+`POST /api/deploys/<id>/dry-run|create|continue|install|login-check|apply-token`, `GET /api/deploys/<id>/events?run=<run>` (server-sent
 events), `GET /api/deploy-sources`.
 
 "Check target" runs one fixed, read-only script on the host (`qm list`, `pct list`, storage, memory, the

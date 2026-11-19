@@ -21,7 +21,8 @@ const DEPLOYS = path.join(DATA_DIR, 'deploys');
 const LOCK = path.join(DEPLOYS, '.lock');
 
 export const PLAYBOOKS = {
-  create: { file: path.join(REPO_DIR, 'sandbox', 'proxmox', 'playbooks', 'create-agent-vm.yml'), timeoutMs: 60 * 60_000 }
+  create: { file: path.join(REPO_DIR, 'sandbox', 'proxmox', 'playbooks', 'create-agent-vm.yml'), timeoutMs: 60 * 60_000 },
+  install: { file: path.join(REPO_DIR, 'sandbox', 'install', 'install-team.yml'), timeoutMs: 90 * 60_000 }
 };
 
 let active = null; // {deployId, runId, child, dir}

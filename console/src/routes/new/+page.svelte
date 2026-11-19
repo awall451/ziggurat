@@ -39,7 +39,7 @@
   const key = (s) => `${s.kind}:${s.id}`;
   const folders = $derived(data.sources.filter((s) => s.kind === 'folder'));
   const examples = $derived(data.sources.filter((s) => s.kind === 'example'));
-  const open = $derived(data.deploys.filter((d) => d.state !== 'abandoned'));
+  const open = $derived(data.deploys.filter((d) => d.state !== 'abandoned' && d.state !== 'ready'));
 
   function setName(v) {
     f.name = v;
@@ -121,7 +121,7 @@
     }
   }
 
-  const STATE = { draft: 'Draft', 'dry-running': 'Dry run going', planned: 'Dry run done', 'dry-run-failed': 'Dry run failed', creating: 'Creating', created: 'VM created', 'create-failed': 'Create failed' };
+  const STATE = { draft: 'Draft', 'dry-running': 'Dry run going', planned: 'Dry run done', 'dry-run-failed': 'Dry run failed', creating: 'Creating', created: 'VM created', 'create-failed': 'Create failed', installing: 'Installing the team', 'install-failed': 'Install failed', 'awaiting-login': 'Waiting for a sign-in', ready: 'Ready' };
 </script>
 
 <div class="page">

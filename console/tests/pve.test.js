@@ -143,7 +143,8 @@ describe('ssh to hosts the console defines', () => {
     expect(dest).toBe('root@192.0.2.10');
     expect(args).toContain('StrictHostKeyChecking=yes');
     expect(args).toContain('ForwardAgent=no');
-    expect(args.find((a) => a.startsWith('UserKnownHostsFile='))).toContain(file);
+    expect(args).toContain(`UserKnownHostsFile=${file}`);
+    expect(args.some((a) => a.startsWith('GlobalKnownHostsFile='))).toBe(true);
     expect(args.some((a) => a.startsWith('ProxyCommand'))).toBe(false);
     expect(args).not.toContain('-J');
   });
@@ -152,8 +153,33 @@ describe('ssh to hosts the console defines', () => {
     const { args } = hostArgs({ host: '10.66.0.13', user: 'admin', jump: 'admin@192.0.2.20:2222' });
     const proxy = args.find((a) => a.startsWith('ProxyCommand='));
     expect(proxy).toContain('StrictHostKeyChecking=yes');
-    expect(proxy).toContain(`'UserKnownHostsFile=${file} `);
+    expect(proxy).toContain(`-o UserKnownHostsFile=${file} -o GlobalKnownHostsFile=`);
+    expect(proxy).not.toMatch(/['"]/);
     expect(proxy).toMatch(/-p 2222 -W %h:%p admin@192\.0\.2\.20$/);
+  });
+
+  it('reaches a project the console created with its own host keys, also for rsync', async () => {
+    const { rshCommand } = await import('../src/lib/server/ssh.js');
+    const made = { id: 'demo', target: 'homelab', ssh: { host: '10.66.0.13', user: 'admin', jump: 'admin@192.0.2.20' } };
+    const { args, dest } = sshArgs(made);
+    expect(dest).toBe('admin@10.66.0.13');
+    expect(args).toContain('StrictHostKeyChecking=yes');
+    expect(args).not.toContain('-J');
+    // One level of quoting is all the rsync -e string needs.
+    const rsh = rshCommand(args);
+    expect(rsh.match(/'/g)).toHaveLength(2);
+    expect(rsh).toContain("'ProxyCommand=ssh ");
+    // A hand-made entry keeps using the mounted ssh config.
+    expect(sshArgs({ id: 'old', ssh: { host: '10.66.0.11', user: 'admin', jump: 'gw' } }).args).toContain('-J');
+  });
+
+  it('hides anything shaped like a Claude token in transcript text', async () => {
+    const { maskSecrets } = await import('../src/lib/server/mask.js');
+    const t = 'sk-ant-oat01-' + 'Ab3_'.repeat(12);
+    expect(maskSecrets(`CLAUDE_CODE_OAUTH_TOKEN=${t}\nPATH=/usr/bin`)).toBe('CLAUDE_CODE_OAUTH_TOKEN=sk-ant-…[hidden by the console]\nPATH=/usr/bin');
+    expect(maskSecrets(`key sk-ant-api03-${'x'.repeat(40)} end`)).not.toContain('xxxx');
+    expect(maskSecrets('the sk-ant- prefix alone stays')).toBe('the sk-ant- prefix alone stays');
+    expect(maskSecrets(null)).toBe(null);
   });
 
   it('refuses values ssh would read as options', () => {

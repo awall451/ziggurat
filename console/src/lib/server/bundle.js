@@ -6,7 +6,7 @@
 // Everything in a bundle ends up inside the new VM, some of it run as root
 // there. The console only reads it: nothing in a bundle is executed here, and
 // the env files are parsed as plain KEY=value lines, never as shell.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PROJECTS_DIR, REPO_DIR, listThemes } from './config.js';
@@ -273,6 +273,43 @@ function render(src, theme, out) {
       else resolve();
     });
   });
+}
+
+/** The smallest repository a team can start from, when the project has no seed folder. */
+function minimalSeed(dir, { name, description }) {
+  fs.mkdirSync(dir, { recursive: true });
+  const clean = (s) => String(s || '').replace(/[\u0000-\u001f]/g, ' ').trim();
+  fs.writeFileSync(path.join(dir, 'README.md'), `# ${clean(name) || 'New project'}\n\n${clean(description)}\n`);
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), `# Project notes\n\nA fresh repository. The team's goal is in /opt/agent-kit/CHARTER.md.\n`);
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n.venv/\n__pycache__/\n');
+}
+
+/**
+ * Pack what goes into the new VM into `<dir>/payload.tar.gz`: the kit from
+ * this repository, the staged team (`<dir>/bundle`) and the seed. Returns the
+ * archive path and the project's extra files folder, if it has one.
+ */
+export async function buildPayload(dir, source, about = {}) {
+  const src = resolveSource(source);
+  const pay = path.join(dir, 'payload');
+  const archive = path.join(dir, 'payload.tar.gz');
+  // Rebuilt from scratch each time; both belong to this deploy.
+  fs.rmSync(pay, { recursive: true, force: true });
+  fs.rmSync(archive, { force: true });
+  copyTree(path.join(REPO_DIR, 'kit', 'vm'), path.join(pay, 'kit'), ['tests']);
+  copyTree(path.join(dir, 'bundle'), path.join(pay, 'bundle'));
+  if (src.seed) copyTree(src.seed, path.join(pay, 'seed'), ['.git']);
+  else minimalSeed(path.join(pay, 'seed'), about);
+  if (!names(path.join(pay, 'seed')).length) minimalSeed(path.join(pay, 'seed'), about);
+  await new Promise((resolve, reject) => {
+    const tar = spawn('tar', ['-czf', archive, '--owner=0', '--group=0', '-C', pay, 'kit', 'bundle', 'seed'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    tar.stderr.on('data', (d) => (err += d));
+    tar.on('error', reject);
+    tar.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Could not pack the payload: ${err.trim().slice(-300)}`))));
+  });
+  fs.rmSync(pay, { recursive: true, force: true });
+  return { archive, files: src.files };
 }
 
 /**

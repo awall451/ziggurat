@@ -1,0 +1,3 @@
+# Domains the gateway's allow-list must let through for this team.
+pypi.org
+files.pythonhosted.org

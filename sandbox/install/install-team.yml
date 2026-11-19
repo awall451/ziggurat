@@ -1,0 +1,293 @@
+---
+# Install the agent kit and a team in a freshly created sandbox VM.
+#
+# Run after create-agent-vm.yml (the VM is wall-checked and has its
+# "provisioned" snapshot). It never overwrites: a VM that already has a kit, or
+# where an earlier install got as far as its first step, is refused. To try
+# again after a failure, roll the VM back first:
+#   qm rollback <vmid> provisioned && qm start <vmid>
+#
+# What it needs (all as -e variables):
+#   project_id        the project's id (also the repo folder: /home/agent/<id>)
+#   payload_archive   a local .tar.gz with three folders:
+#                       kit/     the contents of kit/vm from this repository
+#                       bundle/  the team, rendered for a theme (tools/render-team.py),
+#                                with its project.env
+#                       seed/    the files the project's repository starts with
+#   agent_proxy_url   the sandbox proxy, e.g. http://10.66.0.1:3128
+# Optional:
+#   provision_files_dir + rsync_rsh + rsync_dest
+#                     a local folder copied to /root/provision-files before the
+#                     bundle's provision.sh runs (rsync over the given ssh command)
+#   claude_token_file a local file holding a token from `claude setup-token`;
+#                     without it, log Claude in by hand: sudo -iu agent claude
+#
+# Inventory: the VM as host `agent_vm`, reached through the gateway, with an
+# admin user that has passwordless sudo.
+#
+#   ansible-playbook -i inventory install-team.yml -e project_id=my-game \
+#     -e payload_archive=/tmp/my-game.tar.gz -e agent_proxy_url=http://10.66.0.1:3128
+
+- name: Agent kit and team
+  hosts: agent_vm
+  become: true
+  gather_facts: false
+  vars:
+    project_id: ""
+    payload_archive: ""
+    agent_proxy_url: ""
+    provision_files_dir: ""
+    rsync_rsh: ""
+    rsync_dest: ""
+    claude_token_file: ""
+    stage_dir: /root/ziggurat-install
+    install_marker: /var/lib/ziggurat-install-started
+    provision_timeout_s: 1800
+    workspace: "/home/agent/{{ project_id }}"
+    proxy_env:
+      HTTP_PROXY: "{{ agent_proxy_url }}"
+      HTTPS_PROXY: "{{ agent_proxy_url }}"
+      http_proxy: "{{ agent_proxy_url }}"
+      https_proxy: "{{ agent_proxy_url }}"
+      NO_PROXY: "localhost,127.0.0.1,::1"
+      no_proxy: "localhost,127.0.0.1,::1"
+      DEBIAN_FRONTEND: noninteractive
+
+  tasks:
+    # ---- 0. Preconditions -------------------------------------------------
+    - name: Inputs are required
+      ansible.builtin.assert:
+        that:
+          - project_id is match('^[a-z0-9][a-z0-9-]{0,40}$')
+          - payload_archive | length > 0
+          - agent_proxy_url is match('^http://[A-Za-z0-9.-]+:[0-9]{1,5}$')
+        fail_msg: "pass -e project_id=<id> -e payload_archive=<file.tar.gz> -e agent_proxy_url=http://<gateway>:3128"
+
+    - name: Wait for the VM to answer
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        sleep: 5
+
+    - name: Look at what is already there
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/agent-kit/project.env
+        - "{{ install_marker }}"
+        - /var/lib/agent-sandbox/provisioned
+        - "{{ workspace }}"
+      register: seen
+
+    - name: The VM must be a finished sandbox VM
+      ansible.builtin.assert:
+        that: seen.results[2].stat.exists
+        fail_msg: "This VM was not provisioned by create-agent-vm.yml (no /var/lib/agent-sandbox/provisioned). Refusing."
+
+    - name: Nothing may be installed yet
+      ansible.builtin.assert:
+        that:
+          - not seen.results[0].stat.exists
+          - not seen.results[1].stat.exists
+          - not seen.results[3].stat.exists
+        fail_msg: >-
+          A kit, an earlier install attempt or the project folder is already on this VM. Refusing to overwrite.
+          To start clean: qm rollback <vmid> provisioned && qm start <vmid>
+
+    # ---- 1. Mark, unpack ---------------------------------------------------
+    - name: Mark the VM as being installed
+      ansible.builtin.copy:
+        content: "{{ project_id }}\n"
+        dest: "{{ install_marker }}"
+        mode: "0644"
+
+    - name: Milestone - install started
+      ansible.builtin.set_stats:
+        data:
+          ziggurat: { stage: install-started, project: "{{ project_id }}" }
+
+    - name: Staging folder
+      ansible.builtin.file:
+        path: "{{ stage_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Unpack the kit, the team and the seed
+      ansible.builtin.unarchive:
+        src: "{{ payload_archive }}"
+        dest: "{{ stage_dir }}"
+        owner: root
+        group: root
+
+    - name: The payload must hold kit, bundle and seed
+      ansible.builtin.stat:
+        path: "{{ stage_dir }}/{{ item }}"
+      loop: [kit/install.sh, bundle/project.env, bundle/gate-checks, seed]
+      register: parts
+      failed_when: not parts.stat.exists
+
+    # ---- 2. The project's repository --------------------------------------
+    # Steps for the agent user run as root with sudo -u: the cloud image has no
+    # acl package, which Ansible's own switch to an unprivileged user needs.
+    - name: Seed repository for the agent
+      ansible.builtin.shell: |
+        set -e
+        cp -a "{{ stage_dir }}/seed" "{{ workspace }}"
+        chown -R agent:agent "{{ workspace }}"
+        cd "{{ workspace }}"
+        sudo -u agent -H git init -q -b main
+        sudo -u agent -H git add -A
+        sudo -u agent -H git -c user.name="owner (seed)" -c user.email="owner@{{ project_id }}.invalid" commit -q -m "Seed: the starting point from the owner"
+        sudo -u agent -H git log --oneline -1
+      args:
+        executable: /bin/bash
+      register: seed_commit
+      changed_when: true
+
+    # ---- 3. Provisioning ----------------------------------------------------
+    - name: Copy the project's extra files in
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -rt
+          - --no-links
+          - --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r
+          - --rsync-path=sudo -n rsync
+          - -e
+          - "{{ rsync_rsh }}"
+          - "{{ provision_files_dir | regex_replace('/+$', '') }}/"
+          - "{{ rsync_dest }}:/root/provision-files/"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+      when: provision_files_dir | length > 0
+
+    - name: Does the team bring a provisioning script?
+      ansible.builtin.stat:
+        path: "{{ stage_dir }}/bundle/provision.sh"
+      register: provision
+
+    - name: Run the team's provisioning script (as root, output in /var/log/ziggurat-provision.log)
+      ansible.builtin.shell: >-
+        timeout {{ provision_timeout_s }} bash "{{ stage_dir }}/bundle/provision.sh"
+        > /var/log/ziggurat-provision.log 2>&1
+      args:
+        chdir: "{{ stage_dir }}/bundle"
+        executable: /bin/bash
+      environment: "{{ proxy_env | combine({'PROVISION_FILES': '/root/provision-files', 'BUNDLE_DIR': stage_dir ~ '/bundle', 'PROJECT': project_id, 'WORKSPACE': workspace}) }}"
+      async: "{{ (provision_timeout_s | int) + 120 }}"
+      poll: 10
+      register: provision_run
+      failed_when: false
+      changed_when: true
+      when: provision.stat.exists
+
+    - name: End of the provisioning log
+      ansible.builtin.command: tail -n 40 /var/log/ziggurat-provision.log
+      register: provision_log
+      changed_when: false
+      failed_when: false
+      when: provision.stat.exists
+
+    - name: Provisioning must have succeeded
+      ansible.builtin.assert:
+        that: provision_run.rc | default(1) == 0
+        fail_msg: "provision.sh failed (exit {{ provision_run.rc | default('none') }}). Last lines:\n{{ provision_log.stdout | default('') }}"
+      when: provision.stat.exists
+
+    - name: Milestone - provisioning done
+      ansible.builtin.set_stats:
+        data:
+          ziggurat: { stage: provisioned-tools }
+
+    # ---- 4. The kit ----------------------------------------------------------
+    - name: Install the kit and the team (output in /var/log/ziggurat-install.log)
+      ansible.builtin.shell: bash "{{ stage_dir }}/kit/install.sh" "{{ stage_dir }}/bundle" > /var/log/ziggurat-install.log 2>&1
+      args:
+        executable: /bin/bash
+      environment: "{{ proxy_env }}"
+      register: kit_run
+      failed_when: false
+      changed_when: true
+
+    - name: End of the install log
+      ansible.builtin.command: tail -n 40 /var/log/ziggurat-install.log
+      register: kit_log
+      changed_when: false
+      failed_when: false
+
+    - name: The kit installer must have succeeded
+      ansible.builtin.assert:
+        that: kit_run.rc == 0
+        fail_msg: "install.sh failed (exit {{ kit_run.rc }}). Last lines:\n{{ kit_log.stdout | default('') }}"
+
+    - name: Milestone - kit installed
+      ansible.builtin.set_stats:
+        data:
+          ziggurat: { stage: kit-installed }
+
+    # ---- 5. Claude sign-in ---------------------------------------------------
+    # The token is read inside this task and goes to the script on stdin. It is
+    # never a play variable, and the task's output is never logged.
+    - name: Store the Claude subscription token
+      ansible.builtin.command: /opt/agent-kit/bin/agent-kit-auth set-token
+      args:
+        stdin: "{{ lookup('ansible.builtin.file', claude_token_file) }}"
+      no_log: true
+      changed_when: true
+      when: claude_token_file | length > 0
+
+    - name: Sign-in state (no account details)
+      ansible.builtin.command: /opt/agent-kit/bin/agent-kit-auth status
+      register: auth
+      changed_when: false
+      failed_when: auth.stdout | length == 0
+
+    # ---- 6. Verify -----------------------------------------------------------
+    - name: Read back what was installed
+      ansible.builtin.shell: |
+        echo "version=$(cat /opt/agent-kit/VERSION)"
+        echo "expected=$(cat "{{ stage_dir }}/kit/VERSION")"
+        echo "control=$(cut -d' ' -f1 /var/lib/agent-kit/control)"
+        echo "lead_timer=$(systemctl is-enabled agent-kit-lead.timer 2>/dev/null || true)"
+        echo "gate_timer=$(systemctl is-enabled agent-kit-gate.timer 2>/dev/null || true)"
+        echo "baseline=$(cat /var/lib/agent-kit/gate/baseline-tests 2>/dev/null || echo 0)"
+        echo "main=$(sudo -u gatekeeper -H git -C "/srv/{{ project_id }}.git" log --format=%h -1 main 2>/dev/null || true)"
+      args:
+        executable: /bin/bash
+      register: readback
+      changed_when: false
+
+    - name: Parse it
+      ansible.builtin.set_fact:
+        installed: "{{ dict(readback.stdout_lines | map('split', '=', 1)) }}"
+        sign_in: "{{ auth.stdout | from_json }}"
+
+    - name: The team must be installed and stopped
+      ansible.builtin.assert:
+        that:
+          - installed.version == installed.expected
+          - installed.control == 'stop'
+          - installed.lead_timer == 'disabled'
+          - installed.gate_timer == 'enabled'
+          - installed.main | length > 0
+        fail_msg: "The kit is installed but not in the expected state: {{ installed }}"
+
+    - name: Result
+      ansible.builtin.set_stats:
+        data:
+          ziggurat:
+            stage: installed
+            kit_version: "{{ installed.version }}"
+            baseline_tests: "{{ installed.baseline }}"
+            main: "{{ installed.main }}"
+            logged_in: "{{ sign_in.loggedIn }}"
+            auth_method: "{{ sign_in.authMethod }}"
+            token_stored: "{{ sign_in.tokenStored }}"
+            api_key_set: "{{ sign_in.apiKeySet }}"
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg: |
+          Kit {{ installed.version }} and the team are installed in {{ workspace }}. The lead's timer is off and control says stop.
+          Claude sign-in: {{ 'done (' ~ sign_in.authMethod ~ ')' if sign_in.loggedIn else 'not yet: run  sudo -iu agent claude  once, or store a token with  sudo agent-kit-auth set-token' }}
+          Start the team when you are ready: sudo agent-kit-resume
