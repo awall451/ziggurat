@@ -1,0 +1,80 @@
+#!/bin/bash
+# agent-kit-auth: how the agents sign in to Claude. Run with sudo.
+#
+#   agent-kit-auth status       sign-in state as one JSON line (no account details)
+#   agent-kit-auth set-token    store a subscription token read from stdin
+#   agent-kit-auth clear        remove the stored token
+#
+# Two ways to sign in, both on a Claude subscription (never an API key):
+#   - a normal login as the agent user:  sudo -iu agent claude
+#   - a long-lived token from `claude setup-token`, stored here. It is kept in
+#     /etc/agent-kit/auth.env (owner root, group agent, mode 640) and given to
+#     the lead's unit as CLAUDE_CODE_OAUTH_TOKEN. It takes precedence over a login.
+#
+# The token is never printed, by any command here.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+AUTH=$ETC/auth.env
+AGENT_HOME=${AGENT_KIT_AGENT_HOME:-/home/agent}
+CLAUDE=${AGENT_KIT_CLAUDE:-$AGENT_HOME/.local/bin/claude}
+
+# An API key would switch Claude Code to paid API use. The kit never allows one.
+api_key_set() { grep -qsE '^(export +)?ANTHROPIC_(API_KEY|AUTH_TOKEN)=.' "$ETC/agent.env" "$AUTH"; }
+
+case "${1:-status}" in
+  status)
+    token=false
+    [ -s "$AUTH" ] && token=true
+    key=false
+    api_key_set && key=true
+    # Run `claude auth status` as the agent with the environment its unit gets.
+    out=$(
+      while IFS= read -r line; do
+        [[ $line =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+        [[ $line =~ ^ANTHROPIC_(API_KEY|AUTH_TOKEN)= ]] && continue
+        export "${line?}"
+      done < <(cat "$ETC/agent.env" "$AUTH" 2> /dev/null)
+      export HOME=$AGENT_HOME
+      if [ "$(id -u)" = 0 ]; then
+        # -E hands the variables over without putting the token on a command line.
+        exec sudo -n -E -u agent -H "$CLAUDE" auth status
+      else
+        exec "$CLAUDE" auth status
+      fi
+    ) 2> /dev/null
+    if ! jq -e 'type == "object"' <<< "$out" > /dev/null 2>&1; then
+      out='{"loggedIn":false,"authMethod":"none","error":"claude auth status gave no answer"}'
+    fi
+    jq -c --argjson token "$token" --argjson key "$key" \
+      '{loggedIn: (.loggedIn // false), authMethod: (.authMethod // "none"), subscriptionType: (.subscriptionType // null), loginExpiresAt: (.loginExpiresAt // null), tokenStored: $token, apiKeySet: $key, error: (.error // null)}' <<< "$out"
+    [ "$(jq -r '.loggedIn // false' <<< "$out")" = true ] && [ "$key" = false ]
+    ;;
+  set-token)
+    if api_key_set; then echo "refused: an ANTHROPIC_API_KEY is configured for the agents; remove it first" >&2; exit 2; fi
+    IFS= read -r token || true
+    token=${token//[$'\r\t ']/}
+    if ! [[ $token =~ ^[A-Za-z0-9._~+/=-]{20,600}$ ]]; then
+      echo "refused: that does not look like a token from 'claude setup-token'" >&2
+      exit 2
+    fi
+    umask 077
+    tmp=$AUTH.tmp
+    printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "$token" > "$tmp"
+    if [ "$(id -u)" = 0 ]; then chown root:agent "$tmp"; fi
+    chmod 640 "$tmp"
+    mv "$tmp" "$AUTH"
+    echo "token stored (used from the next cycle)"
+    ;;
+  clear)
+    if [ -e "$AUTH" ]; then
+      rm -f "$AUTH"
+      echo "token removed"
+    else
+      echo "no token was stored"
+    fi
+    ;;
+  *)
+    echo "usage: agent-kit-auth status | set-token < token | clear" >&2
+    exit 2
+    ;;
+esac

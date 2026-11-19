@@ -2,8 +2,12 @@
 # Build the PS1 toolchain + install the headless emulator under /opt, offline
 # (sources were copied in; the VM's proxy allow-list is unchanged).
 # Mirrors nocturne/scripts/setup-wsl.sh + spawn-compiler.sh, minus downloads.
+#
+# Runs as root in the new VM before the kit is installed. The sources come from
+# the project's files/ folder, which is copied to $PROVISION_FILES first:
+#   binutils-2.47.tar.gz  gcc-16.2.0.tar.gz  mkpsxiso/  pcsx-redux-linux.zip
 set -euxo pipefail
-SRC=/root/psx-dl
+SRC=${PROVISION_FILES:-/root/provision-files}
 PREFIX=/opt/psx/mipsel-none-elf
 JOBS=$(nproc)
 export DEBIAN_FRONTEND=noninteractive

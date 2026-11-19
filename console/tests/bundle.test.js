@@ -124,6 +124,52 @@ describe('stageBundle', () => {
   });
 });
 
+describe('buildPayload', () => {
+  it('packs kit, team and seed; a project without a seed gets a minimal one', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = path.join(root, 'data', 'pay');
+    const env = b.projectEnv({ id: 'demo', leadModel: 'fable', fallbackModel: 'opus', budgetUsd: 40, cyclesPerDay: 6, proxyUrl: 'http://10.66.0.1:3128' });
+    put('seed/.git/config', 'not copied\n');
+    await b.stageBundle(dir, src, { theme: 'plain', charter: null, env });
+    let out = await b.buildPayload(dir, src, { name: 'Demo', description: 'A demo' });
+    let files = execFileSync('tar', ['-tzf', out.archive]).toString().split('\n');
+    for (const f of ['kit/install.sh', 'kit/bin/lead-cycle', 'bundle/CHARTER.md', 'bundle/project.env', 'seed/README.md']) expect(files, f).toContain(f);
+    expect(files.some((f) => f.startsWith('kit/tests') || f.includes('.git/'))).toBe(false);
+    expect(out.files).toBe(null);
+    expect(fs.existsSync(path.join(dir, 'payload'))).toBe(false);
+
+    fs.rmSync(path.join(base, 'seed'), { recursive: true });
+    put('files/toolchain.tar.gz', 'big\n');
+    out = await b.buildPayload(dir, src, { name: 'Demo', description: 'A demo\nwith a second line' });
+    files = execFileSync('tar', ['-tzf', out.archive]).toString().split('\n');
+    expect(files).toEqual(expect.arrayContaining(['seed/README.md', 'seed/CLAUDE.md', 'seed/.gitignore']));
+    expect(out.files).toBe(path.join(base, 'files'));
+    const readme = execFileSync('tar', ['-xzOf', out.archive, 'seed/README.md']).toString();
+    expect(readme).toBe('# Demo\n\nA demo with a second line\n');
+  });
+});
+
+describe('the python-starter example', () => {
+  it('passes the bundle check and can be picked in the wizard', () => {
+    const c = b.checkBundle({ kind: 'example', id: 'python-starter' });
+    expect(c.problems).toEqual([]);
+    expect(c.agents.map((a) => a.id)).toEqual(['area-lead-core', 'area-lead-platform', 'builder', 'qa', 'reviewer', 'scout']);
+    expect(c.domains).toEqual(['pypi.org', 'files.pythonhosted.org']);
+    expect(c.extras).toEqual([['BASELINE_TESTS', '2'], ['GATE_PROOF_DELETE', 'tests/test_placeholder.py']]);
+    expect(c.provision).toContain('python3-venv');
+    expect(c.charter).toContain('REPLACE THIS');
+    expect(b.listSources().filter((s) => s.kind === 'example').map((s) => s.id)).toEqual(['python-starter']);
+  });
+
+  it('keeps its seed and its own notes out of the team', async () => {
+    const dir = path.join(root, 'data', 'starter');
+    const out = await b.stageBundle(dir, { kind: 'example', id: 'python-starter' }, { theme: 'plain', charter: '# Charter\nBuild a ledger tool.\n', env: 'PROJECT=demo\n' });
+    expect(fs.readdirSync(out.dir).sort()).toEqual(['CHARTER.md', 'GATE-CONTRACT.md', 'agent.env.extra', 'agents', 'gate-checks', 'lead-cycle.md', 'project.env', 'provision.sh', 'requires-domains']);
+    for (const f of fs.readdirSync(path.join(out.dir, 'agents'))) expect(fs.readFileSync(path.join(out.dir, 'agents', f), 'utf8'), f).not.toContain('{{');
+    expect(fs.readFileSync(path.join(out.dir, 'lead-cycle.md'), 'utf8')).not.toContain('{{');
+  });
+});
+
 describe('reading a run\'s events', () => {
   it('continues from an offset and leaves a half-written line for later', () => {
     const f = path.join(root, 'events.jsonl');

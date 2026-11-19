@@ -42,7 +42,7 @@
   function askCreate() {
     confirm = {
       title: `Create ${r.name} now?`,
-      body: `Creates VM ${d.plan.vmid} (${d.plan.ip}) on the target: ${r.cores} cores, ${r.memoryMb / 1024} GB memory, ${r.diskGb} GB disk. This is a real change on the Proxmox host and takes 10 to 30 minutes. The console cannot undo it; removing the VM later is done by hand.`,
+      body: `Creates VM ${d.plan.vmid} (${d.plan.ip}) on the target: ${r.cores} cores, ${r.memoryMb / 1024} GB memory, ${r.diskGb} GB disk, then installs the team in it${d.tokenConfigured ? ' and signs Claude in with the saved token' : ''}. This is a real change on the Proxmox host and takes 15 to 40 minutes. The console cannot undo it; removing the VM later is done by hand. The team is left halted.`,
       word: 'Create project',
       run: () => act('create', 'create')
     };
@@ -67,8 +67,23 @@
     creating: ['Creating the VM', 'running'],
     created: ['VM created', 'done'],
     'create-failed': ['Create failed', 'failed'],
+    installing: ['Installing the team', 'running'],
+    'install-failed': ['Install failed', 'failed'],
+    'awaiting-login': ['Waiting for a Claude sign-in', 'halted'],
+    ready: ['Ready, team halted', 'done'],
     abandoned: ['Given up', 'idle']
   };
+  const INSTALL_STAGE = { 'install-started': 'files were being copied in or the provisioning script was running', 'provisioned-tools': 'provisioning finished; the kit installer failed', 'kit-installed': 'the kit is installed; the sign-in or the final check failed' };
+  let copied = $state('');
+  async function copy(text, what) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = what;
+      setTimeout(() => (copied = ''), 2000);
+    } catch {
+      /* select and copy by hand */
+    }
+  }
   const STAGE = { cloned: 'the VM exists; it was still being set up', provisioned: 'the VM is set up; its isolation check did not pass', walled: 'the VM is set up and isolated; the last step failed' };
   const mins = (iso) => Math.max(0, Math.ceil((Date.parse(iso) - now) / 60000));
   const gb = (bytes) => (bytes >= 1073741824 ? `${(bytes / 1073741824).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
@@ -195,7 +210,89 @@
         VM <span class="mono">{d.vm.vmid}</span> at <span class="mono">{d.vm.ip}</span>: isolation checked from inside, snapshot
         <span class="mono">{d.vm.snapshot || 'provisioned'}</span> taken, host key stored. No team is installed yet and nothing in it runs Claude.
       </p>
-      <p class="dim small">Installing the kit and the team, signing Claude in and adding the project to the list come with the next step of this feature.</p>
+      {#if d.error}
+        <div class="panel note bad">{d.error}</div>
+        <div class="actions"><span class="grow"></span><button class="btn go" onclick={() => act('install', 'install')} disabled={!!busy || !!d.busyElsewhere}>Install the team</button></div>
+      {:else}
+        <p class="dim small">The install of the kit and the team starts by itself.</p>
+      {/if}
+    </section>
+  {/if}
+
+  {#if d.state === 'install-failed' && d.failure}
+    <section class="panel block bad">
+      <h2>Installing the team failed</h2>
+      <pre class="well doc">{d.error}</pre>
+      <p>
+        VM <span class="mono">{d.vm.vmid}</span> itself is fine: it was isolated and snapshotted before the install began.
+        {#if d.failure.stage}How far the install got: {INSTALL_STAGE[d.failure.stage] || d.failure.stage}.{/if}
+      </p>
+      {#if d.failure.needsRollback}
+        <p>
+          To try again the VM must be clean. Put it back to its snapshot on the Proxmox host (the console never does this), fix the
+          cause{r.source.kind === 'folder' ? ' in the project folder' : ''}, then retry:
+        </p>
+        <pre class="well doc">{d.failure.rollback.join(' && ')}</pre>
+      {:else}
+        <p>Nothing was changed in the VM. Fix the cause and retry.</p>
+      {/if}
+      <details>
+        <summary>Or remove the VM instead</summary>
+        <pre class="well doc">{d.failure.cleanup.join('\n')}</pre>
+      </details>
+      <div class="actions"><span class="grow"></span><button class="btn go" onclick={() => act('install', 'install')} disabled={!!busy || !!d.busyElsewhere}>Retry the install</button></div>
+    </section>
+  {/if}
+
+  {#if d.state === 'awaiting-login' && d.login}
+    <section class="panel block warn">
+      <h2>One step is yours: sign Claude in</h2>
+      <p>
+        The kit and the team are installed (kit {d.install?.kitVersion}). The agents are not signed in to Claude yet.
+        {#if d.install?.apiKeySet}<b class="s-failed">An API key is configured on the VM, which the kit never uses: remove it first.</b>{/if}
+      </p>
+      {#if d.tokenConfigured}
+        <p>A subscription token is saved in the console now. It can be handed to the VM:</p>
+        <div><button class="btn go" onclick={() => act('apply-token', 'token')} disabled={!!busy}>{busy === 'token' ? 'Working…' : 'Apply the saved token'}</button></div>
+      {:else}
+        <p class="dim small">
+          To skip this step for future projects, save a token from <span class="mono">claude setup-token</span> as
+          <span class="mono">claude-token</span> in the console's config folder.
+        </p>
+        <ol class="steps">
+          <li>
+            Add this to <span class="mono">~/.ssh/config</span> on your workstation
+            <button class="btn quiet tiny" onclick={() => copy(d.login.sshConfig, 'config')}>{copied === 'config' ? 'Copied' : 'Copy'}</button>
+            <pre class="well doc">{d.login.sshConfig}</pre>
+          </li>
+          <li>
+            Add this line to <span class="mono">~/.ssh/known_hosts</span> (the VM's key, read through Proxmox, so you are not asked to trust it)
+            <button class="btn quiet tiny" onclick={() => copy(d.login.knownHosts, 'hosts')}>{copied === 'hosts' ? 'Copied' : 'Copy'}</button>
+            <pre class="well doc">{d.login.knownHosts}</pre>
+          </li>
+          <li>
+            Run this, follow the link it prints, and leave Claude again with <span class="mono">/exit</span>
+            <button class="btn quiet tiny" onclick={() => copy(d.login.command, 'cmd')}>{copied === 'cmd' ? 'Copied' : 'Copy'}</button>
+            <pre class="well doc">{d.login.command}</pre>
+          </li>
+        </ol>
+        <p class="dim small">Turn off paid overflow usage on your account if headless runs must never spend money.</p>
+      {/if}
+      {#if d.install?.checkedAt}<p class="small dim">Last looked {when(d.install.checkedAt)}: not signed in.</p>{/if}
+      <div class="actions"><span class="grow"></span><button class="btn" onclick={() => act('login-check', 'login')} disabled={!!busy}>{busy === 'login' ? 'Looking…' : 'I signed in: check now'}</button></div>
+    </section>
+  {/if}
+
+  {#if d.state === 'ready'}
+    <section class="panel block ok">
+      <h2>{r.name} is ready</h2>
+      <p>
+        VM <span class="mono">{d.vm.vmid}</span> at <span class="mono">{d.vm.ip}</span>, kit {d.install?.kitVersion}, signed in to Claude with
+        {d.install?.authMethod === 'oauth_token' ? 'the saved token' : 'a login'}. Gate main is <span class="mono">{d.install?.main}</span> with
+        {d.install?.baselineTests} test{d.install?.baselineTests === 1 ? '' : 's'}.
+      </p>
+      <p><b>The team is halted</b> and its timer is off. Nothing spends tokens until you resume it on the project's Controls tab.</p>
+      <div class="actions"><span class="grow"></span><a class="btn go" href="/p/{d.id}/controls">Open {r.name}</a></div>
     </section>
   {/if}
 
@@ -228,7 +325,7 @@
   {#if d.lastRun}
     <section class="panel block">
       <div class="bar">
-        <h2>{data.run?.kind === 'dry-run' ? 'Dry run' : 'Create run'}</h2>
+        <h2>{data.run?.kind === 'dry-run' ? 'Dry run' : data.run?.kind === 'install' ? 'Install run' : 'Create run'}</h2>
         <span class="small dim mono">{d.lastRun}</span>
       </div>
       <EventStream deployId={d.id} runId={d.lastRun} initial={data.events} offset={data.next} ondone={() => invalidateAll().catch(() => {})} />
@@ -275,6 +372,22 @@
   }
   .block.bad {
     border-color: var(--critical);
+  }
+  .block.warn {
+    border-color: var(--warn);
+  }
+  .steps {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tiny {
+    min-height: 26px;
+    padding: 0 10px;
+    font-size: 12px;
+    margin-left: 6px;
   }
   .panel.note {
     margin-bottom: 0;

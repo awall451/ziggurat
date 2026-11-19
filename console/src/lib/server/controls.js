@@ -3,6 +3,7 @@
 import { kit } from './ssh.js';
 import { audit } from './audit.js';
 import { invalidateStatus } from './live.js';
+import { readToken } from './token.js';
 
 export const CAP_KEYS = ['MAX_CYCLES_PER_DAY', 'CYCLE_BUDGET_USD', 'LEAD_MODEL', 'FALLBACK_MODEL'];
 
@@ -68,14 +69,36 @@ export function gate(user, project, on, reason) {
     : run(user, project, 'gate-pause', 'agent-kit-gate', ['pause', ...words(reason, 'owner')], { reason: words(reason, 'owner').join(' ') });
 }
 
+/**
+ * Give the saved subscription token to the team's VM (kit 0.3 or later). It
+ * travels on stdin to a script that prints nothing from it; the audit log
+ * records only that it happened.
+ */
+export async function applyToken(user, project) {
+  const token = readToken();
+  if (!token) throw new Error('No usable token is saved (claude-token in the console config folder)');
+  const res = await kit(project, 'agent-kit-auth', ['set-token'], { input: token + '\n', timeout: 45000 });
+  const ok = res.code === 0;
+  audit(user, project.id, 'apply-token', {}, { ok, detail: ok ? 'token stored' : `refused (exit ${res.code})` });
+  invalidateStatus(project.id);
+  return { ok, detail: ok ? 'Token stored. It is used from the next cycle.' : 'The VM refused the token. Its kit may be older than 0.3.' };
+}
+
 const infoCache = new Map(); // id -> {at, value}
 
 /** Caps and the team's own units, read from the VM (cached briefly). */
 export async function info(project, { fresh = false } = {}) {
   const c = infoCache.get(project.id);
   if (!fresh && c && Date.now() - c.at < 15000) return c.value;
-  const [caps, units] = await Promise.all([kit(project, 'agent-kit-caps', ['show']), kit(project, 'agent-kit-units', [])]);
-  const value = { caps: {}, units: [], error: null };
+  const [caps, units, auth] = await Promise.all([kit(project, 'agent-kit-caps', ['show']), kit(project, 'agent-kit-units', []), kit(project, 'agent-kit-auth', ['status'])]);
+  const value = { caps: {}, units: [], auth: null, error: null };
+  // Kits before 0.3 have no agent-kit-auth: then there is simply no answer.
+  try {
+    const a = JSON.parse(auth.stdout.trim().split('\n').at(-1));
+    if (typeof a.loggedIn === 'boolean') value.auth = { loggedIn: a.loggedIn, authMethod: a.authMethod || 'none', tokenStored: !!a.tokenStored, apiKeySet: !!a.apiKeySet, expiresAt: a.loginExpiresAt || null, plan: a.subscriptionType || null };
+  } catch {
+    value.auth = null;
+  }
   if (caps.code === 0) {
     for (const line of caps.stdout.split('\n')) {
       const m = /^([A-Z_]+)=(.*)$/.exec(line);

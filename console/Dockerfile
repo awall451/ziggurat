@@ -37,6 +37,8 @@ ENV NODE_ENV=production \
 # A playbook that does not parse must fail the build, not a deploy.
 RUN ANSIBLE_CONFIG=/app/console/ansible/ansible.cfg ANSIBLE_HOME=/tmp/ansible-check \
     ansible-playbook -i 'pve,' --syntax-check sandbox/proxmox/playbooks/create-agent-vm.yml \
+ && ANSIBLE_CONFIG=/app/console/ansible/ansible.cfg ANSIBLE_HOME=/tmp/ansible-check \
+    ansible-playbook -i 'agent_vm,' --syntax-check sandbox/install/install-team.yml \
  && rm -rf /tmp/ansible-check
 # Runs as the image's unprivileged user (uid 1000). Files it pulls land in the
 # mounted folders with that owner, so use a host user with the same uid.

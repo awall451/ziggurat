@@ -53,6 +53,17 @@
     };
   }
 
+  function askToken() {
+    confirm = {
+      title: `Give ${p.name} the saved Claude token?`,
+      body: 'Stores the subscription token from the console\'s config folder on this VM. The team then signs in with it instead of its own login, from the next cycle. The token is not shown anywhere.',
+      word: 'Apply token',
+      run: () => act({ action: 'apply-token' }, 'token')
+    };
+  }
+
+  const SIGN_IN = { 'claude.ai': 'a login as the agent user', oauth_token: 'the stored subscription token', api_key: 'an API key', none: 'nothing' };
+
   function schedule() {
     const t = Math.floor(new Date(stopAt).getTime() / 1000);
     if (!t) {
@@ -80,6 +91,17 @@
     'message-send': 'Sent a message',
     'message-retry': 'Retried a message',
     'message-close': 'Closed a message',
+    'apply-token': 'Applied the saved Claude token',
+    'deploy-draft': 'New project: checked the team',
+    'deploy-dry-run': 'New project: dry run',
+    'deploy-dry-run-end': 'New project: dry run ended',
+    'deploy-create': 'New project: creating the VM',
+    'deploy-create-end': 'New project: VM run ended',
+    'deploy-install': 'New project: installing the team',
+    'deploy-install-end': 'New project: install ended',
+    'deploy-login-check': 'New project: checked the sign-in',
+    'deploy-apply-token': 'New project: applied the saved Claude token',
+    'deploy-abandon': 'New project: given up',
     'project-add': 'Added to the registry',
     'project-save': 'Changed the registry entry'
   };
@@ -171,6 +193,31 @@
       <p class="dim small">Kit {st.kitVersion} · main {st.main?.sha || '–'} · {st.ready.length} branch{st.ready.length === 1 ? '' : 'es'} submitted · {st.worktrees ?? 0} worktrees</p>
     </section>
   </div>
+
+  <section class="panel block">
+    <h2>Claude sign-in</h2>
+    {#if c.auth}
+      <p>
+        {#if c.auth.loggedIn && !c.auth.apiKeySet}
+          Signed in with {SIGN_IN[c.auth.authMethod] || c.auth.authMethod}{c.auth.plan ? ` (${c.auth.plan} plan)` : ''}.
+          {#if c.auth.expiresAt && c.auth.authMethod === 'claude.ai'}<span class="dim">The login runs until {when(c.auth.expiresAt)}.</span>{/if}
+        {:else if c.auth.apiKeySet}
+          <span class="s-failed">An API key is configured for the agents. The kit does not use API keys: remove it on the VM.</span>
+        {:else}
+          <span class="s-failed">Not signed in. The team cannot run until it is.</span>
+        {/if}
+      </p>
+      <p class="dim small">
+        {c.auth.tokenStored ? 'A subscription token is stored on the VM.' : 'No token is stored on the VM.'}
+        {data.tokenSaved ? '' : 'No token is saved in the console (claude-token in its config folder).'}
+      </p>
+      {#if data.tokenSaved}
+        <div><button class="btn quiet" onclick={askToken} disabled={!!busy}>{c.auth.tokenStored ? 'Replace the token on the VM…' : 'Apply the saved token…'}</button></div>
+      {/if}
+    {:else}
+      <p class="dim">This VM's kit cannot report its sign-in yet (needs kit 0.3 or later).</p>
+    {/if}
+  </section>
 
   <section class="panel block">
     <h2>The team's own services</h2>

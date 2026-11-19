@@ -1,5 +1,5 @@
 #!/bin/bash
-# Tests for the kit's owner-inbox, hook, caps, schedule and unit-scan scripts.
+# Tests for the kit's owner-inbox, hook, caps, schedule, sign-in and unit-scan scripts.
 # Runs anywhere, as any user, in a temp folder:   bash kit/vm/tests/run.sh
 # (Scripts that drive systemd, agent-kit-halt and agent-kit-resume, are only
 # syntax-checked here; they are exercised on a real VM.)
@@ -154,6 +154,43 @@ echo "== syntax"
 for f in "$BIN"/* "$HERE/../install.sh" "$HERE/../gate/bin/gate-run"; do
   check "bash -n $(basename "$f")" 'bash -n "$f"'
 done
+echo "== agent-kit-auth"
+printf 'HTTPS_PROXY=http://10.66.0.1:3128\nPATH=/usr/bin:/bin\n' > "$T/etc/agent.env"
+# A stand-in for `claude auth status`: logged in only when the token reaches it.
+cat > "$T/claude" <<'STUB'
+#!/bin/bash
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then echo '{"loggedIn":true,"authMethod":"api_key"}'; exit 0; fi
+if [ "${CLAUDE_CODE_OAUTH_TOKEN:-}" = "sk-ant-oat01-TESTTOKENTESTTOKEN_abc-123" ]; then
+  echo '{"loggedIn":true,"authMethod":"oauth_token","subscriptionType":"max","email":"someone@example.com","orgName":"Private Org"}'
+else
+  echo '{"loggedIn":false,"authMethod":"none"}'; exit 1
+fi
+STUB
+chmod +x "$T/claude"
+export AGENT_KIT_CLAUDE=$T/claude
+st=$("$BIN/agent-kit-auth" status); rc=$?
+check "no token: not signed in, exit 1" '[ $rc = 1 ] && [ "$(jq -r ".loggedIn" <<< "$st")" = false ] && [ "$(jq -r ".tokenStored" <<< "$st")" = false ]'
+set_out=$(printf '  sk-ant-oat01-TESTTOKENTESTTOKEN_abc-123 \r\n' | "$BIN/agent-kit-auth" set-token 2>&1)
+check "set-token stores one checked line" '[ "$(cat "$T/etc/auth.env")" = "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-TESTTOKENTESTTOKEN_abc-123" ]'
+check "set-token never prints the token" '! grep -q "TESTTOKEN" <<< "$set_out"'
+check "auth.env is not readable by others" '[ "$(stat -c %a "$T/etc/auth.env")" = 640 ]'
+st=$("$BIN/agent-kit-auth" status); rc=$?
+check "token: signed in, exit 0" '[ $rc = 0 ] && [ "$(jq -r ".authMethod" <<< "$st")" = oauth_token ] && [ "$(jq -r ".tokenStored" <<< "$st")" = true ]'
+check "status shows no account details and no token" '! grep -qE "example.com|Private Org|TESTTOKEN" <<< "$st"'
+refuse "token with shell text" bash -c "printf 'abc\$(id)defghijklmnopqrstuvwxyz\n' | '$BIN/agent-kit-auth' set-token"
+refuse "token with a newline trick" bash -c "printf 'short\n' | '$BIN/agent-kit-auth' set-token"
+refuse "empty token" bash -c ": | '$BIN/agent-kit-auth' set-token"
+check "a refused token leaves the stored one" 'grep -q "TESTTOKENTESTTOKEN_abc-123" "$T/etc/auth.env"'
+echo 'ANTHROPIC_API_KEY=sk-ant-api-xyz' >> "$T/etc/agent.env"
+st=$("$BIN/agent-kit-auth" status); rc=$?
+check "an API key is reported and never used" '[ $rc = 1 ] && [ "$(jq -r ".apiKeySet" <<< "$st")" = true ] && [ "$(jq -r ".authMethod" <<< "$st")" = oauth_token ]'
+refuse "set-token while an API key is configured" bash -c "printf 'sk-ant-oat01-TESTTOKENTESTTOKEN_abc-123\n' | '$BIN/agent-kit-auth' set-token"
+sed -i '/ANTHROPIC_API_KEY/d' "$T/etc/agent.env"
+"$BIN/agent-kit-auth" clear > /dev/null
+check "clear removes the token" '[ ! -e "$T/etc/auth.env" ]'
+refuse "unknown command" "$BIN/agent-kit-auth" print-token
+check "the lead unit loads the token file only if it exists" 'grep -qx "EnvironmentFile=-/etc/agent-kit/auth.env" "$HERE/../systemd/agent-kit-lead.service"'
+
 check "lead-settings.json is a JSON object" 'jq -e "type == \"object\"" "$HERE/../lead-settings.json" > /dev/null'
 
 echo
