@@ -226,3 +226,47 @@ export function validateProject(input, roots = {}) {
   }
   return c.done(p);
 }
+
+const MODEL_RE = /^[a-z][a-z0-9.-]{1,39}$/;
+const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const DEPLOY_KEYS = ['id', 'name', 'description', 'target', 'source', 'charter', 'theme', 'accent', 'cores', 'memoryMb', 'diskGb', 'vmid', 'leadModel', 'fallbackModel', 'budgetUsd', 'cyclesPerDay'];
+
+/** What the "New project" form sends. `target` (validated) gives the id range. */
+export function validateDeployRequest(input, target = null) {
+  const c = new Checker(input, DEPLOY_KEYS);
+  const r = {
+    // Also the VM's host name: no leading or trailing hyphen.
+    id: c.str('id', (v) => ID_RE.test(v) && !v.endsWith('-') && !/^[0-9]+$/.test(v), 'lowercase letters, digits and hyphens; not only digits'),
+    name: c.text('name', 80) || c.get('id'),
+    description: c.text('description', 200),
+    target: c.str('target', ID_RE, 'must be a target id'),
+    theme: c.str('theme', THEME_RE, 'must be a theme name', { fallback: 'plain' }),
+    accent: c.str('accent', ACCENT_RE, 'must be a colour like #4fd8ff', { fallback: '#4fd8ff' }),
+    cores: c.int('cores', 1, 16, { fallback: 4 }),
+    memoryMb: c.int('memoryMb', 2048, 65536, { fallback: 12288 }),
+    diskGb: c.int('diskGb', 20, 200, { fallback: 40 }),
+    leadModel: c.str('leadModel', MODEL_RE, 'must be a model name', { fallback: 'fable' }),
+    fallbackModel: c.str('fallbackModel', MODEL_RE, 'must be a model name', { fallback: 'opus' }),
+    budgetUsd: c.int('budgetUsd', 1, 500, { fallback: 40 }),
+    cyclesPerDay: c.int('cyclesPerDay', 0, 200, { fallback: 6 }),
+    vmid: null,
+    charter: null
+  };
+  const src = c.get('source');
+  if (!src || typeof src !== 'object' || !['folder', 'example'].includes(src.kind) || typeof src.id !== 'string' || !SOURCE_RE.test(src.id)) {
+    c.bad('source', 'pick a project folder or an example');
+  } else r.source = { kind: src.kind, id: src.id };
+  const charter = c.get('charter');
+  if (charter != null && charter !== '') {
+    if (typeof charter !== 'string' || charter.length > 40000 || /\u0000/.test(charter)) c.bad('charter', 'must be text, at most 40000 characters');
+    else r.charter = charter;
+  }
+  if (c.get('vmid') != null && c.get('vmid') !== '') {
+    r.vmid = c.int('vmid', 100, 999999999);
+    if (target && Number.isInteger(r.vmid)) {
+      if (r.vmid < target.vmidMin || r.vmid > target.vmidMax) c.bad('vmid', `must be in the target's range ${target.vmidMin} to ${target.vmidMax}`);
+      else if (target.criticalVmids.includes(r.vmid)) c.bad('vmid', 'is a protected id');
+    }
+  }
+  return c.done(r);
+}

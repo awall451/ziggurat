@@ -57,7 +57,7 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 | Allow-list domains | Per-project additions in project config |
 | Gate checks (`gate-checks` per project) | Keep: it is the per-project contract; ship examples (web game, PS1/C++) |
 | Console and digest on the owner's workstation | Done: `console/` with its own config folder; next: run it on a small VM with a login in front, and create projects from it |
-| Subscription-only auth via `claude auth login` in each VM | Document both login and `setup-token` paths and their trade-offs |
+| Subscription-only auth via `claude auth login` in each VM | Done: login or a stored `setup-token` token (`agent-kit-auth`), trade-offs in getting-started |
 
 ## 3. Lessons worth writing up for others
 
@@ -74,7 +74,7 @@ Done: projects, live topology with history, progress, usage, owner inbox with re
 halt/resume and brakes, all through fixed kit scripts.
 
 Later:
-- Create a project from the console: pick a target, run the sandbox playbooks, install the kit and a team bundle.
+- Create a project from the console. Done: deploy targets, the team check, a dry run, the VM, the kit and team install, the Claude sign-in (saved token or by hand) and registration, and an automatic proof of the gate, with live output.
 - A login in front (an auth proxy header is already honoured) and a dedicated, restricted ssh key.
 - A side chat with the lead that forks its session, for questions that need an answer now.
 - A full transcript viewer per agent, context shown as a share of the model's limit, and services used.

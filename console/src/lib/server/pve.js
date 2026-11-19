@@ -20,6 +20,8 @@ function script(t) {
     sec('snippets', `pvesh get /storage/${q(t.snippetsStorage)} --output-format json`),
     sec('storage', `pvesm status --storage ${q(t.storage)}`),
     sec('mem', 'free -m'),
+    // The gateway's domain allow-list (read-only), to warn about a team that needs more.
+    sec('allow', `pct exec ${t.gatewayVmid} -- cat /etc/squid/agent-allow.txt`),
     sec('version', 'pveversion')
   ].join('\n');
 }
@@ -115,6 +117,13 @@ export function parseInspect(stdout, t) {
     { id: 'vmids', label: `Free VM ids in ${t.vmidMin}–${t.vmidMax}`, ok: free.length > 0, detail: `${free.length} free, ${inRange.length} in use` }
   ];
   const next = free[0] ?? null;
+  const allowed =
+    sec.allow?.rc === 0
+      ? sec.allow.out
+          .split('\n')
+          .map((l) => l.split('#')[0].trim().toLowerCase())
+          .filter((l) => /^\.?[a-z0-9.-]+$/.test(l))
+      : null;
   return {
     ok: checks.every((c) => c.ok),
     checks,
@@ -123,8 +132,15 @@ export function parseInspect(stdout, t) {
     next: next == null ? null : { vmid: next, ip: net.vmIp(next) },
     pool,
     memFreeMb,
+    allowed,
     version: first(sec.version)
   };
+}
+
+/** Does the gateway's allow-list let `domain` through? A leading dot covers sub-domains too. */
+export function domainAllowed(allowed, domain) {
+  const d = domain.replace(/^\./, '').toLowerCase();
+  return (allowed || []).some((a) => (a.startsWith('.') ? d === a.slice(1) || d.endsWith(a) : d === a));
 }
 
 /**

@@ -17,9 +17,11 @@ destructive mistake cannot reach anything outside its own VM.
     └── agent VM 301 (10.66.0.11)  ...
 ```
 
-Isolation is by topology, not firewall rules: the PVE host has no address on
-vmbr1 and does not forward, so the only thing an agent VM can talk to is the
-gateway's squid (and other agent VMs on the same bridge).
+Isolation from your network is by topology, not firewall rules: the PVE host
+has no address on vmbr1 and does not forward, so the only way out of an agent
+VM is the gateway's squid. Agent VMs share that bridge; each new VM gets
+root-owned nftables rules that drop traffic to and from every other agent VM
+(and all IPv6), so one project's team cannot reach another's.
 
 ## Build order
 
@@ -54,8 +56,14 @@ the VM as the `agent` user, and only snapshots `provisioned` if the wall holds.
 - Denied requests: on agent-gw, `sudo grep DENIED /var/log/squid/access.log`. Add a domain to
   `agent_allowed_domains` deliberately, re-run the gateway playbook, re-run `agent-wall-check`.
 - Rollback a VM: `qm rollback <vmid> provisioned`.
-- Agents on the same bridge can see each other. Fine for one project; give a second
-  project its own bridge (or PVE firewall) before running two at once.
+- VM-to-VM traffic on the shared bridge is blocked inside each VM created with the
+  current playbook (`/etc/nftables.conf`, table `inet vmwall`; the playbook reads the
+  loaded rules as root before it takes the snapshot). A VM created with an older
+  version of the playbook does not have these rules: add them by hand, or use a
+  separate bridge.
+- `create-agent-vm.yml` refuses an id listed in `agent_critical_vmids`, an id held by a
+  container, and an existing VM that is not this project's own sandbox VM (same name,
+  tag `agent-sandbox`). With `-e agent_vm_must_be_new=true` it refuses any existing id.
 
 ## Known limits
 

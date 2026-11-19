@@ -34,6 +34,11 @@
     snippets_storage: local
     snippets_dir: /var/lib/vz/snippets
     cloudinit_timeout_s: 1500
+    # Ids this playbook must never act on (your important VMs), whatever is passed.
+    agent_critical_vmids: []
+    # true: fail if anything already holds the VMID (a first run from a tool).
+    # false: a rerun may continue with a VM this playbook created earlier.
+    agent_vm_must_be_new: false
 
   tasks:
     # ---- 0. Preconditions -------------------------------------------------
@@ -82,18 +87,67 @@
         vm:
           vmid: "{{ vmid_out.stdout | int }}"
           name: "{{ agent_vm_name }}"
-        vm_ip: "{{ agent_subnet_prefix }}.{{ (vmid_out.stdout | int) - agent_vmid_min + 10 }}"
+        vm_ip: "{{ agent_subnet_prefix }}.{{ (vmid_out.stdout | int) - (agent_vmid_min | int) + 10 }}"
 
     - name: VMID must be in the agent range
       ansible.builtin.assert:
-        that: (vm.vmid | int) >= agent_vmid_min and (vm.vmid | int) <= agent_vmid_max
+        that: (vm.vmid | int) >= (agent_vmid_min | int) and (vm.vmid | int) <= (agent_vmid_max | int)
+
+    - name: VMID must not be a protected one
+      ansible.builtin.assert:
+        that: (vm.vmid | int) not in (agent_critical_vmids | map('int') | list)
+        fail_msg: "VMID {{ vm.vmid }} is in agent_critical_vmids. Refusing."
 
     - name: Does VM exist already?
-      ansible.builtin.command: "qm status {{ vm.vmid }}"
+      ansible.builtin.command: "qm config {{ vm.vmid }}"
       register: vm_probe
       failed_when: false
       changed_when: false
       check_mode: false
+
+    - name: Does a container hold this id?
+      ansible.builtin.command: "pct status {{ vm.vmid }}"
+      register: ct_probe
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: The id must not belong to a container
+      ansible.builtin.assert:
+        that: ct_probe.rc != 0
+        fail_msg: "A container already uses id {{ vm.vmid }}. Refusing."
+
+    - name: The id must be free (agent_vm_must_be_new)
+      ansible.builtin.assert:
+        that: vm_probe.rc != 0
+        fail_msg: "VM {{ vm.vmid }} already exists. Refusing to touch it."
+      when: agent_vm_must_be_new | bool
+
+    # A rerun continues with an existing VM only if it is the one this playbook
+    # made for this name. Anything else with that id is left alone.
+    - name: An existing VM must be this project's own sandbox VM
+      ansible.builtin.assert:
+        that:
+          - "vm_probe.stdout is search('(?m)^name: ' ~ (vm.name | regex_escape) ~ '$')"
+          - "vm_probe.stdout is search('(?m)^tags: .*agent-sandbox')"
+        fail_msg: "VM {{ vm.vmid }} exists but is not the agent sandbox VM named {{ vm.name }}. Refusing to touch it."
+      when: vm_probe.rc == 0
+
+    - name: Other agent VMs on the bridge (the new VM must not reach them)
+      # One listing instead of a status call per id: that took most of a minute.
+      ansible.builtin.shell: |
+        set -o pipefail
+        qm list | awk -v min={{ agent_vmid_min | int }} -v max={{ agent_vmid_max | int }} -v self={{ vm.vmid | int }} -v p={{ agent_subnet_prefix }} \
+          'NR > 1 && $1 ~ /^[0-9]+$/ && $1 >= min && $1 <= max && $1 != self { printf "%s.%d ", p, $1 - min + 10 }'
+      args:
+        executable: /bin/bash
+      register: peers_out
+      changed_when: false
+      check_mode: false
+
+    - name: Remember the peers
+      ansible.builtin.set_fact:
+        agent_peer_ips: "{{ peers_out.stdout | trim }}"
 
     - name: Plan
       ansible.builtin.debug:
@@ -141,6 +195,14 @@
       when: vm_probe.rc != 0
       changed_when: true
 
+    # Milestones for tools that run this playbook: they arrive with the play's
+    # final statistics, also when a later task fails.
+    - name: Milestone - the VM exists
+      ansible.builtin.set_stats:
+        data:
+          ziggurat: { stage: cloned, vmid: "{{ vm.vmid }}", name: "{{ vm.name }}", ip: "{{ vm_ip }}" }
+      when: not ansible_check_mode
+
     # ---- 3. Wait for cloud-init -------------------------------------------
     - name: Wait for qemu guest agent
       ansible.builtin.command: "qm agent {{ vm.vmid }} ping"
@@ -172,6 +234,12 @@
         fail_msg: "cloud-init failed; inspect: qm guest exec {{ vm.vmid }} -- cat /var/log/cloud-init-output.log"
       when: not ansible_check_mode
 
+    - name: Milestone - cloud-init finished
+      ansible.builtin.set_stats:
+        data:
+          ziggurat: { stage: provisioned }
+      when: not ansible_check_mode
+
     # ---- 4. Prove the wall from inside -----------------------------------
     - name: Run agent-wall-check as the agent user
       ansible.builtin.command: >-
@@ -192,6 +260,31 @@
         fail_msg: "WALL CHECK FAILED - do not start agents. VM left running for inspection, no snapshot taken."
       when: not ansible_check_mode
 
+    # The agent-run check cannot prove this part: a peer that is switched off
+    # looks the same as a peer that is blocked. So read the loaded rules as root.
+    - name: Read the VM-to-VM block as root
+      ansible.builtin.command: >-
+        qm guest exec {{ vm.vmid }} --timeout 60
+        -- bash -c "nft list table inet vmwall && systemctl is-enabled nftables"
+      register: vmwall
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: VM-to-VM block must be loaded and survive a reboot
+      ansible.builtin.assert:
+        that:
+          - (vmwall.stdout | from_json).exitcode == 0
+          - "'drop' in ((vmwall.stdout | from_json)['out-data'] | default(''))"
+          - "agent_gw_bridge_ip in ((vmwall.stdout | from_json)['out-data'] | default(''))"
+        fail_msg: "The nftables rules that keep this VM away from other agent VMs are not loaded. No snapshot taken."
+      when: not ansible_check_mode
+
+    - name: Milestone - the wall holds
+      ansible.builtin.set_stats:
+        data:
+          ziggurat: { stage: walled }
+      when: not ansible_check_mode
+
     # ---- 5. Snapshot -------------------------------------------------------
     - name: Snapshot "provisioned" (rollback point before any agent runs)
       ansible.builtin.shell: |
@@ -199,6 +292,26 @@
           || qm snapshot {{ vm.vmid }} provisioned --description "fresh, wall-checked, before any agent run"
       changed_when: true
       when: not ansible_check_mode
+
+    # Read through Proxmox, so nobody has to trust the key on first contact.
+    - name: Read the VM's ssh host key
+      ansible.builtin.command: "qm guest exec {{ vm.vmid }} --timeout 30 -- cat /etc/ssh/ssh_host_ed25519_key.pub"
+      register: hostkey
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Result
+      ansible.builtin.set_stats:
+        data:
+          ziggurat:
+            stage: "{{ 'planned' if ansible_check_mode else 'done' }}"
+            vmid: "{{ vm.vmid }}"
+            name: "{{ vm.name }}"
+            ip: "{{ vm_ip }}"
+            existed: "{{ vm_probe.rc == 0 }}"
+            peers: "{{ agent_peer_ips }}"
+            host_key: "{{ '' if ansible_check_mode else (((hostkey.stdout | from_json)['out-data'] | default('')).split()[:2] | join(' ')) }}"
+            snapshot: "{{ '' if ansible_check_mode else 'provisioned' }}"
 
     - name: Next steps
       ansible.builtin.debug:

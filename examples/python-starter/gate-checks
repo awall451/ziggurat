@@ -1,0 +1,47 @@
+#!/bin/bash
+# gate-checks <workdir> <outdir>   (Python: venv, ruff, pytest)
+# Runs as the unprivileged `gaterun` user inside a fresh checkout of a
+# candidate commit. Root-owned; agents cannot edit it. Prints one line per
+# step ("STEP <name> ok|FAIL <secs>s") and exits non-zero on the first failure.
+# Also prints TESTS_PASSED=<n> for the orchestrator's test-count rule.
+set -uo pipefail
+work=$1 out=$2
+cd "$work" || exit 2
+mkdir -p "$out"
+export PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1
+
+step() {
+  local name=$1; shift
+  local t0=$SECONDS
+  if "$@" >"$out/$name.log" 2>&1; then
+    echo "STEP $name ok $((SECONDS - t0))s"
+  else
+    echo "STEP $name FAIL $((SECONDS - t0))s"
+    echo "---- last 40 lines of $name ----"; tail -40 "$out/$name.log"
+    exit 1
+  fi
+}
+
+step venv    timeout 300  python3 -m venv .venv
+# `timeout` cannot run shell functions, so the install logic runs in bash -c.
+step install timeout 1200 bash -c '.venv/bin/pip install -q -r requirements-dev.txt &&
+  { [ ! -f requirements.txt ] || .venv/bin/pip install -q -r requirements.txt; }'
+step lint    timeout 300  .venv/bin/ruff check .
+step unit    timeout 900  .venv/bin/pytest -q -p no:cacheprovider --junitxml="$out/junit.xml"
+# Passed = tests - failures - errors - skipped (skipping a test lowers the count).
+echo "TESTS_PASSED=$(python3 - "$out/junit.xml" <<'EOF'
+import sys, xml.etree.ElementTree as ET
+try:
+    r = ET.parse(sys.argv[1]).getroot()
+    suites = [r] if r.tag == "testsuite" else r.findall("testsuite")
+    n = sum(int(s.get(k, 0)) * (1 if k == "tests" else -1)
+            for s in suites for k in ("tests", "failures", "errors", "skipped"))
+    print(max(n, 0))
+except Exception:
+    print(0)
+EOF
+)"
+if [ -f tools/gate-extra.sh ]; then
+  step repo-checks timeout 900 bash tools/gate-extra.sh "$out"
+fi
+echo "ALL CHECKS PASSED"

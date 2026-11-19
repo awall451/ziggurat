@@ -19,6 +19,9 @@ const SCRIPT_RE = /^[a-z][a-z0-9-]{1,40}$/;
 /** ssh options + destination for a project ({alias} or {host,user,jump,key}). */
 export function sshArgs(project) {
   const s = project.ssh || {};
+  // A project the console created: reached with the console's own host keys
+  // and strict options, not through the mounted ssh config.
+  if (project.target && s.host && s.user && !s.alias) return hostArgs({ host: s.host, user: s.user, jump: s.jump || null });
   const args = [
     '-o', 'BatchMode=yes',
     '-o', 'LogLevel=ERROR',
@@ -70,8 +73,10 @@ export function setHostKey(host, keyLine) {
 }
 
 function strictOpts() {
+  // These end up inside a ProxyCommand and an rsync -e string, so no value
+  // here may need quoting.
   for (const f of [OWN_KNOWN_HOSTS, HOME_KNOWN_HOSTS, SSH_KEY]) {
-    if (/\s/.test(f)) throw new Error(`path with a space cannot be used for ssh: ${f}`);
+    if (!/^[A-Za-z0-9@%+=:,._/-]+$/.test(f)) throw new Error(`path with a space or special character cannot be used for ssh: ${f}`);
   }
   return [
     '-o', 'BatchMode=yes',
@@ -79,7 +84,9 @@ function strictOpts() {
     '-o', 'ConnectTimeout=12',
     '-o', 'IdentitiesOnly=yes',
     '-o', 'StrictHostKeyChecking=yes',
-    '-o', `UserKnownHostsFile=${OWN_KNOWN_HOSTS} ${HOME_KNOWN_HOSTS}`,
+    // Two files, each its own option: the console's own, and the mounted one.
+    '-o', `UserKnownHostsFile=${OWN_KNOWN_HOSTS}`,
+    '-o', `GlobalKnownHostsFile=${HOME_KNOWN_HOSTS}`,
     '-o', 'ForwardAgent=no',
     '-i', SSH_KEY
   ];
@@ -104,9 +111,37 @@ export function hostArgs({ host, user, jump }) {
     const m = /^(?:([a-z_][a-z0-9_-]{0,31})@)?([A-Za-z0-9][A-Za-z0-9.-]{0,252}?)(?::([0-9]{1,5}))?$/.exec(jump);
     if (!m) throw new Error('bad ssh jump host');
     const hop = ['ssh', ...strictOpts(), ...(m[3] ? ['-p', m[3]] : []), '-W', '%h:%p', m[1] ? `${m[1]}@${m[2]}` : m[2]];
-    args.push('-o', `ProxyCommand=${hop.map((a) => (/^[A-Za-z0-9@%+=:,._/-]+$/.test(a) ? a : q(a))).join(' ')}`);
+    args.push('-o', `ProxyCommand=${hop.join(' ')}`);
   }
   return { args, dest: `${user}@${host}` };
+}
+
+/**
+ * The same strict options as one shell-quoted string, for an Ansible inventory
+ * (`ansible_ssh_common_args`). Ansible adds the key and the destination itself.
+ */
+export function ansibleSshArgs({ jump } = {}) {
+  const { args } = hostArgs({ host: 'placeholder', user: 'root', jump });
+  const keep = [];
+  for (let i = 0; i < args.length; i += 2) {
+    // Connection sharing is left to Ansible's own settings.
+    if (args[i] === '-o' && /^Control(Master|Path|Persist)=/.test(args[i + 1])) continue;
+    keep.push(args[i], args[i + 1]);
+  }
+  return keep.map((a) => (/^[A-Za-z0-9@%+=:,._/-]+$/.test(a) ? a : q(a))).join(' ');
+}
+
+/** The public half of the console's key ("<type> <key>"), derived from the private key. */
+export async function publicKey() {
+  const res = await collect('ssh-keygen', ['-y', '-f', SSH_KEY], { timeout: 10000 });
+  const line = res.stdout.trim().split('\n')[0] || '';
+  if (res.code !== 0 || !KEYLINE_RE.test(line.split(' ').slice(0, 2).join(' '))) throw new Error('could not read the console ssh key');
+  return line.split(' ').slice(0, 2).join(' ');
+}
+
+/** `ssh <options>` as one string for rsync -e. Options with a space are quoted once; none needs more. */
+export function rshCommand(args) {
+  return ['ssh', ...args].map((a) => (/\s/.test(a) ? `'${a}'` : a)).join(' ');
 }
 
 /** Run a bash script built by the console on such a host. The script travels on stdin. */
@@ -185,7 +220,7 @@ export function kit(project, script, argv = [], opts = {}) {
  */
 export function pull(project, remotePaths, localDir, { as = 'self', filters = [], maxSize = '64m', timeout = 180000 } = {}) {
   const { args, dest } = sshArgs(project);
-  const rsh = ['ssh', ...args].map((a) => (/\s/.test(a) ? `'${a}'` : a)).join(' ');
+  const rsh = rshCommand(args);
   const argv = ['-rt', '--no-links', '--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r', `--max-size=${maxSize}`, '-e', rsh];
   if (as === 'agent') argv.push('--rsync-path=sudo -n -u agent rsync');
   argv.push(...filters, ...remotePaths.map((p) => `${dest}:${p}`), localDir.endsWith('/') ? localDir : `${localDir}/`);

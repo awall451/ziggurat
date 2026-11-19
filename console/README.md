@@ -127,6 +127,63 @@ you turn it on, the console only ever talks to the sandbox VMs.
 | `storage`, `snippetsStorage`, `snippetsDir` | Disk storage, and where cloud-init snippets go |
 | `poolWarnPct`, `poolBlockPct` | Storage fill levels for a warning (80) and for refusing a deploy (90) |
 
+### Creating a project (with `CONSOLE_DEPLOY=1`)
+
+"New project" on the start page makes a new sandbox VM for a team:
+
+1. **The form.** A name, and what the team starts from: one of your project folders
+   (`CONSOLE_PROJECTS_DIR/<name>/team/`, usually with `seed/` beside it for the starting repo) or an example
+   that ships a seed. The charter can be edited in place. Target, size, theme, models and brakes are under
+   "Advanced".
+2. **The check.** The console reads the team without running anything from it: required files, agent
+   headers, no links, size limits. It writes `project.env` itself; a bundle's own env files are read as
+   plain `KEY=value` lines and anything else is refused, because the kit later sources them as root in the VM.
+3. **Dry run.** Asks the host again (id free, name free, storage below the block line), then runs
+   `sandbox/proxmox/playbooks/create-agent-vm.yml` with `--check`. It settles the VM id and address and
+   changes nothing. It does not prove that the VM will build.
+4. **Create project.** Open for 15 minutes after a dry run of exactly the same inputs. Runs the playbook for
+   real with the id the dry run settled on, with live output: clone, cloud-init, the isolation check from
+   inside the VM, the VM-to-VM block, a `provisioned` snapshot. The VM's ssh host key is read through
+   Proxmox and stored.
+
+5. **Install.** Starts by itself once the VM is ready: `sandbox/install/install-team.yml` copies the kit, the
+   rendered team and the seed in, copies the project's `files/` folder (if it has one) to
+   `/root/provision-files`, runs the team's `provision.sh` as root (its text is shown before the dry run),
+   runs the kit installer and checks that the team is installed and stopped.
+6. **Claude sign-in.** With a token saved as `claude-token` in the config folder (one line, from
+   `claude setup-token`, mode 600), the VM gets it and the deploy finishes without you. Without one, the page
+   shows three things to paste on your workstation (an ssh config entry, the VM's host key, one command) and
+   a "check now" button. The check is `claude auth status` on the VM; it spends no tokens.
+7. **Registered, halted.** The project is added to `projects.json` and shows up like any other. Its lead
+   timer is off. Starting the team is your Resume on its Controls tab; the console never does that.
+8. **Gate proof.** Runs by itself on the VM (`agent-kit-gate-proof`, kit 0.3.1): one harmless change must be
+   merged by the gate, and a change that deletes a test file (named by `GATE_PROOF_DELETE` in the team's
+   `project.env`) must be refused. It uses the gate's real checks, spends no tokens, and leaves the team
+   halted. A build that is broken in a way only your project knows is still yours to try once by hand.
+
+About the token: it is read only to hand it to a VM. It goes to the VM on stdin inside a task whose output is
+never logged, and it is never written to a run folder, the audit log or a page. On the VM it sits in the
+agents' environment, so an agent that prints its environment writes it into its transcript; the console
+hides anything shaped like a token wherever it shows transcript text. One token for several VMs means one
+leak exposes all of them. A project's Controls tab shows how its team is signed in and can apply the saved
+token to a VM with kit 0.3 or later.
+
+A failed install does not harm the VM's snapshot. The page shows
+`qm rollback <vmid> provisioned && qm start <vmid>` for you to run, then "Retry the install", which reads the
+team from its folder again.
+
+What the console will not do: destroy or roll back a VM, touch an id outside the target's range or in
+`criticalVmids`, touch an id that is already in use, run two deploys at once, or start a team. After a failed
+run it shows how far the run got and the commands to clean up by hand. A run that failed after the clone
+finished can be continued; a VM that failed its isolation check cannot.
+
+Each deploy keeps its inputs, the staged team and every run (inventory, variables, events, output) under
+`console-data/deploys/<id>/`. Nothing there is deleted automatically.
+
+API: `GET/POST /api/deploys`, `GET/DELETE /api/deploys/<id>` (DELETE closes the record only),
+`POST /api/deploys/<id>/dry-run|create|continue|install|login-check|apply-token|gate-proof`, `GET /api/deploys/<id>/events?run=<run>` (server-sent
+events), `GET /api/deploy-sources`.
+
 "Check target" runs one fixed, read-only script on the host (`qm list`, `pct list`, storage, memory, the
 bridge, the gateway, the template) and shows what it found. It changes nothing.
 
