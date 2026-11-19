@@ -233,9 +233,11 @@ The team runs without you. These are the ways to steer it, from lightest to heav
 
 ```mermaid
 stateDiagram-v2
+    state "One-shot job" as OneShot
+    state "Finishing the cycle" as Finishing
     [*] --> Halted: installed
     Halted --> Running: Resume
-    Halted --> OneShot: One-shot job
+    Halted --> OneShot: you ask for one job
     OneShot --> Halted: cycle ends
     Running --> Halted: Halt now
     Running --> Finishing: Halt after the cycle
