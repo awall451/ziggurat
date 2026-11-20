@@ -52,6 +52,11 @@ show() {
   for f in markup.png shot.png; do
     [ -f "$IS/$id/$f" ] && echo "Image ($f, read it with your file tools): $IS/$id/$f"
   done
+  local att=("$IS/$id"/att/*)
+  if [ ${#att[@]} -gt 0 ]; then
+    echo "Attachments (read them with your file tools):"
+    for f in "${att[@]}"; do echo "  $f"; done
+  fi
   [ -f "$OUT/$id.md" ] && { echo; echo "Your last update:"; cat "$OUT/$id.md"; }
 }
 

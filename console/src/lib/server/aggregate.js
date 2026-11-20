@@ -219,6 +219,26 @@ export function gallery(project) {
     .map((date) => ({ date, files: days[date] }));
 }
 
+const SID_NAME_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(md|mp3)$/;
+
+/**
+ * Briefs written by workstation/agent-brief, one per finished cycle:
+ * session id -> {md, mp3}. Reads the text of `only` (a session id) alone.
+ */
+export function briefs(project, only = null) {
+  const dir = path.join(project.paths.fleet, 'briefs');
+  const out = new Map();
+  for (const d of listDir(dir)) {
+    const m = d.isFile() && SID_NAME_RE.exec(d.name);
+    if (!m) continue;
+    const b = out.get(m[1]) || { md: null, mp3: false };
+    if (m[2] === 'mp3') b.mp3 = true;
+    else b.md = only === m[1] ? readText(path.join(dir, d.name), 100000) : '';
+    out.set(m[1], b);
+  }
+  return out;
+}
+
 export function digests(project) {
   const dir = path.join(project.paths.fleet, 'digests');
   const names = new Set(listDir(dir).map((d) => d.name));
@@ -279,7 +299,7 @@ export function resolveInside(base, rel) {
 }
 
 const MEDIA = { '.png': 'image/png', '.mp3': 'audio/mpeg' };
-const MEDIA_ROOTS = ['shots', 'digests', 'trials'];
+const MEDIA_ROOTS = ['shots', 'digests', 'briefs', 'trials'];
 
 /** A screenshot or digest audio file from the fleet folder, or null. */
 export function mediaFile(project, rel) {

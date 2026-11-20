@@ -65,4 +65,19 @@ To update a VM that already runs the kit: copy `kit/vm` in, `sudo bash vm/instal
 
 - Follow [console/README.md](../console/README.md): a config folder with `projects.json`, a small ssh folder for the console, `docker compose up`.
 - Keep it on a private network (VPN or a reverse proxy with a login). It has no login of its own.
-- Optional: `workstation/agent-digest` once a day writes a short digest per project (and a spoken version) from the data the console pulled; it appears in the console's Digest tab. Copy `config.example.env` to `~/.config/ziggurat/config.env` first.
+- Optional: `workstation/agent-brief` writes a short brief for every cycle that has finished (and a spoken version) from the data the console pulled; it appears in the console's Briefs tab, one per cycle. Copy `config.example.env` to `~/.config/ziggurat/config.env` first, then run it every few minutes, for example with a systemd user timer:
+
+  ```ini
+  # ~/.config/systemd/user/agent-brief.service
+  [Service]
+  Type=oneshot
+  ExecStart=/path/to/ziggurat/workstation/agent-brief
+  # ~/.config/systemd/user/agent-brief.timer
+  [Timer]
+  OnBootSec=5min
+  OnUnitActiveSec=10min
+  [Install]
+  WantedBy=timers.target
+  ```
+
+  It only writes briefs that do not exist yet, about 20 minutes after a cycle ends (once the gate has judged its work).

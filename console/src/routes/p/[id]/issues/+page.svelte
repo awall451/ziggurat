@@ -4,6 +4,7 @@
   import { invalidateAll } from '$app/navigation';
   import { ago } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
+  import NewIssue from '$lib/components/NewIssue.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -22,6 +23,31 @@
   let over = $state(null);
   let busy = $state(false);
   let err = $state('');
+  let creating = $state(false);
+  let flash = $state(null); // {ok, text}
+  let kindFilter = $state('all');
+  let query = $state('');
+
+  const KIND_FILTERS = [
+    ['all', 'All'],
+    ['bug', 'Bugs'],
+    ['polish', 'Polish'],
+    ['idea', 'Ideas']
+  ];
+  const shown = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return data.issues.filter(
+      (i) => (kindFilter === 'all' || i.kind === kindFilter) && (!q || i.title.toLowerCase().includes(q) || (i.body || '').toLowerCase().includes(q))
+    );
+  });
+
+  async function created(res) {
+    creating = false;
+    flash = res.delivered
+      ? { ok: true, text: 'Issue raised.' }
+      : { ok: false, text: `Issue saved here, but not sent to the VM yet${res.error ? ` (${res.error})` : ''}. Open it to send it again.` };
+    await invalidateAll();
+  }
 
   const open = $derived(data.issues.find((i) => i.id === openId) || null);
   const img = (i) => `${base}/issues/img/${i.id}/${i.hasMarkup ? 'markup.png' : 'shot.png'}`;
@@ -59,23 +85,42 @@
   }
 
   function key(e) {
-    if (e.key === 'Escape') openId = null;
+    if (e.key === 'Escape' && !creating) openId = null;
   }
 </script>
 
 <svelte:window onkeydown={key} />
 
+<div class="toolbar">
+  <!-- Works with the VM off too: the issue is kept here and sent when asked again. -->
+  <button class="btn go" onclick={() => (creating = true)}>
+    <Icon name="plus" size={14} /> New issue
+  </button>
+  <div class="chips" role="group" aria-label="Kind">
+    {#each KIND_FILTERS as [k, label] (k)}
+      <button class="chip" class:on={kindFilter === k} aria-pressed={kindFilter === k} onclick={() => (kindFilter = k)}>{label}</button>
+    {/each}
+  </div>
+  <input class="field search" type="search" placeholder="Search issues" bind:value={query} aria-label="Search issues" />
+  <span class="grow"></span>
+  <span class="dim small">{p.tiers[0]} moves the cards as the team works. Drag one to override.</span>
+</div>
+
+{#if flash}<div class="small err" class:s-done={flash.ok} class:s-interrupted={!flash.ok}>{flash.text}</div>{/if}
 {#if err}<div class="s-failed small err">{err}</div>{/if}
 
 {#if !data.issues.length}
   <div class="panel empty">
     <h2>No issues yet</h2>
-    <p class="dim">Raise one from the Gallery: open a screenshot's menu (☰) and pick “Leave a note”. The lead triages every issue and hands it to the team.</p>
+    <p class="dim">
+      Raise one with <b>New issue</b>, with a picture or files if you like, or from the Gallery: open a screenshot's menu (☰) and pick “Leave a
+      note”. The lead triages every issue at the start of its next cycle and hands it to the team.
+    </p>
   </div>
 {:else}
   <div class="board">
     {#each COLUMNS as [status, label] (status)}
-      {@const cards = data.issues.filter((i) => column(i) === status)}
+      {@const cards = shown.filter((i) => column(i) === status)}
       <section
         class="col panel"
         class:over={over === status}
@@ -123,7 +168,7 @@
           <h2>{open.title}</h2>
           <div class="small dim">
             <span class="pill kind {open.kind}">{open.kind}</span>
-            {#if open.origin?.screen}<span class="cap">{screenName(open)}</span> · {open.origin.date}{/if} · raised by {open.by} {ago(open.createdAt, p.now)}
+            {#if open.origin?.screen}<span class="cap">{screenName(open)}</span> · {open.origin.date}{/if}{#if open.origin?.type === 'upload'}<span class="mono">{open.origin.name}</span>{/if} · raised by {open.by} {ago(open.createdAt, p.now)}
           </div>
         </div>
         <span class="pill st {open.status}">{WORD[open.status]}</span>
@@ -146,6 +191,14 @@
       </div>
 
       {#if open.body}<p class="body">{open.body}</p>{/if}
+      {#if open.attachments?.length}
+        <div class="atts small">
+          <span class="dim">Files:</span>
+          {#each open.attachments as a (a.name)}
+            <a class="mono" href="{base}/issues/att/{open.id}/{a.name}" target="_blank" rel="noopener">{a.name}</a>
+          {/each}
+        </div>
+      {/if}
 
       <div class="actions">
         {#each ['new', 'in_progress', 'done', 'wontfix'] as s (s)}
@@ -170,7 +223,53 @@
   </div>
 {/if}
 
+{#if creating}
+  <NewIssue project={p} canFiles={p.canIssueFiles} onclose={() => (creating = false)} oncreated={created} />
+{/if}
+
 <style>
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .toolbar .go {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-color: var(--accent);
+    background: rgba(var(--glow), 0.25);
+  }
+  .chips {
+    display: flex;
+    gap: 4px;
+  }
+  .chip {
+    border: 1px solid var(--line);
+    background: none;
+    color: var(--ink-2);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .chip.on {
+    border-color: var(--accent);
+    color: var(--ink);
+    background: rgba(var(--glow), 0.16);
+  }
+  .search {
+    width: 200px;
+  }
+  .atts {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
   .empty {
     padding: 32px;
   }

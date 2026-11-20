@@ -63,6 +63,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canOneshot: !!status.canOneshot,
     // One-shot jobs on an idle team (set to run, no cycle running) need kit 0.6.
     canOneshotIdle: !!status.canOneshot && kitAtLeast(status.kitVersion, '0.6.0'),
+    // Files attached to an issue (beyond its one picture) need kit 0.7.
+    canIssueFiles: kitAtLeast(status.kitVersion, '0.7.0'),
     // Halting after the cycle needs kit 0.5.
     canHaltAfter: !!status.canHaltAfter,
     cycle: current

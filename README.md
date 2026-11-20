@@ -206,7 +206,7 @@ One web app for all your teams. It runs on your workstation, reaches each VM ove
 
 <p align="center"><img src="docs/img/usage.webp" alt="Usage page: stacked bars of cost per cycle by model, and tables of tokens and estimates by model and by role" width="100%"></p>
 
-Also: **Notes** (the lead's plan, its journal, QA's issues), **Digest** (a morning summary per project, with a spoken version) and **Settings** (projects and deploy targets). See [console/README.md](console/README.md).
+Also: **Notes** (the lead's plan, its journal, QA's issues), **Briefs** (a short summary of every finished cycle, with a spoken version) and **Settings** (projects and deploy targets). See [console/README.md](console/README.md).
 
 ## Staying in charge
 
@@ -316,7 +316,7 @@ About 38% cheaper per goal, with the independent reviewer and QA still on. Two r
 | [`examples/ps1-cpp/`](examples/ps1-cpp) | A PlayStation 1 game in C++20: charter, gate checks (host tests, console build, emulator playthrough, disc image), toolchain recipe, team |
 | [`themes/`](themes) | Display names for the roles. Behaviour never changes with a theme |
 | [`tools/render-team.py`](tools/render-team.py) | Renders a team folder for a theme |
-| [`workstation/`](workstation) | A morning digest per project, with a spoken brief |
+| [`workstation/`](workstation) | A brief for every finished cycle, with a spoken version |
 | [`docs/`](docs) | [Architecture](docs/architecture.md) · [Getting started](docs/getting-started.md) · [Lessons](docs/lessons.md) · [Results](docs/results.md) · [Roadmap](docs/roadmap.md) |
 
 A project is described by one folder, the **team bundle**: `CHARTER.md` (the goal and the boundaries, written by you), `GATE-CONTRACT.md`, `gate-checks`, the lead's prompt and `agents/*.md`. The examples are bundles.

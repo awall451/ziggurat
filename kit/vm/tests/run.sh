@@ -154,6 +154,27 @@ check "a short issue is not marked as cut" '[ "$(grep -c "cut here" <<< "$out")"
 whole=$("$BIN/owner-issues" show $I3)
 check "the whole issue and its image path are one command away" 'grep -q ISSUETAIL <<< "$whole" && grep -q "issues/$I3/markup.png" <<< "$whole"'
 "$BIN/agent-kit-issues" set $I3 wontfix > /dev/null
+# Raised on the Issues page (kit 0.7): a picture and plain files in att/.
+I4=20260101T120005Z-i-ffffff
+mkdir -p "$T/work/i4/att"
+printf '# Crash when saving\n\nKind: bug\n\nSee the log. Code word GARNET.\n' > "$T/work/i4/issue.md"
+echo png > "$T/work/i4/shot.png"; echo "trace" > "$T/work/i4/att/crash.log"; echo png > "$T/work/i4/att/menu-markup.png"
+tarball i4 | "$BIN/agent-kit-issues" put $I4 bug > /dev/null
+check "an issue with attachments is stored, att/ readable" '[ -f "$S/issues/$I4/att/crash.log" ] && [ "$(stat -c %a "$S/issues/$I4/att")" = 755 ] && [ "$(stat -c %a "$S/issues/$I4/att/crash.log")" = 644 ]'
+whole=$("$BIN/owner-issues" show $I4)
+check "the lead sees the attachment paths" 'grep -q "issues/$I4/att/crash.log" <<< "$whole" && grep -q "issues/$I4/att/menu-markup.png" <<< "$whole"'
+out=$("$BIN/owner-issues" prompt)
+check "the prompt points at the attachments" 'grep -q "issues/$I4/att/crash.log" <<< "$out"'
+mkdir -p "$T/work/i5/att/sub"; echo x > "$T/work/i5/issue.md"; echo x > "$T/work/i5/att/sub/f"
+refuse "a folder inside att/" bash -c "tar -c -C '$T/work/i5' . | '$BIN/agent-kit-issues' put 20260101T120006Z-i-a00001 bug"
+mkdir -p "$T/work/i6/att"; echo x > "$T/work/i6/issue.md"; ln -s /etc/passwd "$T/work/i6/att/passwd"
+refuse "a symlink in att/" bash -c "tar -c -C '$T/work/i6' . | '$BIN/agent-kit-issues' put 20260101T120007Z-i-a00002 bug"
+mkdir -p "$T/work/i7/att"; echo x > "$T/work/i7/issue.md"; echo x > "$T/work/i7/att/.hidden"
+refuse "a hidden attachment name" bash -c "tar -c -C '$T/work/i7' . | '$BIN/agent-kit-issues' put 20260101T120008Z-i-a00003 bug"
+mkdir -p "$T/work/i8/att"; echo x > "$T/work/i8/issue.md"; for n in 1 2 3 4 5 6 7 8 9; do echo x > "$T/work/i8/att/f$n.txt"; done
+refuse "more than 8 attachments" bash -c "tar -c -C '$T/work/i8' . | '$BIN/agent-kit-issues' put 20260101T120009Z-i-a00004 bug"
+check "refused attachments left no issue" '[ ! -e "$S/issues/20260101T120006Z-i-a00001" ] && [ ! -e "$S/issues/20260101T120007Z-i-a00002" ] && [ ! -e "$S/issues/20260101T120009Z-i-a00004" ]'
+"$BIN/agent-kit-issues" set $I4 wontfix > /dev/null
 
 echo "== agent-kit-caps"
 "$BIN/agent-kit-caps" set MAX_CYCLES_PER_DAY 3 > /dev/null

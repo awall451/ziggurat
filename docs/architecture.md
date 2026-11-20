@@ -72,16 +72,22 @@ cannot make a root process read something else.
 ## Owner issues
 
 Tickets for the lead, separate from the inbox. The owner raises one from a Gallery screenshot (tile menu ☰ →
-"Leave a note"), drawing boxes, ellipses or freehand marks on it. The console's Issues tab shows them as a
-board: New, In progress, Done (won't fix sits in Done).
+"Leave a note"), drawing boxes, ellipses or freehand marks on it, or with **New issue** on the Issues tab: a
+title, kind and description, with no picture, one picture of the owner's own (marked up the same way), and
+from kit 0.7 up to 8 more files (logs, more pictures; a marked-up extra picture goes along as
+`<name>-markup.png`). The console's Issues tab shows them as a board: New, In progress, Done (won't fix sits
+in Done), with a filter by kind and a search.
 
 | Path | Owner | Purpose |
 |---|---|---|
-| `/var/lib/agent-kit/issues/<id>/issue.md`, `shot.png`, `markup.png` | root | The issue, the screenshot, and the screenshot with the owner's markup flattened on it |
+| `/var/lib/agent-kit/issues/<id>/issue.md`, `shot.png`, `markup.png` | root | The issue, the screenshot (or the owner's picture), and the same with the owner's markup flattened on it |
+| `/var/lib/agent-kit/issues/<id>/att/<file>` | root | Files the owner attached on the Issues page (kit 0.7): plain files, at most 8, 20 MB each |
 | `/var/lib/agent-kit/issues/.owner/<id>` | root | `<status> <date>` when the owner moved the issue on the board |
 | `/var/lib/agent-kit/issues-out/<id>.md` | `agent` | The lead's latest update: `Status: in_progress`, `done` or `wontfix`, optional `Fixed-shot:` |
 
-- `agent-kit-issues put` (root, called by the console) accepts only `issue.md`, `shot.png` and `markup.png`.
+- `agent-kit-issues put` (root, called by the console) accepts only `issue.md`, `shot.png`, `markup.png` and
+  plain files directly in `att/` with plain names (the same rules as inbox attachments). `owner-issues show`
+  and the prompt list the attachment paths for the lead.
   `agent-kit-issues set` records an owner move.
 - Every cycle, `lead-cycle` appends `owner-issues prompt` after the inbox: the protocol and all open issues.
   Issues are never injected mid-cycle; they weigh like a `note`.

@@ -388,6 +388,13 @@ export function listSessions(project, status = null, { ledgerAt = null } = {}) {
   return rows.filter((r) => r.agents > 0 || bySession.has(r.id) || r.live);
 }
 
+/** The lead's final report in one session (its last text), or null. */
+export function leadReport(project, sid) {
+  if (!SID_RE.test(sid)) return null;
+  const main = foldFile(path.join(sessionDir(project), `${sid}.jsonl`));
+  return main?.lastText ? main.lastText.slice(0, TEXT_CAP) : null;
+}
+
 /**
  * The agent tree of one session.
  * @returns {{session: object, nodes: object[]} | null}

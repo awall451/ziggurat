@@ -1,9 +1,6 @@
-import { error } from '@sveltejs/kit';
-import { getProject } from '$lib/server/config.js';
-import { digests } from '$lib/server/aggregate.js';
+import { redirect } from '@sveltejs/kit';
 
+/** The daily digest became a brief per cycle: old links land there. */
 export function load({ params }) {
-  const project = getProject(params.id);
-  if (!project) error(404, 'No such project');
-  return { digests: digests(project) };
+  redirect(301, `/p/${params.id}/briefs`);
 }

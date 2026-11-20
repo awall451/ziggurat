@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listSessions, sessionTree, _test } from '../src/lib/server/transcripts.js';
+import { listSessions, sessionTree, leadReport, _test } from '../src/lib/server/transcripts.js';
 
 // Synthetic transcripts in the shape Claude Code writes them. No real data.
 const SID = '11111111-2222-4333-8444-555555555555';
@@ -93,6 +93,21 @@ describe('listSessions', () => {
   it('marks the session in progress as running', () => {
     const rows = listSessions(project, { leadActive: true, session: SID });
     expect(rows[0]).toMatchObject({ live: true, state: 'running' });
+  });
+});
+
+describe('leadReport', () => {
+  it("gives the lead's last words, and nothing for a bad id", () => {
+    const R = '33333333-2222-4333-8444-555555555555';
+    fs.writeFileSync(
+      path.join(project.paths.transcripts, project.slug, `${R}.jsonl`),
+      line(asst('r1', 'claude-lead-1', usage(1, 1), [{ type: 'text', text: 'Working.' }], '2026-01-02T10:00:00Z')) +
+        line(asst('r2', 'claude-lead-1', usage(1, 1), [{ type: 'text', text: '**Cycle summary:** merged the menu.' }], '2026-01-02T11:00:00Z'))
+    );
+    expect(leadReport(project, R)).toBe('**Cycle summary:** merged the menu.');
+    expect(leadReport(project, SID)).toBeNull(); // only tool calls, no words
+    expect(leadReport(project, '../etc')).toBeNull();
+    fs.rmSync(path.join(project.paths.transcripts, project.slug, `${R}.jsonl`));
   });
 });
 
