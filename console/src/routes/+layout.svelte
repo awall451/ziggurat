@@ -43,6 +43,8 @@
         <span class="chip mono">{project.theme}</span>
       {:else if page.url.pathname.startsWith('/new')}
         <a href="/">Projects</a><span class="dim">/</span><span class="here">New project</span>
+      {:else if page.url.pathname.startsWith('/schedule')}
+        <a href="/">Projects</a><span class="dim">/</span><span class="here">Schedule</span>
       {:else if page.url.pathname.startsWith('/settings')}
         <a href="/">Projects</a><span class="dim">/</span><span class="here">Settings</span>
       {:else}
@@ -50,6 +52,7 @@
       {/if}
     </nav>
     <span class="grow"></span>
+    <a class="small" href="/schedule">Schedule</a>
     <a class="small" href="/settings">Settings</a>
   </header>
   <main>

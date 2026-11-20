@@ -601,6 +601,119 @@ check "a one-shot cycle without its job does not run" 'grep -q "could not build 
 rmdir "$K/bin"; mv "$K/bin.off" "$K/bin"
 shot finish > /dev/null
 
+echo "== agent-kit-schedule"
+sch() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-schedule" "$@"; }
+ny() { TZ=America/New_York date -d "$1" +%s; }      # a local time in the schedule's zone, as unix time
+tick_at() { AGENT_KIT_NOW=$1 sch tick; }
+starts() { grep -c "^start --no-block agent-kit-lead.service" "$FAKE_LOG" 2> /dev/null || true; }
+rm -f "$T/etc/schedule" "$S/slot" "$S/schedule.used" "$S/schedule.log" "$S/oneshot" "$S/halt-after"
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+: > "$FAKE_LOG"
+check "no schedule: nothing to show, a tick does nothing" '[ "$(sch show | jq -c "[.tz, (.slots | length)]")" = "[null,0]" ] && tick_at "$(ny "2026-01-05 13:30")" && [ ! -e "$S/slot" ] && [ "$(starts)" = 0 ]'
+bad() { refuse "$1" bash -c "printf '%b' '$2' | AGENT_KIT_PATH='$FB:$PATH' '$BIN/agent-kit-schedule' set"; }
+bad "a schedule without a time zone" 'slot daily 01:00\n'
+bad "an unknown time zone" 'tz Mars/Phobos\nslot daily 01:00\n'
+bad "a time zone that is a path" 'tz ../../etc/passwd\nslot daily 01:00\n'
+bad "two time zones" 'tz UTC\ntz Europe/Paris\nslot daily 01:00\n'
+bad "an unknown day" 'tz UTC\nslot funday 01:00\n'
+bad "a time past midnight" 'tz UTC\nslot daily 24:00\n'
+bad "a time without leading zeros" 'tz UTC\nslot daily 7:05\n'
+bad "the same slot twice" 'tz UTC\nslot mon,wed 01:00\nslot wed,mon 01:00\n'
+bad "a schedule without slots" 'tz UTC\n'
+bad "extra words on a slot line" 'tz UTC\nslot daily 01:00 now\n'
+bad "a line that is something else" 'tz UTC\nslot daily 01:00\nrun rm\n'
+check "a refused schedule leaves no file" '[ ! -e "$T/etc/schedule" ] && [ ! -e "$T/etc/schedule.tmp" ]'
+printf '# a team\ntz America/New_York\n\nslot daily 01:00\nslot wed,mon,wed 13:30\n' | AGENT_KIT_NOW=$(ny "2026-01-04 09:00") sch set > /dev/null
+check "the stored schedule is in a fixed form" '[ "$(cat "$T/etc/schedule")" = "tz America/New_York
+slot daily 01:00
+slot mon,wed 13:30" ]'
+check "show gives it back as data" '[ "$(sch show | jq -c "[.tz, .slots[1].days, .slots[1].time]")" = "[\"America/New_York\",[\"mon\",\"wed\"],\"13:30\"]" ]'
+
+# 2026-01-05 is a Monday.
+tick_at "$(ny "2026-01-05 13:29")"
+check "a minute before the slot nothing happens" '[ "$(starts)" = 0 ] && [ ! -e "$S/slot" ] && [ ! -s "$S/schedule.log" ]'
+t=$(ny "2026-01-05 13:30"); tick_at "$t"
+check "at the slot the cycle is started, with a marker that names the slot" '[ "$(starts)" = 1 ] && [ "$(cat "$S/slot")" = "mon,wed@13:30 $t" ] && grep -q " mon,wed@13:30 2026-01-05 started$" "$S/schedule.log"'
+tick_at "$(ny "2026-01-05 13:31")"; tick_at "$(ny "2026-01-05 13:38")"
+check "a slot is used once" '[ "$(starts)" = 1 ] && [ "$(wc -l < "$S/schedule.log")" = 1 ]'
+tick_at "$(ny "2026-01-06 13:30")"
+check "not on a day the slot does not name" '[ "$(starts)" = 1 ]'
+tick_at "$(ny "2026-01-07 13:30")"
+check "again on the next day it names" '[ "$(starts)" = 2 ]'
+
+FAKE_ACTIVE=active tick_at "$(ny "2026-01-08 01:00")"
+check "a slot is skipped while a cycle runs, and not queued" '[ "$(starts)" = 2 ] && grep -q " daily@01:00 2026-01-08 skipped: a cycle is running$" "$S/schedule.log" && tick_at "$(ny "2026-01-08 01:03")" && [ "$(starts)" = 2 ]'
+echo "stop owner halt 2026-01-01T00:00:00+00:00" > "$S/control"
+tick_at "$(ny "2026-01-09 01:00")"
+check "skipped on a halted team" '[ "$(starts)" = 2 ] && grep -q " 2026-01-09 skipped: halted$" "$S/schedule.log"'
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+FAKE_TIMER=disabled tick_at "$(ny "2026-01-10 01:00")"
+check "skipped when the lead timer is off" '[ "$(starts)" = 2 ] && grep -q " 2026-01-10 skipped: timer off$" "$S/schedule.log"'
+echo "$J 2026-01-01T00:00:00+00:00 run" > "$S/oneshot"
+tick_at "$(ny "2026-01-11 01:00")"
+check "skipped during a one-shot job" '[ "$(starts)" = 2 ] && grep -q " 2026-01-11 skipped: a one-shot job is in progress$" "$S/schedule.log"'
+rm -f "$S/oneshot"
+t=$(ny "2026-01-12 01:00"); cp "$S/ledger/cycles.jsonl" "$T/ledger.keep"
+for i in 1 2 3 4 5 6 7; do jq -nc --arg d "$(date -d "@$t" +%F)" '{date:$d, counted:true}'; done >> "$S/ledger/cycles.jsonl"
+tick_at "$t"
+check "skipped when the daily cap is used up" '[ "$(starts)" = 2 ] && grep -qE " 2026-01-12 skipped: daily cap \(7/[0-9]+\)$" "$S/schedule.log"'
+cp "$T/ledger.keep" "$S/ledger/cycles.jsonl"
+
+tick_at "$(ny "2026-01-13 01:07")"
+check "a slot a few minutes late is still used" '[ "$(starts)" = 3 ] && grep -q " daily@01:00 2026-01-13 started$" "$S/schedule.log"'
+tick_at "$(ny "2026-01-14 01:15")"
+check "a slot missed by more than the grace time is not caught up" '[ "$(starts)" = 3 ] && ! grep -q " 2026-01-14 " "$S/schedule.log"'
+
+# Daylight saving in the schedule's zone. 2026-03-08: 02:00 to 03:00 does not exist there.
+printf 'tz America/New_York\nslot daily 02:30\nslot daily 01:30\n' | AGENT_KIT_NOW=$(ny "2026-03-07 12:00") sch set > /dev/null
+: > "$FAKE_LOG"
+for hm in 01:59 03:00 03:05 03:30; do tick_at "$(ny "2026-03-08 $hm")"; done
+check "a local time that does not exist that day starts nothing" '[ "$(starts)" = 0 ]'
+# 2026-11-01: 01:30 happens twice there (05:30 and 06:30 UTC).
+tick_at "$(date -u -d "2026-11-01 05:30" +%s)"; tick_at "$(date -u -d "2026-11-01 06:30" +%s)"
+check "a local time that happens twice starts one cycle" '[ "$(starts)" = 1 ] && [ "$(grep -c " daily@01:30 2026-11-01 started$" "$S/schedule.log")" = 1 ]'
+# Setting a schedule must not fire a slot whose minute has just passed.
+: > "$FAKE_LOG"
+printf 'tz America/New_York\nslot daily 09:30\n' | AGENT_KIT_NOW=$(ny "2026-01-20 09:32") sch set > /dev/null
+tick_at "$(ny "2026-01-20 09:33")"
+check "a slot that passed just before the schedule was set does not fire" '[ "$(starts)" = 0 ]'
+tick_at "$(ny "2026-01-21 09:30")"
+check "it fires the next day" '[ "$(starts)" = 1 ]'
+
+# lead-cycle with a schedule: only a fresh marker starts a normal cycle.
+head -2 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
+rm -f "$S/slot" "$S/ledger/slot-used"
+out=$(cycle 2>&1)
+check "with a schedule, a start without a slot marker does nothing" 'grep -q "waiting for the next slot" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+echo "daily@09:30 $(($(date +%s) - 1000))" > "$S/slot"
+out=$(cycle 2>&1)
+check "an old marker does not start a cycle" 'grep -q "waiting for the next slot" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+echo "daily@09:30;id $(date +%s)" > "$S/slot"
+out=$(cycle 2>&1)
+check "a marker that is not a slot name does not start a cycle" 'grep -q "waiting for the next slot" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+echo "daily@09:30 $(date +%s)" > "$S/slot"
+out=$(cycle 2>&1)
+check "a fresh marker starts the cycle, and the ledger names the slot" '[ -s "$FAKE_PROMPT" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .slot)" = "daily@09:30" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = null ]'
+out=$(cycle 2>&1)
+check "one marker starts one cycle" 'grep -q "waiting for the next slot" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+# A one-shot job is the owner asking: the schedule does not hold it back.
+LS=20260101T150000Z-o-slotjob
+echo "stop owner halt 2026-01-01T05:00:00+00:00" > "$S/control"
+tar -c -C "$T/work/lc" . | shot start $LS owner > /dev/null
+rm -f "$S/slot"
+out=$(cycle 2>&1)
+check "a one-shot job runs without a slot" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$LS" <<< "$out" && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .slot)" = null ]'
+shot finish > /dev/null
+echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
+sch clear > /dev/null
+check "clear removes the schedule and its marker" '[ ! -e "$T/etc/schedule" ] && [ ! -e "$S/slot" ] && [ "$(sch show | jq -r ".slots | length")" = 0 ]'
+head -2 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
+out=$(cycle 2>&1)
+check "without a schedule cycles start as before" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=no" <<< "$out"'
+refuse "unknown command" sch start-now
+check "the tick unit runs the schedule after the stop check" '[ "$(grep -n "agent-kit-schedule tick" "$HERE/../systemd/agent-kit-tick.service" | cut -d: -f1)" -gt "$(grep -n "agent-kit-halt --if-due" "$HERE/../systemd/agent-kit-tick.service" | cut -d: -f1)" ]'
+echo "stop owner 2026-01-01T09:00:00+00:00" > "$S/control"
+
 # The sections below build their own workspace and gate results: leave none behind.
 rm -rf "$T/ws" "$S/gate/results"
 

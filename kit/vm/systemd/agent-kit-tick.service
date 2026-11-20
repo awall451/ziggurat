@@ -1,8 +1,10 @@
 [Unit]
-Description=Agent kit: halt the team if a scheduled stop time has passed, or a one-shot job lost its cycle
+Description=Agent kit: every minute: a scheduled stop that is due, a one-shot job that lost its cycle, a cycle slot that is due
 
 [Service]
 Type=oneshot
 # "-": a problem here must never keep the scheduled stop below from running.
 ExecStart=-/opt/agent-kit/bin/agent-kit-oneshot reap
 ExecStart=/opt/agent-kit/bin/agent-kit-halt --if-due
+# After the stop check, so that a slot never starts a cycle a due halt would cut at once.
+ExecStart=-/opt/agent-kit/bin/agent-kit-schedule tick

@@ -290,6 +290,14 @@
         <p>The team is stopped. Nothing spends tokens until you resume it{p.canOneshot ? ' or start a one-shot job' : ''}.</p>
         <div><button class="btn go" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
       {/if}
+      {#if st.schedule}
+        <p class="small dim">
+          Cycles start at {st.schedule.slots} set time{st.schedule.slots === 1 ? '' : 's'} ({st.schedule.tz}){st.schedule.next ? `; the next is ${when(new Date(st.schedule.next).toISOString())}` : ''}.
+          <a href="/schedule">Schedule</a>
+        </p>
+      {:else if p.canSchedule}
+        <p class="small dim">No schedule: cycles follow each other until the daily cap is used up. <a href="/schedule">Set times</a></p>
+      {/if}
       {#if !st.oneshot && st.state === 'idle' && idleText(st.idle, p.now)}
         <p>{idleText(st.idle, p.now)}</p>
       {/if}

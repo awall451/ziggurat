@@ -67,6 +67,10 @@ export function idleText(idle, now = Date.now()) {
     return `Idle: the daily cycle cap is used up${counted}. It resets when the VM's day ends${end ? `, at ${end} your time` : ''}; the next cycle starts after that. Raise the cap under Controls, or start a one-shot job.`;
   }
   if (idle.reason === 'timer-off') return 'Idle: the lead timer is off, so no cycle starts on its own. Resume the team under Controls, or start a one-shot job.';
+  if (idle.reason === 'between' && idle.nextSlot) {
+    const next = clock(Math.floor(idle.nextSlot / 1000), now);
+    return `Idle until the next scheduled cycle${next ? `, at ${next}` : ''}${counted}. See Schedule.`;
+  }
   if (idle.reason === 'between') {
     const next = clock(idle.nextAt, now);
     return `Idle between cycles. The next one starts ${next ? `at ${next}` : 'soon'}${counted}.`;

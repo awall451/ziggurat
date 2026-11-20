@@ -84,7 +84,7 @@ fi
 for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
-         owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish; do
+         owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 

@@ -7,6 +7,7 @@ import { listSessions } from './transcripts.js';
 import { openAskCount } from './feedback.js';
 import { openCount as openIssueCount } from './issues.js';
 import { publishView, PUBLISH_KIT } from './publish.js';
+import { parseScheduleText, nextStart } from '../schedule.js';
 
 const CHECKING = { reachable: null, state: 'checking', leadActive: false };
 
@@ -22,6 +23,9 @@ export async function projectView(project, { wait = 3500 } = {}) {
   const status = await statusSoon(project, wait);
   touch(project, status);
   const sum = summary(project);
+  // Cycle slots: with a schedule, the next cycle starts at the next slot, not when the timer fires.
+  const schedule = parseScheduleText(status.schedule);
+  const nextSlot = schedule ? nextStart(schedule) : null;
   const sessions = listSessions(project, status, { ledgerAt: ledgerPulledAt(project.id) });
   const current = sessions.find((s) => s.live) || null;
   return {
@@ -48,7 +52,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
       gatePaused: !!status.gatePaused,
       kitVersion: status.kitVersion || null,
       oneshot: status.oneshot || null,
-      idle: status.idle || null,
+      idle: status.idle ? { ...status.idle, nextSlot } : null,
+      schedule: schedule ? { tz: schedule.tz, slots: schedule.slots.length, next: nextSlot } : null,
       haltAfter: status.haltAfter || null,
       vmNow: status.vmNow || null,
       error: status.error || null
@@ -66,6 +71,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canOneshotIdle: !!status.canOneshot && kitAtLeast(status.kitVersion, '0.6.0'),
     // Files attached to an issue (beyond its one picture) need kit 0.7.
     canIssueFiles: kitAtLeast(status.kitVersion, '0.7.0'),
+    // Cycle slots need kit 0.9.
+    canSchedule: kitAtLeast(status.kitVersion, '0.9.0'),
     // Publishing main to a remote repository needs kit 0.8.
     canPublish: kitAtLeast(status.kitVersion, PUBLISH_KIT),
     publish: publishView(project),
