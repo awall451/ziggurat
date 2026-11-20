@@ -1,0 +1,32 @@
+[Unit]
+Description=Ziggurat Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=console
+Group=console
+WorkingDirectory=/opt/ziggurat/console
+EnvironmentFile=/srv/ziggurat/console.env
+Environment=NODE_ENV=production
+Environment=HOME=/srv/ziggurat/home
+# ssh starts its jump through the gateway with $SHELL; the service user has no login shell.
+Environment=SHELL=/bin/sh
+Environment=PATH=/opt/ansible/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/node build
+Restart=on-failure
+RestartSec=5
+
+# The service can write its data and nothing else. The code is root's.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/srv/ziggurat
+
+[Install]
+WantedBy=multi-user.target

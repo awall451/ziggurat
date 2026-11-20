@@ -40,6 +40,11 @@ Headless rule: a cycle ends when the lead's final message is sent and **everythi
 
 One isolated bridge with no uplink and no host address. The VMs on it have no default route. A small gateway container sits on both networks and runs squid with a domain allow-list; it does not forward packets and its SSH listens on the LAN side only. See [sandbox/proxmox/README.md](../sandbox/proxmox/README.md).
 
+The console can run in a container of its own on the LAN side (`create-console-ct.yml`). It is not on the
+isolated bridge: it reaches the VMs by ssh through the gateway, like a workstation does, and its firewall
+accepts connections only from the addresses the owner lists. No VM can reach it; `agent-wall-check` proves
+that from inside a VM.
+
 ## Getting data out
 
 The owner's side pulls; the VM never pushes and holds no credentials for anything else. The

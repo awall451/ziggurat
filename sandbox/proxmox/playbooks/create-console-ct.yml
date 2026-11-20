@@ -1,0 +1,178 @@
+---
+# Create a container for the Ziggurat Console, so it runs on the Proxmox host
+# instead of on your workstation: always on, and its keys live in one place.
+#
+#   eth0 -> vmbr0 (LAN, {{ console_ct_lan_ip }}). Nothing else.
+#
+# The container is NOT on {{ agent_bridge }}: it reaches the agent VMs the way
+# your workstation does, by ssh through the gateway, and no agent VM can reach
+# it. Its firewall accepts ssh and the console port only from
+# console_ct_allow_from. Settings: vars/agent-sandbox.yml.
+#
+# Re-running the playbook re-runs console/deploy/bootstrap.sh, which only adds
+# what is missing. It never touches the data in /srv/ziggurat.
+#
+# Usage:
+#   ansible-playbook playbooks/create-console-ct.yml --check
+#   ansible-playbook playbooks/create-console-ct.yml
+# If you log in to the Proxmox host as root and it has no sudo, add
+#   -e ansible_become=false
+
+- name: Ziggurat Console CT
+  hosts: pve
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/agent-sandbox.yml
+  vars:
+    ssh_pubkey_local_path: "{{ admin_ssh_pubkey }}"
+    ssh_pubkey_remote_path: "/tmp/console-ct-ssh.pub"
+    stage_dir: "/tmp/console-ct-{{ console_ct_vmid }}"
+    deploy_src: "{{ playbook_dir }}/../../../console/deploy"
+
+  tasks:
+    # ---- 0. Preconditions -------------------------------------------------
+    - name: console_ct_allow_from must be set
+      ansible.builtin.assert:
+        that:
+          - console_ct_allow_from | length > 0
+          - console_ct_allow_from is match('^[0-9./,]+$')
+        fail_msg: "Set console_ct_allow_from to the address(es) that may open the console."
+
+    - name: CT template must be present
+      ansible.builtin.shell: "pveam list local | awk '{print $1}' | grep -qxF '{{ console_ct_template }}'"
+      changed_when: false
+      check_mode: false
+
+    - name: Does CT {{ console_ct_vmid }} exist?
+      ansible.builtin.command:
+        cmd: "pct status {{ console_ct_vmid }}"
+      register: ct_probe
+      failed_when: false
+      changed_when: false
+      check_mode: false
+
+    - name: VMID {{ console_ct_vmid }} must not be a VM
+      ansible.builtin.command:
+        cmd: "qm status {{ console_ct_vmid }}"
+      register: vm_probe
+      failed_when: vm_probe.rc == 0
+      changed_when: false
+      check_mode: false
+
+    - name: An existing CT {{ console_ct_vmid }} must be the console
+      ansible.builtin.shell: "pct config {{ console_ct_vmid }} | grep -q '^hostname: {{ console_ct_name }}$'"
+      changed_when: false
+      check_mode: false
+      when: ct_probe.rc == 0
+
+    - name: LAN address {{ console_ct_lan_ip }} must be free (new CT only)
+      ansible.builtin.command:
+        cmd: "ping -c 2 -W 1 {{ console_ct_lan_ip }}"
+      register: ip_probe
+      failed_when: ip_probe.rc == 0
+      changed_when: false
+      check_mode: false
+      when: ct_probe.rc != 0
+
+    # ---- 1. Create the CT -------------------------------------------------
+    - name: Read local SSH public key
+      ansible.builtin.slurp:
+        src: "{{ ssh_pubkey_local_path }}"
+      register: pubkey_blob
+      delegate_to: localhost
+      become: false
+      check_mode: false
+
+    - name: Push SSH public key to pve
+      ansible.builtin.copy:
+        content: "{{ pubkey_blob.content | b64decode }}"
+        dest: "{{ ssh_pubkey_remote_path }}"
+        mode: "0644"
+
+    - name: Create CT (unprivileged, no nesting, LAN only)
+      ansible.builtin.command:
+        cmd: >-
+          pct create {{ console_ct_vmid }} {{ console_ct_template }}
+            --hostname {{ console_ct_name }}
+            --cores {{ console_ct_cores }} --memory {{ console_ct_memory }} --swap 512
+            --rootfs {{ console_ct_storage }}:{{ console_ct_disk_gb }}
+            --net0 name=eth0,bridge=vmbr0,ip={{ console_ct_lan_ip }}/24,gw={{ lan_gateway }}
+            --nameserver "{{ agent_gw_nameservers }}"
+            --ssh-public-keys {{ ssh_pubkey_remote_path }}
+            --unprivileged 1
+            --onboot 1
+            --tags 'agent-sandbox;console;managed-by-ansible'
+            --description 'Ziggurat Console. Managed by sandbox/proxmox/playbooks/create-console-ct.yml'
+            --start 1
+      when: ct_probe.rc != 0
+      changed_when: true
+
+    - name: Wait until pct exec works
+      ansible.builtin.command:
+        cmd: "pct exec {{ console_ct_vmid }} -- true"
+      register: ct_ready
+      retries: 30
+      delay: 2
+      until: ct_ready.rc == 0
+      changed_when: false
+      when: not ansible_check_mode
+
+    # ---- 2. Stage the bootstrap on pve, then run it in the CT -------------
+    - name: Stage dir
+      ansible.builtin.file:
+        path: "{{ stage_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Stage bootstrap script
+      ansible.builtin.copy:
+        src: "{{ deploy_src }}/bootstrap.sh"
+        dest: "{{ stage_dir }}/bootstrap.sh"
+        mode: "0755"
+
+    - name: Stage bootstrap settings
+      ansible.builtin.copy:
+        dest: "{{ stage_dir }}/bootstrap.env"
+        mode: "0600"
+        content: |
+          CONSOLE_ALLOW_FROM='{{ console_ct_allow_from }}'
+          CONSOLE_PORT='{{ console_ct_port }}'
+          ADMIN_USER='{{ admin_user }}'
+          REPO_URL='{{ console_ct_repo_url }}'
+          REPO_REF='{{ console_ct_repo_ref }}'
+
+    - name: Push files into CT
+      ansible.builtin.shell: |
+        set -e
+        pct exec {{ console_ct_vmid }} -- mkdir -p /root/console-ct
+        for f in bootstrap.sh bootstrap.env; do
+          pct push {{ console_ct_vmid }} {{ stage_dir }}/$f /root/console-ct/$f --perms 0600
+        done
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Run bootstrap inside CT (installs packages and builds; takes a few minutes)
+      ansible.builtin.command:
+        cmd: "pct exec {{ console_ct_vmid }} -- bash /root/console-ct/bootstrap.sh"
+      async: 1800
+      poll: 15
+      register: boot
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Show bootstrap output (ends with the console's public key)
+      ansible.builtin.debug:
+        var: boot.stdout_lines
+      when: not ansible_check_mode
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg: |
+          Console CT {{ console_ct_name }} ({{ console_ct_vmid }}): ssh {{ admin_user }}@{{ console_ct_lan_ip }}
+          1. Add the public key printed above to the admin user of the gateway and of each
+             agent VM (and to the Proxmox host, if the console may create projects).
+          2. Fill /srv/ziggurat/config, /srv/ziggurat/console.env and
+             /srv/ziggurat/home/.ssh/config (see console/README.md, "Run it in a container").
+          3. sudo systemctl start ziggurat-console
+          Later updates: sudo /opt/ziggurat/console/deploy/redeploy.sh

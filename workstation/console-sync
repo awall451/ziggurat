@@ -1,0 +1,52 @@
+#!/bin/bash
+# console-sync: for a console that runs on another machine (console/deploy/).
+# Keeps the workstation tools working on local folders:
+#   1. copies the console's pulled data (ledger, gate history, notes,
+#      transcripts) FROM the console machine into $FLEET_DATA / $TRANSCRIPTS_DATA
+#   2. copies the briefs that workstation/agent-brief wrote TO the console
+#      machine, where the Briefs tab reads them
+#
+# The workstation always opens the connection. The console machine needs no
+# way to reach the workstation. Nothing is ever deleted on either side, and
+# links are not copied.
+#
+# Run it every few minutes, before agent-brief (a systemd user timer works well).
+#
+# Settings: ${ZIGGURAT_CONFIG:-~/.config/ziggurat/config.env}
+#   CONSOLE_SSH=<host>             required: ssh destination of the console machine
+#                                  (an admin login that may `sudo -u console`)
+#   FLEET_DATA=<folder>            required: local copy, one subfolder per project
+#   TRANSCRIPTS_DATA=<folder>      optional: local copy of the transcripts
+#   CONSOLE_FLEET_DIR=<folder>     on the console machine (/srv/ziggurat/fleet)
+#   CONSOLE_TRANSCRIPTS_DIR=<folder>  on the console machine (/srv/ziggurat/transcripts)
+set -uo pipefail
+CONFIG=${ZIGGURAT_CONFIG:-$HOME/.config/ziggurat/config.env}
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && . "$CONFIG"
+: "${CONSOLE_SSH:?set CONSOLE_SSH in $CONFIG}"
+: "${FLEET_DATA:?set FLEET_DATA in $CONFIG}"
+R_FLEET=${CONSOLE_FLEET_DIR:-/srv/ziggurat/fleet}
+R_TRANS=${CONSOLE_TRANSCRIPTS_DIR:-/srv/ziggurat/transcripts}
+case "$CONSOLE_SSH" in -*) echo "console-sync: bad CONSOLE_SSH" >&2; exit 2 ;; esac
+
+exec 9> "${XDG_RUNTIME_DIR:-/tmp}/console-sync.lock"
+flock -n 9 || exit 0
+
+# Files on the console machine belong to its service user.
+RSYNC=(rsync -rt --no-links --timeout=60 -e 'ssh -o BatchMode=yes' '--rsync-path=sudo -n -u console rsync')
+rc=0
+
+mkdir -p "$FLEET_DATA"
+# Briefs are written here, so they are never taken from there.
+"${RSYNC[@]}" --exclude='/*/briefs/' "$CONSOLE_SSH:$R_FLEET/" "$FLEET_DATA/" || rc=1
+
+if [ -n "${TRANSCRIPTS_DATA:-}" ]; then
+  mkdir -p "$TRANSCRIPTS_DATA"
+  "${RSYNC[@]}" "$CONSOLE_SSH:$R_TRANS/" "$TRANSCRIPTS_DATA/" || rc=1
+fi
+
+# Only the briefs folders go back.
+"${RSYNC[@]}" --include='/*/' --include='/*/briefs/' --include='/*/briefs/**' --exclude='*' \
+  --prune-empty-dirs "$FLEET_DATA/" "$CONSOLE_SSH:$R_FLEET/" || rc=1
+
+exit $rc

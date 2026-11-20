@@ -44,6 +44,11 @@ must_fail "PVE web $PVE_IP:8006"       tcp "$PVE_IP" 8006
 must_fail "PVE ssh $PVE_IP:22"         tcp "$PVE_IP" 22
 must_fail "gateway ssh $GW_IP:22"       tcp "$GW_IP" 22
 must_fail "tailscale 100.100.100.100"   tcp 100.100.100.100 80
+# The console (when it runs in its own container on the LAN): it reaches in, nothing reaches it.
+if [ -n "${CONSOLE_IP:-}" ]; then
+  must_fail "console ssh $CONSOLE_IP:22"   tcp "$CONSOLE_IP" 22
+  must_fail "console web $CONSOLE_IP:${CONSOLE_PORT:-8440}" tcp "$CONSOLE_IP" "${CONSOLE_PORT:-8440}"
+fi
 must_fail "DNS to 1.1.1.1"              tcp 1.1.1.1 53
 
 echo "== other agent VMs on the bridge must be out of reach"

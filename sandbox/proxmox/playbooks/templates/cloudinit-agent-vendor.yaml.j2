@@ -54,6 +54,7 @@ write_files:
       GW_IP={{ agent_gw_bridge_ip }}
       PROXY_URL={{ agent_proxy_url }}
       PEER_IPS="{{ agent_peer_ips | default('') }}"
+      CONSOLE_IP={{ console_ct_lan_ip | default('') }}
   # Every agent VM shares one bridge. This VM talks to the gateway only: other
   # agent VMs are dropped in both directions, and so is all IPv6 (the proxy is
   # IPv4; link-local IPv6 would otherwise still reach the neighbours).
