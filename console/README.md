@@ -26,7 +26,8 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 - **Pulls**: every 15 minutes the console copies each VM's ledger, gate history, notes, screenshots and
   transcripts into your data folders (rsync, never `--delete`, never following links, agent-owned trees read
   as the agent user). While you look at a running project it pulls the files of the cycle in progress every
-  15 seconds.
+  15 seconds, and as soon as it sees the cycle end it does a full pull, so the cycle's outcome arrives with it.
+  A cycle that ended after the last ledger copy shows as "ending" until that pull lands, never as interrupted.
 - **Changes**: every change on a VM is one fixed, root-owned kit script with checked arguments
   (`sudo /opt/agent-kit/bin/<script> ...`). The console never sends free-form commands for a change, and it
   writes every change to an audit log.

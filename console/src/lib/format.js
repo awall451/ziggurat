@@ -56,5 +56,7 @@ export const STATUS_WORD = {
   done: 'done',
   failed: 'failed',
   interrupted: 'interrupted',
+  // Ended, outcome not pulled from the VM yet (see transcripts.js unrecorded).
+  ending: 'ending',
   queued: 'queued'
 };

@@ -231,6 +231,14 @@ function sessionDir(project) {
   return path.join(project.paths.transcripts, project.slug);
 }
 
+function mtimeMs(file) {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
 function readLedger(project) {
   const out = [];
   try {
@@ -310,10 +318,24 @@ function firstTimestamp(file) {
 }
 
 /**
+ * A finished cycle the local ledger copy has no line for. Either it was cut off
+ * before lead-cycle could write one, or it wrote one after the last pull of the
+ * ledger and the copy here has not caught up yet. The second is "ending" until
+ * the next pull says which: a cycle whose transcript was last written after
+ * that pull began (less a margin for clock skew and the few seconds lead-cycle
+ * takes to write its line) cannot be judged from the copy.
+ * @param {number|null} ledgerAt when the last ledger pull began (ms), if known
+ */
+const LEDGER_SLACK = 120_000;
+function unrecorded(endedMs, ledgerAt) {
+  return Number.isFinite(ledgerAt) && endedMs > ledgerAt - LEDGER_SLACK ? 'ending' : 'interrupted';
+}
+
+/**
  * Cycles of a project, newest first. A cycle is a lead session in the
  * workspace's transcript folder; the ledger adds cost, turns and the summary.
  */
-export function listSessions(project, status = null) {
+export function listSessions(project, status = null, { ledgerAt = null } = {}) {
   const dir = sessionDir(project);
   let names = [];
   try {
@@ -344,7 +366,7 @@ export function listSessions(project, status = null) {
       agents,
       live,
       // A cycle the owner halted is interrupted, not failed.
-      state: live ? 'running' : led ? (led.halted ? 'interrupted' : led.rc === 0 && !led.is_error ? 'done' : 'failed') : 'interrupted',
+      state: live ? 'running' : led ? (led.halted ? 'interrupted' : led.rc === 0 && !led.is_error ? 'done' : 'failed') : unrecorded(st.mtimeMs, ledgerAt),
       number: led?.number ?? null,
       costUsd: led?.cost_usd ?? null,
       turns: led?.turns ?? null,
@@ -352,7 +374,7 @@ export function listSessions(project, status = null) {
     };
   });
   rows.sort((a, b) => (a.started < b.started ? 1 : -1));
-  // Sessions the ledger does not know (interrupted or running) take the number
+  // Sessions the ledger does not know (interrupted, ending or running) take the number
   // after the last counted cycle that started before them.
   for (const r of rows) {
     if (r.number == null) r.number = counted.filter((c) => c.start && c.start < r.started).length + 1;
@@ -370,7 +392,7 @@ export function listSessions(project, status = null) {
  * The agent tree of one session.
  * @returns {{session: object, nodes: object[]} | null}
  */
-export function sessionTree(project, sid, { status = null, pricing, labeler }) {
+export function sessionTree(project, sid, { status = null, pricing, labeler, ledgerAt = null }) {
   if (!SID_RE.test(sid)) return null;
   const dir = sessionDir(project);
   const mainFile = path.join(dir, `${sid}.jsonl`);
@@ -416,7 +438,7 @@ export function sessionTree(project, sid, { status = null, pricing, labeler }) {
           : ledger.rc === 0 && !ledger.is_error
             ? 'done'
             : 'failed'
-        : 'interrupted',
+        : unrecorded(mtimeMs(mainFile), ledgerAt),
     branch: main.gitBranch,
     worktree: null,
     cwd: main.cwd,

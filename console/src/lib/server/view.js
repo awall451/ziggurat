@@ -1,6 +1,6 @@
 // What the pages show about a project: config, live status, progress numbers.
 import { getStatus, peekStatus } from './live.js';
-import { touch, pullInfo } from './pull.js';
+import { touch, pullInfo, ledgerPulledAt } from './pull.js';
 import { summary } from './aggregate.js';
 import { tierNames } from './theme.js';
 import { listSessions } from './transcripts.js';
@@ -21,7 +21,7 @@ export async function projectView(project, { wait = 3500 } = {}) {
   const status = await statusSoon(project, wait);
   touch(project, status);
   const sum = summary(project);
-  const sessions = listSessions(project, status);
+  const sessions = listSessions(project, status, { ledgerAt: ledgerPulledAt(project.id) });
   const current = sessions.find((s) => s.live) || null;
   return {
     id: project.id,

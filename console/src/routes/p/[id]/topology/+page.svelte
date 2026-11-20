@@ -27,6 +27,7 @@
     ['waiting', 'Waiting on agents'],
     ['done', 'Done'],
     ['queued', 'Queued'],
+    ['ending', 'Ending (outcome not pulled yet)'],
     ['interrupted', 'Interrupted'],
     ['failed', 'Failed']
   ];
