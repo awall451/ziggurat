@@ -61,9 +61,9 @@ To update a VM that already runs the kit: copy `kit/vm` in, `sudo bash vm/instal
 
 ## 4. The console (recommended)
 
-[`console/`](../console/README.md) is one web app for all your projects: the live hierarchy of each cycle, progress, usage, feedback to the lead with replies, and halt/resume. It runs on your workstation and reaches the VMs only by ssh as the caller.
+[`console/`](../console/README.md) is one web app for all your projects: the live hierarchy of each cycle, progress, usage, feedback to the lead with replies, and halt/resume. It runs on your workstation, or in a container of its own on the Proxmox host, and reaches the VMs only by ssh as the caller.
 
-- Follow [console/README.md](../console/README.md): a config folder with `projects.json`, a small ssh folder for the console, `docker compose up`.
+- Follow [console/README.md](../console/README.md): a config folder with `projects.json`, a small ssh folder for the console, `docker compose up`. Or, for a console that is always on: "Run it in a container on the Proxmox host" in the same file.
 - Keep it on a private network (VPN or a reverse proxy with a login). It has no login of its own.
 - Optional: `workstation/agent-brief` writes a short brief for every cycle that has finished (and a spoken version) from the data the console pulled; it appears in the console's Briefs tab, one per cycle. Copy `config.example.env` to `~/.config/ziggurat/config.env` first, then run it every few minutes, for example with a systemd user timer:
 

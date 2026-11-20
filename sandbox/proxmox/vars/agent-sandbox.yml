@@ -36,6 +36,26 @@ agent_gw_lan_gateway: "{{ lan_gateway }}"
 agent_gw_nameservers: "1.1.1.1 8.8.8.8"
 agent_gw_ct_template: "local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
 
+# Console CT (optional, playbooks/create-console-ct.yml): the Ziggurat Console
+# on the Proxmox host instead of on your workstation. LAN side only, never on
+# the agent bridge. Needs a free LAN address. Ubuntu 22.04 or newer, or
+# Debian 12 (a template your Proxmox version supports: PVE 7 has no Debian 12).
+console_ct_vmid: 111
+console_ct_name: ziggurat-console
+console_ct_lan_ip: "192.168.1.111"
+console_ct_template: "{{ agent_gw_ct_template }}"
+console_ct_storage: local-lvm
+console_ct_cores: 2
+console_ct_memory: 2048
+console_ct_disk_gb: 16
+console_ct_port: 8440
+# Who may open the console and ssh into the CT: one address or several, comma
+# separated (your workstation, or the machine your reverse proxy runs on).
+# The console has no login of its own, so keep this as narrow as you can.
+console_ct_allow_from: ""
+console_ct_repo_url: "https://github.com/awall451/ziggurat.git"
+console_ct_repo_ref: main
+
 # Agent VMs: VMID 300..399, IP 10.66.0.(vmid - 300 + 10). Kept out of the
 # 200..254 range so the LAN "vmid == last octet" convention never applies.
 agent_vmid_min: 300

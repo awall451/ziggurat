@@ -67,6 +67,35 @@ docker compose -f console/docker-compose.yml --env-file /srv/ziggurat/compose.en
 
 It listens on `127.0.0.1:8440`. Put it behind your VPN or a reverse proxy; do not expose it to the internet.
 
+### Run it in a container on the Proxmox host
+
+The console holds the keys to every sandbox VM, so a small machine of its own is a better home than a
+workstation: it is always on, and it does nothing else. `sandbox/proxmox/playbooks/create-console-ct.yml`
+creates an unprivileged container on the LAN side only (never on the agent bridge) and runs
+[`deploy/bootstrap.sh`](deploy/bootstrap.sh) in it. No Docker: Node runs under systemd as the `console` user,
+which owns the data in `/srv/ziggurat` and cannot change the code in `/opt/ziggurat`.
+
+```bash
+# In sandbox/proxmox: set the console_ct_* values in vars/agent-sandbox.yml first
+ansible-playbook playbooks/create-console-ct.yml --check
+ansible-playbook playbooks/create-console-ct.yml
+```
+
+- **Who can connect.** The container's firewall accepts ssh and the console port only from
+  `console_ct_allow_from` (your workstation, or the machine your reverse proxy runs on). The console has no
+  login, so this list is the protection.
+- **Its own key.** The bootstrap makes an ssh key in the container (`/srv/ziggurat/ssh/key`) and prints the
+  public half. Add that to the admin user of the gateway and of each VM, and to the Proxmox host if the console
+  may create projects. The private half never leaves the container.
+- **Settings.** `/srv/ziggurat/console.env` (from [`deploy/console.env.example`](deploy/console.env.example)),
+  the config files in `/srv/ziggurat/config`, and an ssh `config` and `known_hosts` in
+  `/srv/ziggurat/home/.ssh` (with `IdentityFile /srv/ziggurat/ssh/key`). Then `systemctl start ziggurat-console`.
+- **Updates.** `sudo /opt/ziggurat/console/deploy/redeploy.sh`: pull, build, check that the playbooks parse,
+  restart, check that it answers. A restart cuts off a deploy that is running.
+- **Briefs.** `workstation/agent-brief` still runs on your workstation. `workstation/console-sync` copies the
+  pulled data from the container and the finished briefs back to it; the workstation always opens the
+  connection.
+
 `projects.json` (one entry per project):
 
 | Field | Meaning |

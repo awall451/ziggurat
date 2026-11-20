@@ -56,7 +56,7 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 | Admin user, SSH key, workstation paths | Done: `config.example.env`; next: a setup script |
 | Allow-list domains | Per-project additions in project config |
 | Gate checks (`gate-checks` per project) | Keep: it is the per-project contract; ship examples (web game, PS1/C++) |
-| Console and digest on the owner's workstation | Done: `console/` with its own config folder; next: run it on a small VM with a login in front, and create projects from it |
+| Console and digest on the owner's workstation | Done: `console/` with its own config folder; done: its own container on the Proxmox host (`create-console-ct.yml`) and projects created from it; next: a login in front, and a restricted key for the Proxmox host |
 | Subscription-only auth via `claude auth login` in each VM | Done: login or a stored `setup-token` token (`agent-kit-auth`), trade-offs in getting-started |
 
 ## 3. Lessons worth writing up for others

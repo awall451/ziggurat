@@ -45,6 +45,7 @@ the VM as the `agent` user, and only snapshots `provisioned` if the wall holds.
 | `vars/agent-sandbox.yml` | Subnet, IDs, **domain allow-list** |
 | `playbooks/agent-network.yml` | Adds `vmbr1` to the host |
 | `playbooks/create-agent-gateway.yml` | CT 110: squid + admin user; re-run to apply allow-list changes |
+| `playbooks/create-console-ct.yml` | Optional. CT 111: the Ziggurat Console on the LAN side only, reachable from the addresses you list. See [console/README.md](../../console/README.md) |
 | `playbooks/create-agent-vm.yml` | One project VM, users: your admin user + `agent` (no sudo) |
 | `playbooks/templates/cloudinit-agent-vendor.yaml.j2` | Proxy env, Node 22, Claude Code |
 | `playbooks/templates/squid-agent-gw.conf.j2` | Proxy rules (denies private/tailnet ranges) |
