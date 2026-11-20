@@ -88,7 +88,7 @@ async function slowPass(project) {
 
   // World-readable state files; `current` only exists on newer kits.
   const ledgerStart = Date.now();
-  const f = await pull(project, [`${k.state}/ledger/cycles.jsonl`, `${k.state}/gate/history.log`, `${k.state}/control`], fleet, {
+  const f = await pull(project, [`${k.state}/ledger/cycles.jsonl`, `${k.state}/gate/history.log`, `${k.state}/control`, `${k.state}/schedule.log`], fleet, {
     maxSize: '32m'
   });
   if (errText(f)) errors.push(`state: ${errText(f)}`);

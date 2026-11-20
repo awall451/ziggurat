@@ -20,7 +20,7 @@ Three users keep the agents away from the definition of done:
 
 ## A cycle
 
-1. `agent-kit-lead.timer` starts `lead-cycle` 15 minutes after the previous cycle ended (and only if `control` says `run` and the daily cap allows).
+1. `agent-kit-lead.timer` starts `lead-cycle` 15 minutes after the previous cycle ended (and only if `control` says `run` and the daily cap allows). A project with a schedule starts its cycles at set times instead: see "Cycle slots" below.
 2. The lead (a fresh headless session) reads the charter, the gate contract, `STATE.md`, the journal tail and `gate-status`.
 3. It picks 1–3 goals and spawns one **area lead** per goal, choosing Opus for real engineering and Sonnet for small goals.
 4. Each area lead works in its own git worktree: plans steps, spawns **builders** (Sonnet) per step and **scouts** (Haiku) for searches and test runs, reviews each builder's diff and commits it, runs the final checks, reports.
@@ -155,8 +155,39 @@ All root-owned, all run from outside by the owner (or the console):
 | `agent-kit-oneshot start <id> <from>` | On a halted or idle team: one cycle for one job from the owner, then back to what it was (see below) |
 | `agent-kit-halt-at set <unix-seconds>` | A halt at a fixed time (checked every minute, survives a reboot). The daily cap counts cycles, not hours |
 | `agent-kit-caps set <KEY> <VALUE>` | Cycle cap, budget and models, kept in `/etc/agent-kit/caps.env` |
+| `agent-kit-schedule set` / `clear` / `show` | Start cycles at set times instead of back to back (see below) |
 | `agent-kit-gate pause` / `resume` | Pause the merge gate on its own |
 | `agent-kit-units` | The team's own systemd user units and whether a halt stops them |
+
+### Cycle slots
+
+Without a schedule a team runs its cycles back to back until the daily cap is used up, which puts them all in
+one block and lets two teams use up the same usage window together. A schedule spreads them out.
+
+```
+tz Europe/Amsterdam
+slot daily 01:00
+slot mon,wed,fri 13:30
+```
+
+That is `/etc/agent-kit/schedule` (root-owned), written by `agent-kit-schedule set` after it has checked
+every line. Times are local to `tz`; daylight saving is the VM's `date` doing its job.
+
+1. Every minute `agent-kit-tick` runs `agent-kit-schedule tick` (after the check for a due halt). A slot is due
+   in its own minute, or up to 10 minutes late if the VM was busy or had just booted.
+2. For a due slot the script decides once and writes one line to `/var/lib/agent-kit/schedule.log`:
+   `started`, or `skipped:` with the reason (halted, lead timer off, a cycle is still running, a one-shot job, a
+   pending halt, the daily cap). A skipped slot is not queued and a missed one is not caught up.
+3. To start, it leaves a root-owned marker, `/var/lib/agent-kit/slot` (`<slot> <unix time>`), and starts the
+   lead's unit. `lead-cycle` runs a normal cycle only with a marker younger than five minutes, and uses each
+   marker once; the ledger line of that cycle carries `slot`.
+4. The 15-minute lead timer keeps firing and finds nothing to do ("waiting for the next slot"). It stays the
+   switch that says the team is on, so halt, resume, halt after the cycle and one-shot jobs work exactly as
+   without a schedule. A one-shot job ignores the schedule, as it ignores the cap.
+
+The schedule lives on the VM and the VM starts the cycles: a team keeps its times when the console is off.
+The console's Schedule page reads the file with the status, shows all projects on one timeline and replaces a
+project's schedule through `agent-kit-schedule set`. `clear` returns a team to back-to-back cycles.
 
 ### Halt after the cycle
 

@@ -1,0 +1,175 @@
+#!/bin/bash
+# agent-kit-schedule: start the team's cycles at set times instead of back to
+# back. Run with sudo (the console calls it over ssh).
+#
+#   agent-kit-schedule show     the schedule and the last lines of its log, as one JSON line
+#   agent-kit-schedule set      a new schedule on stdin (checked before it replaces the old one)
+#   agent-kit-schedule clear    no schedule: cycles follow each other again, as the daily cap allows
+#   agent-kit-schedule tick     start a cycle if a slot is due (agent-kit-tick, every minute)
+#
+# The schedule, /etc/agent-kit/schedule:
+#   tz Europe/Amsterdam
+#   slot daily 01:00
+#   slot mon,wed,fri 13:30
+# Times are local to `tz`. Days: daily, or any of mon tue wed thu fri sat sun.
+#
+# Without a schedule nothing here does anything and a team runs as before.
+# With one, lead-cycle starts a normal cycle only when this script has just
+# left a slot marker ($STATE/slot). The lead timer keeps its meaning (on = the
+# team may run), so halt, resume and one-shot jobs work as they always did.
+#
+# A slot is used once. It is skipped, never queued, when the team is halted,
+# its timer is off, a cycle is still running or the daily cap is used up; and
+# it is not caught up later than GRACE minutes. Every decision is one line in
+# $STATE/schedule.log:  <utc time> <slot> <local date> <what happened>
+set -uo pipefail
+# Root script: never look programs up through an inherited PATH
+# (AGENT_KIT_PATH is for the tests).
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH LC_ALL=C
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+FILE=$ETC/schedule
+LEAD=agent-kit-lead
+MARK=$STATE/slot             # "<slot> <unix seconds>": written just before a slot's cycle is started
+USED=$STATE/schedule.used    # slots already decided: "<slot> <local date>" per line
+LOG=$STATE/schedule.log
+LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
+ZONES=${AGENT_KIT_ZONEINFO:-/usr/share/zoneinfo}
+GRACE=10        # minutes a slot may be late (the VM was busy, or just booted)
+MAX_SLOTS=100
+TZ_RE='^[A-Za-z][A-Za-z0-9_+-]{0,30}(/[A-Za-z0-9_+-]{1,30}){0,2}$'
+TIME_RE='^([01][0-9]|2[0-3]):[0-5][0-9]$'
+DAYS=(mon tue wed thu fri sat sun)
+
+die() { echo "agent-kit-schedule: $*" >&2; exit 2; }
+umask 022
+cycle_alive() {
+  case "$(systemctl is-active "$LEAD.service" 2>/dev/null)" in
+    active | activating | deactivating) return 0 ;;
+  esac
+  return 1
+}
+# "wed,mon,wed" -> "mon,wed"; "daily" stays; anything else fails.
+days_of() {
+  local in=$1 d out=()
+  [ "$in" = daily ] && { echo daily; return 0; }
+  [[ $in =~ ^[a-z]{3}(,[a-z]{3}){0,6}$ ]] || return 1
+  for d in ${in//,/ }; do [[ " ${DAYS[*]} " == *" $d "* ]] || return 1; done
+  for d in "${DAYS[@]}"; do [[ ",$in," == *",$d,"* ]] && out+=("$d"); done
+  (IFS=,; echo "${out[*]}")
+}
+has_slots() { [ -f "$FILE" ] && grep -q '^slot ' "$FILE"; }
+
+case "${1:-show}" in
+  show)
+    tz=""
+    [ -f "$FILE" ] && tz=$(sed -n 's/^tz //p' "$FILE" | head -1)
+    {
+      [ -f "$FILE" ] && sed -n 's/^slot //p' "$FILE"
+    } | jq -Rnc --arg tz "$tz" --arg log "$(tail -n 60 "$LOG" 2>/dev/null)" \
+      '{tz: ($tz | select(. != "") // null),
+        slots: [inputs | split(" ") | {days: (.[0] | split(",")), time: .[1]}],
+        log: ($log | split("\n") | map(select(. != "")))}'
+    ;;
+
+  set)
+    tz="" slots=() n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      n=$((n + 1))
+      [ "$n" -le 400 ] || die "too many lines"
+      line=${line%$'\r'}
+      [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+      read -r word a b extra <<< "$line"
+      case "$word" in
+        tz)
+          [ -z "$tz" ] && [ -z "${b:-}" ] || die "line $n: one 'tz <zone>' line"
+          [[ ${a:-} =~ $TZ_RE ]] && [ -f "$ZONES/$a" ] || die "line $n: unknown time zone: ${a:-}"
+          tz=$a
+          ;;
+        slot)
+          [ -z "${extra:-}" ] || die "line $n: slot <days> <HH:MM>"
+          d=$(days_of "${a:-}") || die "line $n: days must be 'daily' or a list of mon tue wed thu fri sat sun"
+          [[ ${b:-} =~ $TIME_RE ]] || die "line $n: the time must be HH:MM, 00:00 to 23:59"
+          [[ " ${slots[*]:-} " == *" $d@$b "* ]] && die "line $n: the same slot twice: $d $b"
+          slots+=("$d@$b")
+          ;;
+        *) die "line $n: expected 'tz <zone>' or 'slot <days> <HH:MM>'" ;;
+      esac
+    done
+    [ -n "$tz" ] || die "the schedule needs a 'tz <zone>' line"
+    [ ${#slots[@]} -gt 0 ] || die "the schedule has no slots (use 'clear' for none)"
+    [ ${#slots[@]} -le "$MAX_SLOTS" ] || die "at most $MAX_SLOTS slots"
+    exec 8> "$LOCK"
+    flock 8
+    {
+      echo "tz $tz"
+      for s in "${slots[@]}"; do echo "slot ${s%@*} ${s#*@}"; done
+    } > "$FILE.tmp" || die "could not write the schedule"
+    chmod 644 "$FILE.tmp"
+    mv "$FILE.tmp" "$FILE"
+    # A slot whose minute has just passed must not fire because the schedule changed now.
+    "$0" tick --mark-only < /dev/null > /dev/null 2>&1 8>&-
+    echo "schedule set: ${#slots[@]} slot(s), times in $tz"
+    ;;
+
+  clear)
+    exec 8> "$LOCK"
+    flock 8
+    rm -f "$FILE" "$MARK" "$USED"
+    echo "no schedule: cycles follow each other again, as the daily cap allows"
+    ;;
+
+  tick)
+    has_slots || exit 0
+    mark_only=0
+    [ "${2:-}" = "--mark-only" ] && mark_only=1
+    [ "$mark_only" = 1 ] || { exec 8> "$LOCK"; flock 8; }
+    tz=$(sed -n 's/^tz //p' "$FILE" | head -1)
+    [[ $tz =~ $TZ_RE ]] && [ -f "$ZONES/$tz" ] || exit 0
+    now=${AGENT_KIT_NOW:-$(date +%s)}
+    [[ $now =~ ^[0-9]{9,11}$ ]] || exit 0
+    touch "$USED"
+    note() { # slot, local date, what happened
+      printf '%s %s %s %s\n' "$(date -u -d "@$now" +%FT%TZ)" "$1" "$2" "$3" >> "$LOG"
+      chmod 644 "$LOG"
+      if [ "$(wc -l < "$LOG")" -gt 500 ]; then tail -n 400 "$LOG" > "$LOG.tmp" && chmod 644 "$LOG.tmp" && mv "$LOG.tmp" "$LOG"; fi
+    }
+    # Oldest first, so that of two slots a few minutes apart the earlier one gets the cycle.
+    for ((m = GRACE; m >= 0; m--)); do
+      read -r dow hm day <<< "$(TZ=$tz date -d "@$((now - m * 60))" '+%a %H:%M %F')"
+      dow=${dow,,}
+      while read -r _ days time; do
+        [ "$time" = "$hm" ] || continue
+        [ "$days" = daily ] || [[ ",$days," == *",$dow,"* ]] || continue
+        slot=$days@$time
+        grep -qxF "$slot $day" "$USED" && continue
+        echo "$slot $day" >> "$USED"
+        [ "$mark_only" = 1 ] && continue
+        if grep -q '^stop' "$STATE/control" 2>/dev/null; then note "$slot" "$day" "skipped: halted"; continue; fi
+        if [ -e "$STATE/oneshot" ]; then note "$slot" "$day" "skipped: a one-shot job is in progress"; continue; fi
+        if [ -e "$STATE/halt-after" ]; then note "$slot" "$day" "skipped: a halt is pending"; continue; fi
+        if [ "$(systemctl is-enabled "$LEAD.timer" 2>/dev/null)" != enabled ]; then note "$slot" "$day" "skipped: timer off"; continue; fi
+        if cycle_alive; then note "$slot" "$day" "skipped: a cycle is running"; continue; fi
+        # The daily cap, counted as lead-cycle counts it (the owner's caps.env wins).
+        cap=$(sed -nE 's/^MAX_CYCLES_PER_DAY=([0-9]{1,5})$/\1/p' "$ETC/project.env" "$ETC/caps.env" 2>/dev/null | tail -1)
+        today=$(jq -s --arg d "$(date -d "@$now" +%F)" '[.[] | select(.date == $d and .counted != false)] | length' "$STATE/ledger/cycles.jsonl" 2>/dev/null)
+        if [ -n "$cap" ] && [ "${today:-0}" -ge "$cap" ]; then note "$slot" "$day" "skipped: daily cap (${today:-0}/$cap)"; continue; fi
+        printf '%s %s\n' "$slot" "$now" > "$MARK.tmp" && chmod 644 "$MARK.tmp" && mv "$MARK.tmp" "$MARK"
+        if systemctl start --no-block "$LEAD.service" > /dev/null 2>&1; then
+          note "$slot" "$day" "started"
+        else
+          rm -f "$MARK"
+          note "$slot" "$day" "failed: the cycle could not be started"
+        fi
+      done < <(grep '^slot ' "$FILE")
+    done
+    if [ "$(wc -l < "$USED")" -gt 400 ]; then tail -n 200 "$USED" > "$USED.tmp" && mv "$USED.tmp" "$USED"; fi
+    exit 0
+    ;;
+
+  *)
+    die "usage: agent-kit-schedule show | set | clear | tick"
+    ;;
+esac

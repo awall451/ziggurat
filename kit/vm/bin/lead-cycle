@@ -33,6 +33,23 @@ if [ -f "$STATE/oneshot" ]; then
     && [ -f "$STATE/inbox/$oneshot/message.md" ]; } || oneshot=
 fi
 
+# A schedule (agent-kit-schedule): a normal cycle starts only at one of its
+# slots. The tick leaves a root-owned marker just before it starts this unit;
+# without a fresh one this start came from the lead timer, and there is
+# nothing to do. A one-shot job is the owner asking for this cycle: it runs.
+slot=
+if [ -z "$oneshot" ] && grep -q '^slot ' "$ETC/schedule" 2>/dev/null; then
+  if [ -f "$STATE/slot" ]; then
+    read -r slot slot_at _ < "$STATE/slot"
+    { [[ ${slot:-} =~ ^[a-z,]{3,27}@[0-9]{2}:[0-9]{2}$ ]] && [[ ${slot_at:-} =~ ^[0-9]{9,11}$ ]] \
+      && [ $(($(date +%s) - slot_at)) -le 300 ] && [ $(($(date +%s) - slot_at)) -ge -60 ] \
+      && [ "$(cat "$STATE/ledger/slot-used" 2>/dev/null)" != "$slot $slot_at" ]; } || slot=
+  fi
+  if [ -z "$slot" ]; then echo "a schedule is set: waiting for the next slot"; exit 0; fi
+  # One marker, one cycle.
+  echo "$slot $slot_at" > "$STATE/ledger/slot-used"
+fi
+
 today=$(date +%F)
 # Only real work counts toward the daily cap: attempts that hit a usage limit
 # (counted:false) must not use it up while waiting for the window to reset.
@@ -109,17 +126,19 @@ fi
 # A cycle that was stopped leaves an empty result file. jq prints nothing for
 # an empty file and still exits 0, so check for content first: otherwise a
 # halted cycle would get no ledger line at all.
-if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" \
+if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" \
       --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted \
   '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
     oneshot:(if $oneshot == "" then null else $oneshot end),
+    slot:(if $slot == "" then null else $slot end),
     cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
     session:(.session_id // $sid), is_error:(.is_error // null),
     summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; }; then
-  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --argjson rc $rc \
+  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --argjson rc $rc \
      --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --arg err "$(tail -c 600 "$run.err")" \
      '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
-       oneshot:(if $oneshot == "" then null else $oneshot end), session:$sid, summary:((if $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
+       oneshot:(if $oneshot == "" then null else $oneshot end),
+    slot:(if $slot == "" then null else $slot end), session:$sid, summary:((if $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
 fi
 echo "cycle done rc=$rc limited=$limited halted=$halted oneshot=${oneshot:-no} in $((SECONDS - t0))s"
 exit 0
