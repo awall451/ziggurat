@@ -1,7 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { invalidateAll } from '$app/navigation';
-  import { num, usd, dur, between, ago } from '$lib/format.js';
+  import { num, usd, dur, between, ago, idleText } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
 
   let { data, children } = $props();
@@ -84,7 +84,11 @@
       {p.status.leadActive ? 'Halting when this cycle ends' : 'The cycle is over: halting once the gate has run'}{p.status.haltAfter.wrapUp ? ' (wrap-up asked for)' : ''}. Cancel it under Controls.
     </div>
   {:else if p.status.oneshot}
-    <div class="note dim">One-shot job in progress. The team halts again when this cycle ends.</div>
+    <div class="note dim">
+      One-shot job in progress. {p.status.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'}
+    </div>
+  {:else if p.status.state === 'idle' && idleText(p.status.idle, p.now)}
+    <div class="note dim">{idleText(p.status.idle, p.now)}</div>
   {/if}
 
   <div class="tabs">

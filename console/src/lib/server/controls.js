@@ -56,8 +56,8 @@ export function resume(user, project) {
 }
 
 /**
- * One cycle for one job on a halted team; the VM halts the team again when it
- * ends. The job travels as an owner message, so it shows in the Inbox with
+ * One cycle for one job on a halted or idle team; when it ends the VM puts the
+ * team back as it was (halted, or running). The job travels as an owner message, so it shows in the Inbox with
  * the lead's reply. A refusal by the VM throws (the caller reports it).
  */
 export async function oneshot(user, project, { text, attachments }) {
@@ -91,7 +91,9 @@ async function settle(user, project, out, shown = {}) {
     started,
     id,
     detail: started
-      ? 'One-shot job started. The team halts again when it ends.'
+      ? out.runsOn
+        ? 'One-shot job started. The team goes back to running when it ends.'
+        : 'One-shot job started. The team halts again when it ends.'
       : `No clear answer from the VM (${out.error}). The job is kept in the Inbox: start it from there once the VM answers, or close it.`
   };
 }

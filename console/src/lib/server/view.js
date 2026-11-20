@@ -1,5 +1,5 @@
 // What the pages show about a project: config, live status, progress numbers.
-import { getStatus, peekStatus } from './live.js';
+import { getStatus, peekStatus, kitAtLeast } from './live.js';
 import { touch, pullInfo, ledgerPulledAt } from './pull.js';
 import { summary } from './aggregate.js';
 import { tierNames } from './theme.js';
@@ -47,6 +47,7 @@ export async function projectView(project, { wait = 3500 } = {}) {
       gatePaused: !!status.gatePaused,
       kitVersion: status.kitVersion || null,
       oneshot: status.oneshot || null,
+      idle: status.idle || null,
       haltAfter: status.haltAfter || null,
       vmNow: status.vmNow || null,
       error: status.error || null
@@ -60,6 +61,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canControl: !!status.kitVersion,
     // One-shot jobs need kit 0.4.
     canOneshot: !!status.canOneshot,
+    // One-shot jobs on an idle team (set to run, no cycle running) need kit 0.6.
+    canOneshotIdle: !!status.canOneshot && kitAtLeast(status.kitVersion, '0.6.0'),
     // Halting after the cycle needs kit 0.5.
     canHaltAfter: !!status.canHaltAfter,
     cycle: current

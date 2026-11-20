@@ -145,7 +145,9 @@ export async function startOneshot(project, id) {
     meta.error = error;
     fs.writeFileSync(file, JSON.stringify(meta, null, 2));
   }
-  return { meta: readJson(file) || meta, started, refused: !started && vmSaidNo(res.code), error };
+  // The VM says what happens when the job ends: halted again, or (an idle team) running on.
+  const runsOn = started && /runs on when it ends/.test(res.stdout || '');
+  return { meta: readJson(file) || meta, started, runsOn, refused: !started && vmSaidNo(res.code), error };
 }
 
 /**
