@@ -43,7 +43,7 @@ Prompts reference them as `{{lead}}`, `{{workers}}`, `{{reviewer}}` etc.
 - A theme is a small file, `themes/<name>.yml`: role id → display name, plus an optional one-line
   flavour per role ("You are a Maia..."). Prompts reference `{{name.builder}}` etc.
 - The installer renders the agent files and prompts for the chosen theme (`THEME=tolkien`).
-- The console, digests and spoken briefs read the same theme file, so labels match everywhere.
+- The console and the cycle briefs read the same theme file, so labels match everywhere.
 - Switching theme only changes display names and flavour text, never behaviour, models or permissions.
 - Migration from today: rename `ainu-*`/`maia-*` files to role ids and render Tolkien names from
   the theme. One mechanical change, best done when the setup is stable.

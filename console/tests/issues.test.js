@@ -30,6 +30,47 @@ describe('screenKey', () => {
   });
 });
 
+describe('issues raised on the Issues page', () => {
+  const upload = (extra = {}) =>
+    iss.create(project, owner, { title: 'Save menu forgets the cursor', body: 'Steps in the log', kind: 'bug', origin: { type: 'upload', name: 'My shot (2).PNG' }, shotPng: PNG, ...extra }, { deliverNow: false });
+
+  it('keeps the picture, its markup and the other files', async () => {
+    const i = await upload({ markup: [{ type: 'rect', x: 0, y: 0, w: 0.5, h: 0.5 }], markupPng: PNG, attachments: [{ name: 'crash.log', data: Buffer.from('trace') }] });
+    expect(i.origin).toEqual({ type: 'upload', name: 'My-shot-2-.PNG' });
+    expect(iss.image(project, i.id, 'shot.png')).toBeTruthy();
+    expect(iss.image(project, i.id, 'markup.png')).toBeTruthy();
+    expect(fs.readFileSync(iss.attachment(project, i.id, 'crash.log'), 'utf8')).toBe('trace');
+    expect(iss.attachment(project, i.id, '../issue.json')).toBeNull();
+    expect(i.attachments).toEqual([{ name: 'crash.log', size: 5 }]);
+    const text = iss.issueText(i);
+    expect(text).toMatch(/Picture: shot.png \(attached by the owner as My-shot-2-.PNG\)/);
+    expect(text).toMatch(/Attachments \(in att\/\): crash.log/);
+    expect(iss.list(project).find((x) => x.id === i.id)).toMatchObject({ hasShot: true, hasMarkup: true });
+  });
+
+  it('works with no picture at all', async () => {
+    const i = await iss.create(project, owner, { title: 'More save slots', body: '', kind: 'idea', origin: null }, { deliverNow: false });
+    expect(i).toMatchObject({ origin: null, attachments: [] });
+    expect(iss.image(project, i.id, 'shot.png')).toBeNull();
+  });
+
+  it('refuses files the VM would refuse', async () => {
+    await expect(upload({ shotPng: Buffer.from('jpeg bytes') })).rejects.toThrow(/PNG/);
+    await expect(upload({ attachments: [{ name: '.hidden', data: Buffer.from('x') }] })).rejects.toThrow(/name/);
+    await expect(upload({ attachments: [{ name: 'a.txt', data: Buffer.from('x') }, { name: 'a.txt', data: Buffer.from('y') }] })).rejects.toThrow(/name/);
+    await expect(upload({ attachments: Array.from({ length: 9 }, (_, n) => ({ name: `f${n}.txt`, data: Buffer.from('x') })) })).rejects.toThrow(/At most 8/);
+    await expect(upload({ attachments: [{ name: 'big.bin', data: Buffer.alloc(16 * 1024 * 1024) }] })).rejects.toThrow(/15 MB/);
+    await expect(upload({ attachments: [{ name: 'empty.txt', data: Buffer.alloc(0) }] })).rejects.toThrow(/empty/);
+  });
+
+  it('makes names the VM accepts', () => {
+    expect(iss.safeName('C:\\Users\\me\\shot 1.png')).toBe('shot-1.png');
+    expect(iss.safeName('../../etc/passwd')).toBe('passwd');
+    expect(iss.safeName('...')).toBe('');
+    expect(iss.safeName('Ünïcode name.txt')).toBe('n-code-name.txt');
+  });
+});
+
 describe('create and list', () => {
   it('stores the issue, the shot and the markup', async () => {
     const i = await raise();

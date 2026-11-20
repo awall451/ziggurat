@@ -1,0 +1,124 @@
+#!/bin/bash
+# agent-brief: a short brief for every lead cycle that has finished, with an
+# optional spoken version. Run it every few minutes (a systemd user timer
+# works well): it only writes briefs that do not exist yet.
+#
+# It only reads what the console has already pulled (ledger, gate history,
+# the lead's transcript) and never talks to a VM itself.
+#   1. finds finished cycles in $FLEET_DATA/<project>/cycles.jsonl without a brief
+#   2. gathers facts: the ledger line, the gate's verdicts during and right
+#      after the cycle, and the lead's final report from its transcript
+#   3. has Claude (Sonnet, headless, no tools) write the brief
+#   4. saves $FLEET_DATA/<project>/briefs/<session>.md (the console's Briefs tab)
+#   5. optionally a spoken version (<session>.mp3) and a push of the headline
+#
+# A cycle is briefed once it ended BRIEF_SETTLE_MIN minutes ago (the gate
+# judges what it submitted in that time) or the next cycle has started.
+# Cycles that ended more than BRIEF_BACKFILL_HOURS ago are left alone.
+#
+# Settings: ${ZIGGURAT_CONFIG:-~/.config/ziggurat/config.env} (see config.example.env)
+#   FLEET_DATA=<folder>            required: one subfolder per project
+#   TRANSCRIPTS_DATA=<folder>      optional: the console's transcript folders, one per project
+#                                  (<folder>/<project>/projects/...); gives the lead's full report
+#   SPEAK_PYTHON=<python>          optional: a Python with `edge-tts` installed, for the spoken brief
+#   NTFY_URL=https://ntfy.sh/<long-random-topic>   optional: push the headline to the ntfy app
+set -uo pipefail
+CONFIG=${ZIGGURAT_CONFIG:-$HOME/.config/ziggurat/config.env}
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && . "$CONFIG"
+: "${FLEET_DATA:?set FLEET_DATA in $CONFIG}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+SETTLE=${BRIEF_SETTLE_MIN:-20}
+BACKFILL=${BRIEF_BACKFILL_HOURS:-48}
+CLAUDE=${CLAUDE_BIN:-claude}
+SID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+now=$(date +%s)
+
+# One run at a time: a brief takes a minute or two.
+exec 9> "${XDG_RUNTIME_DIR:-/tmp}/agent-brief.lock"
+flock -n 9 || exit 0
+
+epoch() { date -d "$1" +%s 2>/dev/null || echo 0; }
+clock() { date -d "$1" '+%a %-d %b, %-I:%M %p' 2>/dev/null || echo "$1"; }
+
+# The lead's last words in a cycle: the final report of its transcript.
+report() { # $1 project, $2 session
+  [ -n "${TRANSCRIPTS_DATA:-}" ] || return 0
+  local f
+  f=$(find "$TRANSCRIPTS_DATA/$1/projects" -maxdepth 2 -name "$2.jsonl" -type f 2>/dev/null | head -1)
+  [ -n "$f" ] || return 0
+  jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text' "$f" 2>/dev/null \
+    | tail -c 6000
+}
+
+for D in "$FLEET_DATA"/*/; do
+  D=${D%/}
+  box=$(basename "$D")
+  [ -f "$D/cycles.jsonl" ] || continue
+  mkdir -p "$D/briefs"
+  # Counted cycles of this project with a session, oldest first, as start<TAB>end<TAB>session<TAB>line.
+  mapfile -t rows < <(jq -c 'select(.session != null and .counted != false) | [.start, .end, .session, .]' "$D/cycles.jsonl" 2>/dev/null)
+  for i in "${!rows[@]}"; do
+    row=${rows[$i]}
+    sid=$(jq -r '.[2]' <<< "$row")
+    [[ $sid =~ $SID_RE ]] || continue
+    [ -s "$D/briefs/$sid.md" ] && continue
+    start=$(jq -r '.[0]' <<< "$row")
+    end=$(jq -r '.[1] // empty' <<< "$row")
+    [ -n "$end" ] || continue
+    e=$(epoch "$end")
+    [ $((now - e)) -le $((BACKFILL * 3600)) ] || continue
+    next=""
+    [ $((i + 1)) -lt ${#rows[@]} ] && next=$(jq -r '.[0]' <<< "${rows[$((i + 1))]}")
+    if [ -z "$next" ] && [ $((now - e)) -lt $((SETTLE * 60)) ]; then continue; fi
+    # Gate verdicts from the cycle's start until the next cycle (or an hour after it ended).
+    until=${next:-$(date -u -d "@$((e + 3600))" +%FT%T)}
+    gate=$(awk -v s="${start:0:19}" -v u="${until:0:19}" 'substr($1,1,19) >= s && substr($1,1,19) < u' "$D/history.log" 2>/dev/null | tail -30)
+    line=$(jq -c '.[3] | {start, end, mins: ((.secs // 0) / 60 | floor), rc, halted, limited, oneshot, usd: (.cost_usd // 0 | . * 100 | round / 100), turns}' <<< "$row")
+    summary=$(jq -r '.[3].summary // ""' <<< "$row")
+    words=$(report "$box" "$sid")
+    facts=$(cat <<FACTS
+PROJECT: ${box^}
+CYCLE: started $(clock "$start"), ended $(clock "$end") (the owner's local time)
+LEDGER (usd = API-equivalent estimate of subscription usage, not a bill; halted = the owner stopped it; oneshot = a job the owner asked for):
+$line
+GATE VERDICTS (time topic sha status detail):
+${gate:-none}
+--- THE LEAD'S FINAL REPORT FOR THIS CYCLE ---
+${words:-$summary}
+FACTS
+)
+    out=$D/briefs/$sid.md
+    printf '%s' "$facts" | timeout 10m "$CLAUDE" -p --model sonnet --tools "" --output-format text \
+"You write the owner's brief on one finished work cycle of an autonomous agent team building a project in a sandbox VM.
+Use ONLY the facts on stdin; never invent names or details that are not there. Plain English, no hype, no terse style.
+Under 220 words. Format exactly:
+**Headline:** one sentence on the most important result of this cycle.
+## Built and merged
+## Failed or stuck
+## Needs you   (questions or anything that waits on the owner; write 'Nothing.' if none)
+## Next   (what the lead said comes next; 'Not stated.' if the facts do not say)" > "$out.tmp" 2>/dev/null && [ -s "$out.tmp" ] && mv "$out.tmp" "$out" \
+      || { rm -f "$out.tmp"; echo "$(date -Is) $box $sid: brief failed" >&2; continue; }
+
+    if [ -n "${SPEAK_PYTHON:-}" ] && [ -x "$SPEAK_PYTHON" ]; then
+      spoken=$D/briefs/$sid.spoken.txt
+      printf '%s' "$facts" | timeout 10m "$CLAUDE" -p --model sonnet --tools "" --output-format text \
+"Write the script for a short spoken brief (about 45 to 90 seconds read aloud) on one finished work cycle of an
+autonomous agent team building a project in a sandbox VM. Use ONLY the facts on stdin; never invent names or
+details that are not there, and call the project only by the name given there. Conversational, warm but factual,
+like a colleague catching the owner up. Start by saying when the cycle ran. No markdown, no lists, no symbols,
+no file paths, no commit hashes, no URLs. Say money as 'about twelve dollars of usage'. Order: what got built and
+merged, what failed or is stuck, anything that needs the owner, and what is next." \
+        > "$spoken.tmp" 2>/dev/null && [ -s "$spoken.tmp" ] && mv "$spoken.tmp" "$spoken"
+      if [ -s "$spoken" ]; then
+        "$SPEAK_PYTHON" "$HERE/speak.py" "$spoken" "$D/briefs/$sid.mp3" > /dev/null || echo "$(date -Is) $box $sid: speech failed" >&2
+      fi
+    fi
+
+    headline=$(grep -m1 '^\*\*Headline' "$out" | sed 's/\*\*Headline:\*\* *//')
+    if [ -n "${NTFY_URL:-}" ]; then
+      curl -s -o /dev/null -H "Title: $box: cycle ended $(clock "$end")" -H "Tags: robot" -d "${headline:-brief ready}" "$NTFY_URL"
+    fi
+    echo "$(date -Is) $box: brief -> $out"
+  done
+done

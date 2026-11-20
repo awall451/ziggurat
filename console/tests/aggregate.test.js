@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseGateLog, parseIssue, summary, notes, gallery, mediaFile, noteFile, resolveInside } from '../src/lib/server/aggregate.js';
+import { parseGateLog, parseIssue, summary, notes, gallery, mediaFile, noteFile, resolveInside, briefs } from '../src/lib/server/aggregate.js';
 
 describe('parseGateLog', () => {
   it('reads verdict lines and the test count', () => {
@@ -110,5 +110,27 @@ describe('files from the fleet folder', () => {
     expect(mediaFile(project, 'shots/2026-01-01/notes.txt')).toBeNull();
     expect(mediaFile(project, 'notes/design.md')).toBeNull();
     expect(mediaFile(project, 'shots/../../secret.md')).toBeNull();
+  });
+});
+
+describe('briefs', () => {
+  it('lists one brief per cycle and reads only the one asked for', () => {
+    const fleet = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-brief-'));
+    const A = '11111111-2222-4333-8444-555555555555';
+    const B = '22222222-2222-4333-8444-555555555555';
+    fs.mkdirSync(path.join(fleet, 'briefs'));
+    fs.writeFileSync(path.join(fleet, 'briefs', `${A}.md`), '**Headline:** merged');
+    fs.writeFileSync(path.join(fleet, 'briefs', `${A}.mp3`), 'id3');
+    fs.writeFileSync(path.join(fleet, 'briefs', `${A}.spoken.txt`), 'spoken');
+    fs.writeFileSync(path.join(fleet, 'briefs', `${B}.mp3`), 'id3');
+    fs.writeFileSync(path.join(fleet, 'briefs', 'notes.md'), 'not a brief');
+    const project = { paths: { fleet } };
+    const all = briefs(project);
+    expect([...all.keys()].sort()).toEqual([A, B]);
+    expect(all.get(A)).toEqual({ md: '', mp3: true });
+    expect(all.get(B)).toEqual({ md: null, mp3: true });
+    expect(briefs(project, A).get(A).md).toBe('**Headline:** merged');
+    expect(mediaFile(project, `briefs/${A}.mp3`)).toBeTruthy();
+    expect(mediaFile(project, `briefs/${A}.spoken.txt`)).toBeNull();
   });
 });

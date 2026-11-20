@@ -16,7 +16,7 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 | Inbox | Messages to the lead in three tiers, with attachments; the lead's replies; questions the lead asks you; one-shot jobs, which can be started again from here |
 | Notes | The lead's plan (`STATE.md`), journal, QA issues, other docs on main |
 | Gallery | Screenshots the gate took of the newest passing build, by day |
-| Digest | The morning digest and its spoken version (written by `workstation/agent-digest`) |
+| Briefs | A brief for every finished cycle and its spoken version (written by `workstation/agent-brief`); a cycle without one yet shows the lead's own final report |
 | Usage | Tokens and cost estimates by model, role and cycle, computed from the transcripts |
 | Controls | Halt now or after the cycle in progress (optionally asking the team to wrap up), resume, a one-shot job (one cycle for the work you describe, on a halted team or one between cycles, then back as it was), why an idle team is idle (daily cap, timer off, next cycle), stop at a set time, cycle cap, budget, models, gate pause, audit log |
 

@@ -3,7 +3,8 @@
 # console calls it over ssh). Agents cannot write to the issues folder, which
 # is what lets the lead trust what it finds there.
 #
-#   agent-kit-issues put <id> <kind>        issue archive on stdin (issue.md, shot.png, markup.png)
+#   agent-kit-issues put <id> <kind>        issue archive on stdin (issue.md, shot.png, markup.png,
+#                                           att/<files>: kit 0.7, an issue raised on the Issues page)
 #   agent-kit-issues set <id> <status>      owner moved it: new|in_progress|done|wontfix
 #   agent-kit-issues list                   ids, one per line
 set -uo pipefail
@@ -14,6 +15,10 @@ IS=$STATE/issues
 ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
 MAX_PNG=$((8 * 1024 * 1024))
 MAX_TEXT=65536
+# Attachments of an issue raised on the Issues page: plain files directly in att/.
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
+MAX_ATT=$((20 * 1024 * 1024))
+MAX_FILES=8
 
 die() { echo "agent-kit-issues: $*" >&2; exit 2; }
 umask 022
@@ -29,13 +34,26 @@ case "${1:-}" in
     rm -rf -- "$tmp"
     mkdir -m 700 "$tmp" || die "cannot create work folder"
     trap 'rm -rf -- "$tmp"' EXIT
-    head -c $((MAX_PNG * 2 + MAX_TEXT + 65536)) | tar -x -C "$tmp" --no-same-owner --no-same-permissions 2>/dev/null \
-      || die "could not read the issue archive"
-    # Only these three plain files, nothing else.
-    bad=$(find "$tmp" -mindepth 1 ! \( -type f \( -name issue.md -o -name shot.png -o -name markup.png \) \) -print -quit)
+    head -c $((MAX_PNG * 2 + MAX_TEXT + MAX_ATT * MAX_FILES + 1048576)) | tar -x -C "$tmp" --no-same-owner --no-same-permissions \
+      --no-overwrite-dir --delay-directory-restore 2>/dev/null || die "could not read the issue archive"
+    # Only issue.md, shot.png, markup.png and plain files directly in att/.
+    bad=$(find "$tmp" -mindepth 1 ! -path "$tmp/issue.md" ! -path "$tmp/shot.png" ! -path "$tmp/markup.png" \
+      ! -path "$tmp/att" ! -path "$tmp/att/*" -print -quit)
     [ -z "$bad" ] || die "unexpected entry in archive"
-    bad=$(find "$tmp" -mindepth 2 -print -quit)
-    [ -z "$bad" ] || die "unexpected entry in archive"
+    bad=$(find "$tmp" -mindepth 1 ! -type f ! -path "$tmp/att" -print -quit)
+    [ -z "$bad" ] || die "archive may hold plain files only"
+    if [ -e "$tmp/att" ]; then
+      [ -d "$tmp/att" ] && [ ! -L "$tmp/att" ] || die "archive may hold plain files only"
+      n=0
+      while IFS= read -r -d '' f; do
+        n=$((n + 1))
+        name=${f##*/}
+        [[ $name =~ $NAME_RE ]] || die "bad attachment name: $name"
+        [ "$(dirname "$f")" = "$tmp/att" ] || die "attachments must sit directly in att/"
+        [ "$(stat -c %s "$f")" -le "$MAX_ATT" ] || die "attachment over 20 MB: $name"
+      done < <(find "$tmp/att" -mindepth 1 -print0)
+      [ "$n" -le "$MAX_FILES" ] || die "more than $MAX_FILES attachments"
+    fi
     [ -f "$tmp/issue.md" ] || die "archive has no issue.md"
     [ "$(stat -c %s "$tmp/issue.md")" -le "$MAX_TEXT" ] || die "issue text over 64 KB"
     for f in shot.png markup.png; do
@@ -46,6 +64,7 @@ case "${1:-}" in
       cat "$tmp/issue.md"
     } > "$tmp/issue.tmp" && mv "$tmp/issue.tmp" "$tmp/issue.md"
     chmod 755 "$tmp"
+    find "$tmp" -type d -exec chmod 755 {} +
     find "$tmp" -type f -exec chmod 644 {} +
     mv "$tmp" "$IS/$id" || die "could not publish the issue"
     trap - EXIT

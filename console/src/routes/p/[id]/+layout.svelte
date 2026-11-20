@@ -15,7 +15,7 @@
     ['notes', 'Notes'],
     ['issues', 'Issues'],
     ['gallery', 'Gallery'],
-    ['digest', 'Digest'],
+    ['briefs', 'Briefs'],
     ['usage', 'Usage'],
     ['controls', 'Controls']
   ];

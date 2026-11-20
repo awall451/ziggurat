@@ -1,9 +1,10 @@
-// Owner issues: tickets for the lead, usually raised from a gallery
-// screenshot with markup drawn on it. Separate from the inbox: the inbox is a
+// Owner issues: tickets for the lead, raised from a gallery screenshot with
+// markup drawn on it, or on the Issues page with a picture and files of the
+// owner's own. Separate from the inbox: the inbox is a
 // conversation, an issue is a unit of work the lead triages and delegates.
 //
 // Stored locally under DATA_DIR/issues/<project>/<id>/ (issue.json, shot.png,
-// markup.png) and delivered to the VM with the kit's `agent-kit-issues`
+// markup.png, att/<files>) and delivered to the VM with the kit's `agent-kit-issues`
 // script. The lead's status updates come back by pulling `issues-out/`.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +24,22 @@ const MAX_TEXT = 20_000;
 const MAX_PNG = 8 * 1024 * 1024;
 const MAX_SHAPES = 200;
 const SYNC_EVERY = 15_000;
+// Attachments (kit 0.7): same rules as agent-kit-issues on the VM.
+export const ATT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+export const MAX_ATT = 20 * 1024 * 1024;
+export const MAX_FILES = 8;
+export const MAX_UPLOAD = 15 * 1024 * 1024; // all files of one issue together
+
+/** A file name the VM accepts: "My shot (2).PNG" -> "My-shot-2-.PNG". Empty when nothing is left. */
+export function safeName(name) {
+  const base = String(name || '')
+    .split(/[\\/]/)
+    .pop()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .slice(0, 100);
+  return ATT_NAME_RE.test(base) ? base : '';
+}
 
 const rootFor = (project) => path.join(DATA_DIR, 'issues', project.id);
 const dirFor = (project, id) => path.join(rootFor(project), id);
@@ -80,10 +97,17 @@ export function cleanMarkup(shapes) {
 const isPng = (buf) => buf && buf.length > 8 && buf.length <= MAX_PNG && buf.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
 
 /**
- * Raise an issue. `origin` is {type:'gallery', date, file}; `shot` is the
- * screenshot file to keep a copy of, `markupPng` the flattened drawing.
+ * Raise an issue. `origin` is {type:'gallery', date, file} or {type:'upload',
+ * name} (a picture the owner attached on the Issues page). `shot` is the
+ * screenshot file to keep a copy of, or `shotPng` the picture itself;
+ * `markupPng` the flattened drawing; `attachments` [{name, data}] more files.
  */
-export async function create(project, user, { title, body, kind, origin, markup, shot = null, markupPng = null }, { deliverNow = true } = {}) {
+export async function create(
+  project,
+  user,
+  { title, body, kind, origin, markup, shot = null, shotPng = null, markupPng = null, attachments = [] },
+  { deliverNow = true } = {}
+) {
   const t = String(title || '').trim().slice(0, 200);
   if (!t) throw new Error('Give the issue a title');
   const text = String(body || '').trim();
@@ -93,14 +117,33 @@ export async function create(project, user, { title, body, kind, origin, markup,
   if (origin?.type === 'gallery') {
     if (!DATE_RE.test(origin.date || '') || !FILE_RE.test(origin.file || '')) throw new Error('Bad screenshot');
     o = { type: 'gallery', date: origin.date, file: origin.file, screen: screenKey(origin.file) };
+  } else if (origin?.type === 'upload') {
+    o = { type: 'upload', name: safeName(origin.name) || 'picture.png' };
   } else if (origin != null) throw new Error('Unknown origin');
   if (markupPng && !isPng(markupPng)) throw new Error('Markup must be a PNG under 8 MB');
+  if (shotPng && !isPng(shotPng)) throw new Error('The picture must be a PNG under 8 MB');
+  if (!Array.isArray(attachments)) throw new Error('Bad attachments');
+  if (attachments.length > MAX_FILES) throw new Error(`At most ${MAX_FILES} attachments`);
+  const names = new Set();
+  let total = 0;
+  for (const a of attachments) {
+    if (!ATT_NAME_RE.test(a?.name || '') || names.has(a.name)) throw new Error(`Bad attachment name: ${a?.name}`);
+    if (!Buffer.isBuffer(a.data) || !a.data.length || a.data.length > MAX_ATT) throw new Error(`Attachment empty or over 20 MB: ${a.name}`);
+    names.add(a.name);
+    total += a.data.length;
+  }
+  if (total + (shotPng?.length || 0) + (markupPng?.length || 0) > MAX_UPLOAD) throw new Error('All files together must stay under 15 MB');
 
   const id = `${stamp()}-i-${crypto.randomBytes(3).toString('hex')}`;
   const dir = dirFor(project, id);
   fs.mkdirSync(dir, { recursive: true });
   if (shot) fs.copyFileSync(shot, path.join(dir, 'shot.png'));
+  else if (shotPng) fs.writeFileSync(path.join(dir, 'shot.png'), shotPng);
   if (markupPng) fs.writeFileSync(path.join(dir, 'markup.png'), markupPng);
+  if (attachments.length) {
+    fs.mkdirSync(path.join(dir, 'att'));
+    for (const a of attachments) fs.writeFileSync(path.join(dir, 'att', a.name), a.data);
+  }
   const now = new Date().toISOString();
   const issue = {
     id,
@@ -110,6 +153,7 @@ export async function create(project, user, { title, body, kind, origin, markup,
     status: 'new',
     origin: o,
     markup: cleanMarkup(markup),
+    attachments: attachments.map((a) => ({ name: a.name, size: a.data.length })),
     by: user?.name || 'owner',
     createdAt: now,
     updatedAt: now,
@@ -128,7 +172,7 @@ export function get(project, id) {
 }
 
 function tarStream(dir) {
-  const files = ['issue.md', ...['shot.png', 'markup.png'].filter((f) => fs.existsSync(path.join(dir, f)))];
+  const files = ['issue.md', ...['shot.png', 'markup.png', 'att'].filter((f) => fs.existsSync(path.join(dir, f)))];
   return spawn('tar', ['-c', '-C', dir, '--owner=0', '--group=0', ...files], { stdio: ['ignore', 'pipe', 'ignore'] }).stdout;
 }
 
@@ -136,7 +180,9 @@ function tarStream(dir) {
 export function issueText(issue) {
   const lines = [`# ${issue.title}`, '', `Kind: ${issue.kind}`];
   if (issue.origin?.type === 'gallery') lines.push(`Screen: ${issue.origin.screen} (gallery screenshot ${issue.origin.date}/${issue.origin.file})`);
+  if (issue.origin?.type === 'upload') lines.push(`Picture: shot.png (attached by the owner as ${issue.origin.name})`);
   if (issue.markup?.length) lines.push(`Markup: ${issue.markup.length} shape(s) drawn by the owner, see markup.png`);
+  if (issue.attachments?.length) lines.push(`Attachments (in att/): ${issue.attachments.map((a) => a.name).join(', ')}`);
   lines.push('', issue.body || '(no description)');
   return lines.join('\n') + '\n';
 }
@@ -214,6 +260,17 @@ export function openCount(project) {
     return list(project).filter((i) => OPEN.includes(i.status)).length;
   } catch {
     return 0;
+  }
+}
+
+/** A file the owner attached to an issue (att/<name>), or null. */
+export function attachment(project, id, name) {
+  if (!ID_RE.test(id) || !ATT_NAME_RE.test(name || '')) return null;
+  const file = path.join(dirFor(project, id), 'att', name);
+  try {
+    return fs.lstatSync(file).isFile() ? file : null;
+  } catch {
+    return null;
   }
 }
 
