@@ -65,6 +65,10 @@ fi
 if [ -x "$KIT/bin/owner-issues" ]; then
   issues=$("$KIT/bin/owner-issues" prompt 2>/dev/null) && [ -n "$issues" ] && prompt+=$'\n\n'"$issues"
 fi
+# Publishing to a remote repository: prints nothing unless it is set up.
+if [ -x "$KIT/bin/owner-publish" ]; then
+  publish=$("$KIT/bin/owner-publish" prompt 2>/dev/null) && [ -n "$publish" ] && prompt+=$'\n\n'"$publish"
+fi
 if [ -n "$oneshot" ]; then
   # The job and its rules go last, and a notice that this is a one-shot cycle
   # goes before the team's own instructions, which say the opposite in places.

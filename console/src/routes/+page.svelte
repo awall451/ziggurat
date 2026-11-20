@@ -85,6 +85,14 @@
             <dt>Gate main</dt>
             <dd class="mono">{p.status.main?.sha || '–'}</dd>
           </div>
+          {#if p.publish.remote}
+            <div>
+              <dt>Published</dt>
+              <dd class="mono">
+                {#if p.publish.blocked}<span class="s-failed" title={p.publish.blocked.reason}>refused</span>{:else}{p.publish.sha ? p.publish.sha.slice(0, 7) : '–'}{/if}
+              </dd>
+            </div>
+          {/if}
           <div>
             <dt>Tests</dt>
             <dd class="mono">{num(p.summary.testsNow)}</dd>

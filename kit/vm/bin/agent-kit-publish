@@ -1,0 +1,153 @@
+#!/bin/bash
+# agent-kit-publish: the VM's side of publishing main to a remote repository.
+# Run with sudo (the console calls it over ssh).
+#
+# Nothing in this VM can push anywhere and no key is kept here. The owner's
+# console fetches the gate-approved main as a bundle, checks it and pushes it
+# to the remote with a key only the console holds. This script only reads the
+# canonical repository and keeps a few notes the lead can see.
+#
+#   agent-kit-publish status              one JSON line: main, whether a cycle runs, whether the
+#                                         gate still has work, what was published last
+#   agent-kit-publish bundle [<sha>]      a git bundle of main on stdout; with <sha> (a commit
+#                                         the remote already has) only what is newer
+#   agent-kit-publish enable <remote>     publishing is set up: the lead is told each cycle
+#   agent-kit-publish disable
+#   agent-kit-publish record <sha>        the console published main up to <sha>
+#   agent-kit-publish blocked             the console refused to publish; the reason is on stdin
+#
+# Layout:
+#   $STATE/publish/enabled     root   the remote's address, when publishing is set up
+#   $STATE/publish/last        root   "<sha> <date>" of the last publish
+#   $STATE/publish/blocked     root   "<date>" and why the last attempt was refused
+#   $STATE/publish-out/request.md  agent  the lead's request (owner-publish)
+set -uo pipefail
+# Root script: never look programs up through an inherited PATH
+# (AGENT_KIT_PATH is for the tests).
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+PUB=$STATE/publish
+OUT=$STATE/publish-out
+LEAD=agent-kit-lead
+SHA_RE='^[0-9a-f]{40}$'
+# ssh addresses only: git@host:owner/repo.git or ssh://[user@]host[:port]/path
+REMOTE_RE='^(ssh://([A-Za-z0-9][A-Za-z0-9._-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[A-Za-z0-9._][A-Za-z0-9._/-]*|[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._][A-Za-z0-9._/-]*)$'
+
+die() { echo "agent-kit-publish: $*" >&2; exit 2; }
+umask 022
+
+if [ "$(id -u)" = 0 ]; then
+  GK() { sudo -u gatekeeper -H git -C "$BARE" "$@"; }   # the canonical repository
+  AG() { sudo -u agent -H git -C "$WORKSPACE" "$@"; }   # the agents' workspace, read as the agent
+else
+  # Not root: only the kit's own tests run it this way, in a temp folder.
+  GK() { git -C "$BARE" "$@"; }
+  AG() { git -C "$WORKSPACE" "$@"; }
+fi
+cycle_alive() {
+  case "$(systemctl is-active "$LEAD.service" 2>/dev/null)" in
+    active | activating | deactivating) return 0 ;;
+  esac
+  return 1
+}
+# Branches the agents submitted that the gate has not judged yet: a verdict
+# counts only if it is for the commit the branch points at now (as in gate-wait).
+unjudged() {
+  local n=0 ref sha f
+  while read -r sha ref; do
+    [[ $sha =~ $SHA_RE ]] || continue
+    f=$STATE/gate/results/$(printf '%s' "${ref#refs/heads/ready/}" | tr / _).json
+    [ -f "$f" ] && [ "$(jq -r '.sha // ""' "$f" 2>/dev/null)" = "$sha" ] || n=$((n + 1))
+  done < <(AG for-each-ref --format='%(objectname) %(refname)' refs/heads/ready/ 2>/dev/null)
+  echo "$n"
+}
+gate_busy() {
+  local lock=${AGENT_KIT_RUN:-/run}/agent-kit-gate.lock
+  [ -e "$lock" ] || return 1
+  ( exec 9< "$lock" && flock -n 9 ) 2>/dev/null && return 1
+  return 0
+}
+main_sha() { GK rev-parse -q --verify refs/heads/main 2>/dev/null; }
+
+case "${1:-status}" in
+  status)
+    main=$(main_sha) || main=""
+    last_sha="" last_at=""
+    [ -f "$PUB/last" ] && read -r last_sha last_at < "$PUB/last"
+    [[ $last_sha =~ $SHA_RE ]] || { last_sha=""; last_at=""; }
+    ahead=null
+    if [ -n "$main" ] && [ -n "$last_sha" ]; then
+      ahead=$(GK rev-list --count "$last_sha..$main" 2>/dev/null) || ahead=null
+    fi
+    cycle=false; cycle_alive && cycle=true
+    busy=false; gate_busy && busy=true
+    stopped=false; grep -q '^stop' "$STATE/control" 2>/dev/null && stopped=true
+    paused=false; [ -e "$STATE/gate/paused" ] && paused=true
+    jq -cn --arg main "$main" --argjson cycle "$cycle" --argjson busy "$busy" \
+      --argjson unjudged "$(unjudged)" --argjson stopped "$stopped" --argjson paused "$paused" \
+      --arg remote "$(head -c 300 "$PUB/enabled" 2>/dev/null | head -1)" \
+      --arg sha "$last_sha" --arg at "$last_at" --argjson ahead "$ahead" \
+      '{main: ($main | select(. != "") // null), cycle: $cycle, gateBusy: $busy, unjudged: $unjudged,
+        stopped: $stopped, gatePaused: $paused, remote: ($remote | select(. != "") // null),
+        published: (if $sha == "" then null else {sha: $sha, at: $at, ahead: $ahead} end)}'
+    ;;
+
+  bundle)
+    since=${2:-}
+    main=$(main_sha) || die "the repository has no main"
+    if [ -n "$since" ]; then
+      [[ $since =~ $SHA_RE ]] || die "usage: agent-kit-publish bundle [<40-hex commit>]"
+      [ "$since" = "$main" ] && { echo "agent-kit-publish: nothing newer than $since" >&2; exit 3; }
+      # Only a commit that main contains can be left out. Anything else: send all of main.
+      GK merge-base --is-ancestor "$since" "$main" 2>/dev/null || since=""
+    fi
+    # main only: never the candidates the gate has not approved.
+    if [ -n "$since" ]; then
+      GK bundle create -q - "^$since" refs/heads/main
+    else
+      GK bundle create -q - refs/heads/main
+    fi
+    ;;
+
+  enable)
+    remote=${2:-}
+    [[ $remote =~ $REMOTE_RE ]] && [ ${#remote} -le 200 ] || die "usage: agent-kit-publish enable <git@host:owner/repo.git | ssh://host/path>"
+    install -d -m 755 "$PUB"
+    if [ "$(id -u)" = 0 ]; then install -d -m 755 -o agent -g agent "$OUT"; else mkdir -p "$OUT"; fi
+    printf '%s\n' "$remote" > "$PUB/.enabled.tmp" && mv "$PUB/.enabled.tmp" "$PUB/enabled"
+    echo "publishing enabled: $remote"
+    ;;
+
+  disable)
+    rm -f "$PUB/enabled"
+    echo "publishing disabled"
+    ;;
+
+  record)
+    sha=${2:-}
+    [[ $sha =~ $SHA_RE ]] || die "usage: agent-kit-publish record <40-hex commit>"
+    main=$(main_sha) || die "the repository has no main"
+    GK merge-base --is-ancestor "$sha" "$main" 2>/dev/null || die "$sha is not on main"
+    install -d -m 755 "$PUB"
+    printf '%s %s\n' "$sha" "$(date -u +%FT%TZ)" > "$PUB/.last.tmp" && mv "$PUB/.last.tmp" "$PUB/last"
+    rm -f "$PUB/blocked"
+    echo "recorded: published up to ${sha:0:9}"
+    ;;
+
+  blocked)
+    install -d -m 755 "$PUB"
+    {
+      date -u +%FT%TZ
+      # Plain text only, a few lines: this is shown to the lead.
+      head -c 1000 | tr -c 'A-Za-z0-9 .,:;()_/@#+=\n-' ' ' | head -8
+    } > "$PUB/.blocked.tmp" && mv "$PUB/.blocked.tmp" "$PUB/blocked"
+    echo "recorded: publish refused"
+    ;;
+
+  *)
+    die "unknown command: $1 (status, bundle, enable, disable, record, blocked)"
+    ;;
+esac

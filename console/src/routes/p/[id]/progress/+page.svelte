@@ -152,6 +152,35 @@
   </div>
 </section>
 
+{#if data.publishes}
+  <section class="panel block">
+    <h2>Publishes</h2>
+    <p class="dim small">Newest first. Each time the console pushed the gate's main to the project's remote repository, or refused to.</p>
+    {#if data.publishes.length}
+      <div class="scroll-x">
+        <table class="grid">
+          <thead>
+            <tr><th>When</th><th>Outcome</th><th>Commit</th><th class="num">Commits</th><th>Detail</th></tr>
+          </thead>
+          <tbody>
+            {#each data.publishes as h (h.at + h.outcome)}
+              <tr>
+                <td class="mono nowrap">{when(h.at)}</td>
+                <td class={h.outcome === 'blocked' ? 's-failed' : 's-done'}>{h.outcome === 'blocked' ? 'refused' : h.outcome === 'in-sync' ? 'already there' : 'published'}</td>
+                <td class="mono">{h.sha ? h.sha.slice(0, 9) : '–'}</td>
+                <td class="num mono">{h.commits ?? '–'}</td>
+                <td class="summary">{h.detail || h.summary || ''}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else}
+      <p class="dim">Nothing has been published yet.</p>
+    {/if}
+  </section>
+{/if}
+
 <style>
   .cols {
     display: grid;

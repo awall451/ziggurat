@@ -433,6 +433,8 @@ function register(d, t) {
       target: t.id,
       vmid: d.vm.vmid,
       ssh: vmSsh(d, t),
+      // Publishing still has to be verified on the Controls tab: the key goes to the remote first.
+      ...(d.request.remote ? { publish: { remote: d.request.remote } } : {}),
       // Beside the other projects' data when those folders are configured.
       ...(config.FLEET_ROOT || config.TRANSCRIPTS_ROOT
         ? {

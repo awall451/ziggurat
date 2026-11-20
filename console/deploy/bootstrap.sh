@@ -25,6 +25,9 @@ REPO=/opt/ziggurat
 ROOT=/srv/ziggurat
 NODE_VERSION=22.12.0
 ANSIBLE_SPEC='ansible-core~=2.18.0'
+# The secret scanner the console runs on everything it is about to publish.
+GITLEAKS_VERSION=8.30.1
+GITLEAKS_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 
 die() { echo "bootstrap: $*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root"
@@ -48,6 +51,17 @@ if [ "$(node --version 2>/dev/null)" != "v$NODE_VERSION" ]; then
   curl -fsSL -o "$tmp/SHASUMS256.txt" "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt"
   (cd "$tmp" && grep " $tar\$" SHASUMS256.txt | sha256sum -c -)
   tar -xJf "$tmp/$tar" -C /usr/local --strip-components=1 --no-same-owner
+  rm -rf "$tmp"
+fi
+
+echo "== gitleaks $GITLEAKS_VERSION"
+if [ "$(gitleaks version 2>/dev/null)" != "$GITLEAKS_VERSION" ]; then
+  tmp=$(mktemp -d)
+  tar="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+  curl -fsSL -o "$tmp/$tar" "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/$tar"
+  echo "$GITLEAKS_SHA256  $tmp/$tar" | sha256sum -c -
+  tar -xzf "$tmp/$tar" -C "$tmp" gitleaks
+  install -m 755 -o root -g root "$tmp/gitleaks" /usr/local/bin/gitleaks
   rm -rf "$tmp"
 fi
 

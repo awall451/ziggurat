@@ -21,6 +21,73 @@
   let jobFiles = $state([]); // {token, name, size} once uploaded
   let jobPicker = $state();
   const lead = $derived(p.tiers[0]);
+  const pub = $derived(p.publish);
+  let remoteText = $state('');
+  let editRemote = $state(false);
+  let hostAsk = $state(null); // {host, fingerprint, type}: the forge's host key, to confirm once
+  let pubChecks = $state(null);
+  let copied = $state(false);
+
+  async function pubAct(body, label) {
+    busy = label;
+    problem = '';
+    done = '';
+    try {
+      const res = await fetch(`/p/${p.id}/controls/publish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.message || 'The action failed');
+      await invalidateAll();
+      return out;
+    } catch (e) {
+      problem = e.message;
+      return null;
+    } finally {
+      busy = '';
+      confirm = null;
+    }
+  }
+  async function saveRemote(value) {
+    const out = await pubAct({ action: 'remote', remote: value }, 'remote');
+    if (!out) return;
+    editRemote = false;
+    hostAsk = null;
+    pubChecks = null;
+    done = value ? 'Remote saved. Add the key below to the repository, then verify.' : 'Publishing is turned off for this project.';
+  }
+  async function verifyRemote(fingerprint = null) {
+    const out = await pubAct({ action: 'verify', fingerprint }, 'verify');
+    if (!out) return;
+    if (out.need === 'hostkey') {
+      hostAsk = out;
+      return;
+    }
+    hostAsk = null;
+    pubChecks = out;
+    if (out.ok) done = out.note || 'Verified: the console can read the remote and may push to it.';
+    else problem = 'The remote could not be verified. See the checks below.';
+  }
+  function askPublish() {
+    confirm = {
+      title: `Publish ${p.name} now?`,
+      body: `The console fetches the gate's main from the VM, checks what is new (no rewritten history, no secrets, no CI files) and pushes it to ${pub.remote}. What is pushed can be read by everyone who can read that repository. A push cannot be taken back.`,
+      word: 'Publish now',
+      run: async () => {
+        const out = await pubAct({ action: 'now' }, 'publish');
+        if (!out) return;
+        if (out.outcome === 'blocked') problem = out.detail;
+        else done = out.detail;
+      }
+    };
+  }
+  async function copyKey() {
+    try {
+      await navigator.clipboard.writeText(pub.publicKey);
+      copied = true;
+      setTimeout(() => (copied = false), 2000);
+    } catch {
+      /* the key can still be selected by hand */
+    }
+  }
   // On a halted team; on an idle one (set to run, no cycle running) with kit 0.6.
   const idleJob = $derived(st.state === 'idle' && !st.haltAfter);
   const canStartJob = $derived(!st.oneshot && (st.state === 'halted' || (idleJob && p.canOneshotIdle)));
@@ -412,6 +479,108 @@
   </section>
 {/if}
 
+<section class="panel block" id="publishing">
+  <h2>Publishing</h2>
+  <p class="dim small">
+    Copies the gate's main to a remote git repository, with the same commits. Nobody on the VM can push: the key lives only in this console.
+    {lead} asks for a publish at the end of a cycle. The console then waits for the gate, checks what is new (no rewritten history, no secrets,
+    no CI files) and pushes. Nothing is ever fetched from the remote into the VM.
+  </p>
+  {#if !pub.remote || editRemote}
+    <div class="pair tight">
+      <input class="field mono" bind:value={remoteText} placeholder="git@github.com:owner/repo.git" aria-label="Remote address" maxlength="300" />
+      <button class="btn" onclick={() => saveRemote(remoteText.trim())} disabled={!!busy || !remoteText.trim()}>Save</button>
+    </div>
+    <p class="dim small">An ssh address. Create the repository empty (no README, no licence): the first publish brings the whole history.</p>
+    {#if editRemote}<div><button class="btn quiet" onclick={() => (editRemote = false)}>Cancel</button></div>{/if}
+  {:else}
+    <p>
+      Remote: <span class="mono">{pub.remote}</span>
+      {#if pub.verified}<span class="s-done"> · verified {when(pub.verified)}</span>{:else}<span class="s-failed"> · not verified yet</span>{/if}
+    </p>
+    {#if !p.canPublish && p.canControl}
+      <p class="s-failed small">This VM's kit is older than 0.8: upgrade it before publishing.</p>
+    {/if}
+
+    <div class="stack">
+      <span class="small dim">1. Add this key to the repository as a deploy key <strong>with write access</strong>. It works for this one repository only.</span>
+      <pre class="mono pubkey">{pub.publicKey || 'The key is being made. Reload the page.'}</pre>
+      <div><button class="btn quiet" onclick={copyKey} disabled={!pub.publicKey}>{copied ? 'Copied' : 'Copy the key'}</button></div>
+    </div>
+    <div class="stack small dim">
+      <span>2. Protect <span class="mono">main</span> on the remote (a ruleset or branch protection): block force pushes, block deletion, and let only this deploy key push.</span>
+      <span>3. Turn off what the project does not use there: issues, wiki, and CI (Actions, pipelines). The console refuses to publish CI files.</span>
+    </div>
+
+    {#if hostAsk}
+      <div class="panel note warn">
+        <p>The host <span class="mono">{hostAsk.host}</span> shows this key ({hostAsk.type}):</p>
+        <p class="mono">{hostAsk.fingerprint}</p>
+        <p class="small dim">Compare it with the fingerprints your git host publishes. Confirm only if it matches: from then on the console accepts no other key for this host.</p>
+        <div class="halts">
+          <button class="btn" onclick={() => verifyRemote(hostAsk.fingerprint)} disabled={!!busy}>It matches: trust this host</button>
+          <button class="btn quiet" onclick={() => (hostAsk = null)}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+    {#if pubChecks?.checks}
+      <ul class="checks small">
+        {#each pubChecks.checks as k (k.name)}
+          <li class={k.ok ? 's-done' : 's-failed'}>{k.name}: {k.ok ? 'ok' : 'failed'} <span class="dim">{k.detail}</span></li>
+        {/each}
+      </ul>
+    {/if}
+
+    <p>
+      {#if pub.sha}Published: <span class="mono">{pub.sha.slice(0, 9)}</span> <span class="dim">{when(pub.at)}</span>{:else}Nothing has been published yet.{/if}
+      {#if st.main?.sha && pub.sha && !pub.sha.startsWith(st.main.sha)}<span class="dim"> · gate main is {st.main.sha}</span>{/if}
+    </p>
+    {#if pub.blocked}
+      <div class="panel note bad">
+        <p>The last publish was refused {when(pub.blocked.at)}: {pub.blocked.reason}</p>
+        <p class="small dim">{lead} has been told. Nothing was pushed.</p>
+      </div>
+    {/if}
+    {#if pub.request}
+      <p class="small dim">
+        {lead}'s request ({when(pub.request.date)}): {pub.request.publish === 'yes' ? 'publish' : 'do not publish'}{pub.request.summary ? `. ${pub.request.summary}` : ''}
+      </p>
+    {/if}
+    <div class="halts">
+      <button class="btn" onclick={() => verifyRemote()} disabled={!!busy}>{busy === 'verify' ? 'Checking…' : pub.verified ? 'Verify again' : 'Verify'}</button>
+      <button class="btn" onclick={askPublish} disabled={!!busy || !pub.verified || !p.canPublish || pub.busy}>{busy === 'publish' || pub.busy ? 'Publishing…' : 'Publish now…'}</button>
+      <button
+        class="btn quiet"
+        onclick={() => {
+          remoteText = pub.remote;
+          editRemote = true;
+        }}
+        disabled={!!busy}>Change the remote</button
+      >
+      <button class="btn quiet" onclick={() => saveRemote('')} disabled={!!busy}>Turn off</button>
+    </div>
+    {#if data.publishHistory.length}
+      <div class="scroll-x">
+        <table class="grid">
+          <thead><tr><th>When</th><th>Outcome</th><th>Commit</th><th class="num">Commits</th><th>Asked by</th><th>Detail</th></tr></thead>
+          <tbody>
+            {#each data.publishHistory as h (h.at + h.outcome)}
+              <tr>
+                <td class="mono nowrap">{when(h.at)}</td>
+                <td class={h.outcome === 'blocked' ? 's-failed' : 's-done'}>{h.outcome === 'blocked' ? 'refused' : h.outcome === 'in-sync' ? 'already there' : 'published'}</td>
+                <td class="mono">{h.sha ? h.sha.slice(0, 9) : '–'}</td>
+                <td class="num mono">{h.commits ?? '–'}</td>
+                <td>{h.by === 'request' ? lead : h.by}</td>
+                <td class="small">{h.detail || h.summary || ''}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  {/if}
+</section>
+
 <section class="panel block">
   <h2>Audit log</h2>
   <p class="dim small">Everything this console changed for this project, newest first.</p>
@@ -438,6 +607,19 @@
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
 
 <style>
+  .pubkey {
+    margin: 0;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border: 1px solid var(--line, currentColor);
+    border-radius: 6px;
+    user-select: all;
+  }
+  .checks {
+    margin: 0;
+    padding-left: 18px;
+  }
   .cols {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
