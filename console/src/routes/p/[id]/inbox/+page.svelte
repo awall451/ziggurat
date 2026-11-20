@@ -105,10 +105,16 @@
   // running, whatever that status still says.
   const justStarted = (m) => m.tier === 'oneshot' && !!m.startedAt && p.now - Date.parse(m.startedAt) < 90_000;
   const canStart = (m) =>
-    m.tier === 'oneshot' && p.canOneshot && m.open && p.status.state === 'halted' && !p.status.oneshot && !justStarted(m) && (m.delivered || m.error);
+    m.tier === 'oneshot' &&
+    p.canOneshot &&
+    m.open &&
+    (p.status.state === 'halted' || (p.status.state === 'idle' && p.canOneshotIdle && !p.status.haltAfter)) &&
+    !p.status.oneshot &&
+    !justStarted(m) &&
+    (m.delivered || m.error);
   async function startJob(m) {
     const ok = window.confirm(
-      `Start this one-shot job on ${p.name}?\n\n${lead} runs one cycle for it, then the team is halted again. This spends subscription usage.`
+      `Start this one-shot job on ${p.name}?\n\n${lead} runs one cycle for it, then the team is ${p.status.state === 'idle' ? 'back to running' : 'halted again'}. This spends subscription usage.`
     );
     if (!ok || busy) return;
     busy = true;
@@ -147,9 +153,9 @@
     if (!m.delivered) return ['queued', 'Sending'];
     if (m.reply) return [m.reply.status === 'declined' ? 'interrupted' : 'done', `${lead} replied: ${REPLY_WORD[m.reply.status].toLowerCase()}`];
     if (m.closed) return ['idle', 'Closed by you'];
-    // Delivered means its cycle was started. Halted again with no reply: the
-    // cycle ended first (usage limit, budget, a halt).
-    if (m.tier === 'oneshot' && p.status.state === 'halted') return ['interrupted', 'Its cycle ended without a reply'];
+    // Delivered means its cycle was started. No cycle running and no reply:
+    // the cycle ended first (usage limit, budget, a halt).
+    if (m.tier === 'oneshot' && (p.status.state === 'halted' || p.status.state === 'idle')) return ['interrupted', 'Its cycle ended without a reply'];
     if (m.seen) return ['waiting', `Seen by ${lead}`];
     return ['idle', p.status.state === 'halted' ? 'On the VM, read on resume' : 'On the VM, not read yet'];
   }

@@ -1,6 +1,6 @@
 <script>
   import { invalidateAll } from '$app/navigation';
-  import { when } from '$lib/format.js';
+  import { when, idleText } from '$lib/format.js';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { data } = $props();
@@ -21,7 +21,9 @@
   let jobFiles = $state([]); // {token, name, size} once uploaded
   let jobPicker = $state();
   const lead = $derived(p.tiers[0]);
-  const canStartJob = $derived(st.state === 'halted' && !st.oneshot);
+  // On a halted team; on an idle one (set to run, no cycle running) with kit 0.6.
+  const idleJob = $derived(st.state === 'idle' && !st.haltAfter);
+  const canStartJob = $derived(!st.oneshot && (st.state === 'halted' || (idleJob && p.canOneshotIdle)));
 
   async function act(body, label) {
     busy = label;
@@ -110,7 +112,10 @@
   function askJob() {
     confirm = {
       title: `Start a one-shot job on ${p.name}?`,
-      body: `${lead} starts one cycle now, for this job only: it plans the tasks, hands them to the team, sees them through the gate and replies in the Inbox. Then the team is halted again and no further cycle starts. This spends subscription usage, up to the budget per cycle (${c.caps.CYCLE_BUDGET_USD ? `$${c.caps.CYCLE_BUDGET_USD}` : 'see Brakes'}). Unfinished work left by an interrupted cycle is not touched. The gate runs during the job, so branches that were already submitted before the halt are tested and merged as usual.`,
+      body:
+        st.state === 'idle'
+          ? `${lead} starts one cycle now, for this job only: it plans the tasks, hands them to the team, sees them through the gate and replies in the Inbox. It runs even if the daily cycle cap is used up, and counts toward it. Then the team goes back to running: the next normal cycle comes about 15 minutes later, if the cap allows. This spends subscription usage, up to the budget per cycle (${c.caps.CYCLE_BUDGET_USD ? `$${c.caps.CYCLE_BUDGET_USD}` : 'see Brakes'}). Unfinished work left by an earlier cycle is not touched.`
+          : `${lead} starts one cycle now, for this job only: it plans the tasks, hands them to the team, sees them through the gate and replies in the Inbox. Then the team is halted again and no further cycle starts. This spends subscription usage, up to the budget per cycle (${c.caps.CYCLE_BUDGET_USD ? `$${c.caps.CYCLE_BUDGET_USD}` : 'see Brakes'}). Unfinished work left by an interrupted cycle is not touched. The gate runs during the job, so branches that were already submitted before the halt are tested and merged as usual.`,
       word: 'Start the job',
       run: async () => {
         // A refusal keeps the form as it is, to start again. Otherwise the job
@@ -211,12 +216,15 @@
       </p>
       {#if st.oneshot}
         <p>
-          A one-shot job is in progress. The team halts again when this cycle ends. Follow it under Topology; {lead}'s reply and any
+          A one-shot job is in progress. {st.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'} Follow it under Topology; {lead}'s reply and any
           questions come to the <a href="/p/{p.id}/inbox">Inbox</a>.
         </p>
       {:else if st.state === 'halted' || !st.timerEnabled}
         <p>The team is stopped. Nothing spends tokens until you resume it{p.canOneshot ? ' or start a one-shot job' : ''}.</p>
         <div><button class="btn go" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
+      {/if}
+      {#if !st.oneshot && st.state === 'idle' && idleText(st.idle, p.now)}
+        <p>{idleText(st.idle, p.now)}</p>
       {/if}
       {#if st.haltAfter && st.state !== 'halted'}
         <p>
@@ -252,8 +260,9 @@
     <section class="panel block" id="oneshot">
       <h2>One-shot job</h2>
       <p class="dim small">
-        One cycle for the work you describe here, on a halted team. {lead} plans it, the team does it, and the team is halted again
-        when it ends. For feedback and fixes you want now without letting the team run on.
+        One cycle for the work you describe here, on a halted team or one between cycles. {lead} plans it, the team does it, and when
+        it ends the team is back as it was: halted again, or running on its normal schedule. For feedback and fixes you want now,
+        without letting a halted team run on or waiting for the next cycle (or the daily cap).
       </p>
       {#if !p.canOneshot}
         <p class="dim">This needs kit 0.4 on the VM (it runs {st.kitVersion || 'an older kit'}). Upgrade the kit to use it.</p>
@@ -263,7 +272,13 @@
         <p class="dim">The VM is not answering{st.state === 'checking' ? ' yet' : ''}. A job can be started once it does.</p>
       {:else if !canStartJob}
         <p class="dim">
-          Only for a halted team. This one is {st.state}: send an <a href="/p/{p.id}/inbox">Inbox</a> message instead, or halt it first.
+          {#if idleJob}
+            On a team between cycles this needs kit 0.6 on the VM (it runs {st.kitVersion || 'an older kit'}). Halt the team first, or upgrade the kit.
+          {:else if st.state === 'idle'}
+            A halt is pending. Cancel it under Team to start a job on the running team, or wait for the halt.
+          {:else}
+            Not while a cycle runs: send an <a href="/p/{p.id}/inbox">Inbox</a> message instead, or halt the team first.
+          {/if}
         </p>
       {:else}
         <label class="stack">

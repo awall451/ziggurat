@@ -32,6 +32,13 @@ oneshot=$(head -c 200 "$STATE/oneshot" 2>/dev/null)
 haltafter=$(head -c 300 "$STATE/halt-after" 2>/dev/null)
 canhaltafter=$([ -x /opt/agent-kit/bin/agent-kit-halt-after ] && echo yes || echo no)
 canoneshot=$([ -x /opt/agent-kit/bin/agent-kit-oneshot ] && echo yes || echo no)
+# Why an idle team is idle: the daily cap (owner's caps.env wins over project.env,
+# as in lead-cycle), cycles counted today by the VM's own date, the timer's next run.
+cap=$(sed -nE 's/^MAX_CYCLES_PER_DAY=([0-9]{1,5})$/\\1/p' /etc/agent-kit/project.env /etc/agent-kit/caps.env 2>/dev/null | tail -1)
+today=$(jq -s --arg d "$(date +%F)" '[.[] | select(.date == $d and .counted != false)] | length' "$STATE/ledger/cycles.jsonl" 2>/dev/null)
+next=$(systemctl show "$UNIT.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
+next=$([ -n "$next" ] && date -d "$next" +%s 2>/dev/null)
+dayend=$(date -d 'tomorrow 00:00' +%s 2>/dev/null)
 f=$(grep -l "all checks passed" "$STATE"/gate/results/*.json 2>/dev/null | xargs -r ls -t | head -1)
 shots=$([ -n "$f" ] && jq -r '.shots // empty' "$f" 2>/dev/null)
 jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg since "$since" \\
@@ -40,12 +47,29 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
   --arg gatepaused "$gatepaused" --arg kitver "$kitver" --arg shots "$shots" \\
   --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" \\
   --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" \\
+  --arg cap "$cap" --arg today "$today" --arg next "$next" --arg dayend "$dayend" \\
   --arg host "$(hostname)" --arg now "$(date +%s)" \\
   '{control:$control, lead:$lead, timer:$timer, since:$since, head:$head, ready:$ready, remote:$remote,
     current:$current, newest:$newest, worktrees:($worktrees|tonumber? // 0), haltat:$haltat,
     gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot,
-    haltafter:$haltafter, canhaltafter:$canhaltafter, host:$host, now:($now|tonumber? // 0)}'
+    haltafter:$haltafter, canhaltafter:$canhaltafter, cap:$cap, today:$today, next:$next, dayend:$dayend,
+    host:$host, now:($now|tonumber? // 0)}'
 `;
+}
+
+const count = (v) => (/^\d{1,10}$/.test(String(v ?? '')) ? Number(v) : null);
+
+/**
+ * Why a team that is set to run has no cycle running. `cap`: the daily cycle
+ * cap is used up, and the next cycle waits for the VM's next day. `timer-off`:
+ * no cycle starts on its own. `halt-after`: a halt is pending. `between`: the
+ * next cycle comes when the timer next fires.
+ */
+function idleWhy(raw, haltAfter) {
+  const today = count(raw.today);
+  const cap = count(raw.cap);
+  const reason = haltAfter ? 'halt-after' : cap != null && today != null && today >= cap ? 'cap' : raw.timer !== 'enabled' ? 'timer-off' : 'between';
+  return { reason, today, cap, nextAt: count(raw.next), dayEndsAt: count(raw.dayend) };
 }
 
 function shape(raw) {
@@ -60,11 +84,14 @@ function shape(raw) {
     session = m ? m[1] : '';
   }
   const [haltEpoch, ...haltReason] = (raw.haltat || '').trim().split(/\s+/);
-  const [jobId, jobSince] = (raw.oneshot || '').trim().split(/\s+/);
+  const [jobId, jobSince, jobAfter] = (raw.oneshot || '').trim().split(/\s+/);
   const [afterSet, afterMode, ...afterReason] = (raw.haltafter || '').trim().split(/\s+/);
+  const haltAfter = /^\d{9,11}$/.test(afterSet || '') ? { since: Number(afterSet), wrapUp: afterMode === 'wrap', reason: afterReason.join(' ') } : null;
+  const state = running ? 'running' : stopped ? 'halted' : 'idle';
   return {
     reachable: true,
-    state: running ? 'running' : stopped ? 'halted' : 'idle',
+    state,
+    idle: state === 'idle' ? idleWhy(raw, haltAfter) : null,
     control: raw.control || '',
     leadActive: running,
     leadSince: running ? raw.since : null,
@@ -77,11 +104,12 @@ function shape(raw) {
     haltAt: /^\d+$/.test(haltEpoch || '') ? { epoch: Number(haltEpoch), reason: haltReason.join(' ') } : null,
     gatePaused: raw.gatepaused === 'yes',
     kitVersion: raw.kitver || null,
-    // A one-shot job in progress: one cycle for one owner message, then halted again.
-    oneshot: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(jobId || '') ? { id: jobId, since: jobSince || null } : null,
+    // A one-shot job in progress: one cycle for one owner message, then halted
+    // again, or (started on an idle team, kit 0.6) back to running.
+    oneshot: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(jobId || '') ? { id: jobId, since: jobSince || null, runsOn: jobAfter === 'run' } : null,
     canOneshot: raw.canoneshot === 'yes',
     // A halt that waits for the cycle in progress to end (and for the gate after it).
-    haltAfter: /^\d{9,11}$/.test(afterSet || '') ? { since: Number(afterSet), wrapUp: afterMode === 'wrap', reason: afterReason.join(' ') } : null,
+    haltAfter,
     canHaltAfter: raw.canhaltafter === 'yes',
     shotsDir: /^\/var\/lib\/agent-kit\/[A-Za-z0-9._\/-]+$/.test(raw.shots || '') ? raw.shots : null,
     host: raw.host,
@@ -127,4 +155,17 @@ export function invalidateStatus(id) {
   if (c) statusCache.set(id, { ...c, at: 0 });
 }
 
+/** Kit version on the VM is at least `want` ("0.6.0"). */
+export function kitAtLeast(have, want) {
+  const a = String(have || '').trim().split('.').map(Number);
+  const b = want.split('.').map(Number);
+  if (a.length < 2 || a.some((n) => !Number.isInteger(n))) return false;
+  for (let i = 0; i < b.length; i++) {
+    const x = a[i] || 0;
+    if (x !== b[i]) return x > b[i];
+  }
+  return true;
+}
+
 export { UUID_RE };
+export const _test = { shape, statusScript };

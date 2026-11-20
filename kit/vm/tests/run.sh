@@ -208,8 +208,9 @@ cat > "$FB/systemctl" <<'EOF'
 echo "$*" >> "$FAKE_LOG"
 case "$1" in
   is-active) echo "${FAKE_ACTIVE:-inactive}" ;;
-  start) [ -z "${FAKE_START_FAIL:-}" ] ;;
-  show) echo "${FAKE_ENDED:-}" ;;
+  start) [ "$2" = --no-block ] && [ "${3:-}" = agent-kit-lead.timer ] || [ -z "${FAKE_START_FAIL:-}" ] ;;
+  is-enabled) echo "${FAKE_TIMER:-enabled}" ;;
+  show) if [ "${4:-}" = Job ]; then echo "${FAKE_JOB:-}"; else echo "${FAKE_ENDED:-}"; fi ;;
 esac
 EOF
 # Nothing a halt would signal or switch off may reach the real machine.
@@ -221,15 +222,18 @@ job() { tar -c -C "$T/work/j" . | shot start "$1" owner; }
 J=20260101T120000Z-o-job1 J2=20260101T120100Z-o-job2
 mkdir -p "$T/work/j"; echo "Fix the menu bug and soften the title music. Code word BASALT." > "$T/work/j/body.md"
 echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
-refuse "one-shot on a team that is not halted" job $J
+FAKE_ACTIVE=active refuse "one-shot while a normal cycle runs" job $J
 check "a refused job stores nothing" '[ ! -e "$S/inbox/$J" ] && [ ! -e "$S/oneshot" ]'
+check "a refusal on a running team turns its timer back on" 'grep -qx "stop agent-kit-lead.timer" "$FAKE_LOG" && grep -qx "start --no-block agent-kit-lead.timer" "$FAKE_LOG"'
 echo "stop owner halt for the night 2026-01-01T00:00:00+00:00" > "$S/control"
 FAKE_ACTIVE=active refuse "one-shot while a cycle is still running" job $J
+FAKE_JOB=4711 refuse "one-shot while a start of the lead is queued" job $J
 refuse "one-shot with a bad id" job ../../etc/x
 echo "1000000000 old window" > "$S/halt-at"
+: > "$FAKE_LOG"
 job $J > /dev/null
 check "job stored as an owner message" 'grep -q "^Tier: oneshot$" "$S/inbox/$J/message.md" && grep -q BASALT "$S/inbox/$J/message.md"'
-check "marker names the job" '[ "$(cut -d" " -f1 "$S/oneshot")" = "$J" ]'
+check "marker names the job, and that the team halts after it" '[ "$(cut -d" " -f1 "$S/oneshot")" = "$J" ] && [ "$(cut -d" " -f3 "$S/oneshot")" = halt ]'
 check "control lets this one cycle and the gate run" 'grep -q "^run oneshot $J " "$S/control"'
 check "one cycle started, timer left alone" 'grep -qx "start --no-block agent-kit-lead.service" "$FAKE_LOG" && ! grep -q "enable" "$FAKE_LOG"'
 check "the job is not injected mid-cycle" '[ ! -e "$S/inbox/.inject/$J" ]'
@@ -311,6 +315,50 @@ rules=$("$BIN/owner-inbox" oneshot $LJ)
 check "a long job reaches the lead whole, with its attachments" 'grep -q TAILWORD <<< "$rules" && grep -q "att/title.png" <<< "$rules"'
 "$BIN/agent-kit-inbox" close $LJ > /dev/null
 
+# On an idle team: set to run, no cycle running (between cycles, or the daily cap used up).
+echo "== agent-kit-oneshot on an idle team"
+IJ=20260101T140000Z-o-idle1 IJ2=20260101T140100Z-o-idle2
+rm -f "$S/oneshot" "$S/halt-at"
+echo "run 2026-01-01T03:00:00+00:00" > "$S/control"
+: > "$FAKE_LOG"
+said=$(job $IJ)
+check "a job starts on an idle team" 'grep -q "^run oneshot $IJ " "$S/control" && grep -qx "start --no-block agent-kit-lead.service" "$FAKE_LOG"'
+check "it says the team runs on afterwards" 'grep -q "runs on when it ends" <<< "$said"'
+check "the marker says the team runs on after it" '[ "$(cut -d" " -f3 "$S/oneshot")" = run ]'
+check "the timer is stopped for the job, before the cycle is started" '[ "$(grep -n "stop agent-kit-lead.timer" "$FAKE_LOG" | cut -d: -f1)" -lt "$(grep -n "start --no-block agent-kit-lead.service" "$FAKE_LOG" | cut -d: -f1)" ] && ! grep -q "start --no-block agent-kit-lead.timer" "$FAKE_LOG"'
+head=$("$BIN/owner-inbox" oneshot $IJ --head)
+rules=$("$BIN/owner-inbox" oneshot $IJ)
+check "the lead is told the team runs on, not that it is halted" 'grep -q "team between its normal cycles" <<< "$head" && grep -q "goes back to its normal schedule" <<< "$rules" && ! grep -q "team is halted\|paused while the team" <<< "$rules"'
+check "a job on a halted team is still told so" 'echo "$J x halt" > "$S/oneshot.j" && grep -q "The team is halted" <<< "$("$BIN/owner-inbox" oneshot $J)"'
+rm -f "$S/oneshot.j"
+said=$(AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-halt-after" set 'after the job')
+check "a halt after the job may be asked for while it runs" 'grep -q "after the job" "$S/halt-after"'
+rm -f "$S/halt-after"
+: > "$FAKE_LOG"
+shot finish > /dev/null
+check "the end of the job puts the team back to running" 'grep -q "^run after one-shot job $IJ ended " "$S/control" && [ ! -e "$S/oneshot" ]'
+check "and turns the lead timer back on" 'grep -qx "start --no-block agent-kit-lead.timer" "$FAKE_LOG"'
+check "the control line after the job is not a stop" '! grep -q "^stop" "$S/control"'
+: > "$FAKE_LOG"
+FAKE_TIMER=disabled job $IJ2 > /dev/null
+FAKE_TIMER=disabled shot finish > /dev/null
+check "a timer the owner had off stays off" '! grep -q "start --no-block agent-kit-lead.timer" "$FAKE_LOG"'
+echo "run 2026-01-01T04:00:00+00:00" > "$S/control"
+echo "1767240000 wrap owner" > "$S/halt-after"
+refuse "a job on a team that is about to halt" job 20260101T140200Z-o-idle3
+rm -f "$S/halt-after"
+: > "$FAKE_LOG"
+FAKE_START_FAIL=1 refuse "an idle team's job whose cycle cannot start" job 20260101T140300Z-o-idle4
+check "a failed start on an idle team leaves it running, timer back on" 'grep -q "^run 2026-01-01T04" "$S/control" && [ ! -e "$S/oneshot" ] && grep -qx "start --no-block agent-kit-lead.timer" "$FAKE_LOG"'
+job 20260101T140400Z-o-idle5 > /dev/null
+touch -d "10 minutes ago" "$S/oneshot"
+shot reap > /dev/null
+check "reap puts an idle team's lost job back to running" 'grep -q "^run after one-shot job 20260101T140400Z-o-idle5 lost its cycle " "$S/control"'
+echo "20260101T000000Z-o-old 2026-01-01T00:00:00+00:00" > "$S/oneshot"
+echo "run oneshot 20260101T000000Z-o-old 2026-01-01T00:00:00+00:00" > "$S/control"
+shot finish > /dev/null
+check "a marker from an older kit (no third field) halts, as before" 'grep -q "^stop one-shot job 20260101T000000Z-o-old ended " "$S/control"'
+
 check "halt and resume drop the marker" 'grep -q "rm -f \"\$STATE/oneshot\"" "$BIN/agent-kit-halt" && grep -q "rm -f \"\$STATE/oneshot\"" "$BIN/agent-kit-resume"'
 
 echo "== agent-kit-halt-after"
@@ -323,6 +371,8 @@ refuse "halt-after on a team that is already halted" ha set
 echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
 echo "$J 2026-01-01T00:00:00+00:00" > "$S/oneshot"
 refuse "halt-after during a one-shot job" ha set
+echo "$J 2026-01-01T00:00:00+00:00 halt" > "$S/oneshot"
+refuse "halt-after during a one-shot job that halts anyway" ha set
 rm -f "$S/oneshot"
 said=$(FAKE_ACTIVE=activating ha set --wrap-up 'weekly; usage $(id)')
 check "the note holds when, how and why, with nothing but plain words" 'grep -qE "^[0-9]{10} wrap weekly  usage  \(id\)$" "$S/halt-after" && ! grep -q "[;\$]" "$S/halt-after" && grep -q "wrap up" <<< "$said"'

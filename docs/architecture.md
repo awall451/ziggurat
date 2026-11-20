@@ -101,7 +101,7 @@ All root-owned, all run from outside by the owner (or the console):
 | `agent-kit-halt [reason]` | Kill switch, lead timer off, the cycle in progress stopped, and the team's own units that run Claude stopped. Other team services keep running. Records what it turned off |
 | `agent-kit-resume [--no-timer]` | Clears the stop, restores exactly what the halt turned off, enables the lead timer |
 | `agent-kit-halt-after set [--wrap-up] [reason]` / `clear` | Halt when the cycle in progress has ended, and the gate has judged what it submitted, instead of cutting it short (see below) |
-| `agent-kit-oneshot start <id> <from>` | On a halted team: one cycle for one job from the owner, then halted again (see below) |
+| `agent-kit-oneshot start <id> <from>` | On a halted or idle team: one cycle for one job from the owner, then back to what it was (see below) |
 | `agent-kit-halt-at set <unix-seconds>` | A halt at a fixed time (checked every minute, survives a reboot). The daily cap counts cycles, not hours |
 | `agent-kit-caps set <KEY> <VALUE>` | Cycle cap, budget and models, kept in `/etc/agent-kit/caps.env` |
 | `agent-kit-gate pause` / `resume` | Pause the merge gate on its own |
@@ -143,12 +143,17 @@ a cycle that was already running when the kit was upgraded.
 
 ### One-shot job
 
-For feedback and fixes the owner wants now, without letting the team run on. Only on a halted team.
+For feedback and fixes the owner wants now. On a halted team, without letting it run on; on an idle team
+(set to run, but no cycle running: between cycles, or the daily cycle cap used up), without waiting for the
+next cycle. Not while a cycle runs: that cycle takes inbox messages.
 
 1. `agent-kit-oneshot start` stores the job as an owner message (tier `oneshot`, same checks as any message),
    writes the marker `/var/lib/agent-kit/oneshot`, sets `control` to `run oneshot <id>` so that the gate runs,
-   and starts `agent-kit-lead.service` once. The lead timer stays off and the team's own units stay stopped.
-   If the cycle cannot be started, all of it is undone, the stored message included.
+   and starts `agent-kit-lead.service` once. The marker is `<id> <since> <after>`: `after` is `halt` on a
+   halted team and `run` on an idle one. On a halted team the lead timer stays off and the team's own units stay
+   stopped. On an idle team the lead timer is stopped first, so no timer cycle can start in the job's place
+   (a start the timer has already queued counts as a running cycle and refuses the job).
+   If the cycle cannot be started, all of it is undone, the stored message included, and the timer is back on.
 2. `lead-cycle` sees the marker (it must agree with the control line) and builds a different prompt:
    `owner-inbox oneshot <id> --head` (a notice that this is a one-shot cycle), then the team's own
    `lead-cycle.md`, then `owner-inbox prompt`, then `owner-inbox oneshot <id>`: the job in full and the rules.
@@ -157,9 +162,12 @@ For feedback and fixes the owner wants now, without letting the team run on. Onl
    alone, plan, delegate as usual, ask with a default if unsure, wait for the gate with `gate-wait`, reply to
    the message, end. The team's own `lead-cycle.md` is not changed, and a normal cycle's prompt is the same
    as before.
-3. When the cycle ends for any reason, the unit's `ExecStopPost` runs `agent-kit-oneshot finish`, which writes
-   `stop` again. No second cycle starts. If the VM loses power mid-job, `finish` never runs: `agent-kit-tick`
-   calls `agent-kit-oneshot reap` every minute, which halts again once a job has no cycle.
+3. When the cycle ends for any reason, the unit's `ExecStopPost` runs `agent-kit-oneshot finish`. On a halted
+   team it writes `stop` again and no second cycle starts. On an idle team it writes `run after one-shot job
+   <id> ...` and starts the lead timer again (if it is enabled): the next normal cycle comes 15 minutes later,
+   if the daily cap allows. If the VM loses power mid-job, `finish` never runs: `agent-kit-tick` calls
+   `agent-kit-oneshot reap` every minute, which does the same once a job has no cycle. A marker without the
+   third field (from kit 0.5) means `halt`.
 
 `finish` runs as root at the end of every cycle. The lead's unit reads `agent.env`, whose `PATH` starts with a
 folder the agent can write to, so the unit starts `finish` with an empty environment and the script sets its
@@ -176,7 +184,10 @@ own `PATH`. `gate-run` reads `agent.env` too and resets its `PATH` after that, f
   touched.
 - `gate-wait <topic>...` is for the lead: it waits for the verdict on the commits it submitted. One call waits
   90 seconds at most, so that it fits in a tool call, and says when to call it again.
-- A halt stops the job like any cycle; a resume during the job turns it into a normal run.
+- A halt stops the job like any cycle; a resume during the job turns it into a normal run. A halt after the
+  cycle (`agent-kit-halt-after`) can be asked for during a job on an idle team, and applies when it ends.
+- The lead is told which of the two it is (`owner-inbox oneshot` reads the marker): halted again after the
+  job, or back to the normal schedule.
 - If the job's cycle ends before the lead answered `done` or `declined` (a halt, a usage limit, the budget),
   the message stays open. The owner can start the job again from the Inbox (`agent-kit-oneshot start` with
   the same id), or resume the team: a normal cycle treats an open `oneshot` message as `priority`.

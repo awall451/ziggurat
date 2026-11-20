@@ -146,7 +146,7 @@ Each owner message has a tier:
 - `priority`: finish what is running, then plan it into this cycle or the next.
 - `urgent`: handle it before you start any new work. Agents already running may be told to wrap up
   and report back early so that you see it sooner.
-- `oneshot`: a job the owner started on its own while the team was halted. If one is still open in a
+- `oneshot`: a job the owner started on its own while no cycle was running. If one is still open in a
   normal cycle (its own cycle was cut short), treat it as `priority`.
 
 A new message can arrive mid-cycle as a system notice that begins with `[agent-kit owner notice]` and
@@ -207,13 +207,35 @@ EOF
     id=${2:-}
     [[ $id =~ $ID_RE ]] || die "usage: owner-inbox oneshot <id> [--head]"
     [ -f "$IN/$id/message.md" ] || die "no such message: $id"
+    # Started on a halted team (the team halts again after it) or on an idle
+    # one (it runs on): agent-kit-oneshot writes which into its marker.
+    after=halt
+    if [ -r "$STATE/oneshot" ]; then
+      read -r mid _ mafter _ < "$STATE/oneshot"
+      [ "${mid:-}" = "$id" ] && [ "${mafter:-}" = run ] && after=run
+    fi
+    if [ "$after" = run ]; then
+      on_team="team between its normal cycles"
+      team_line="No cycle was running. The owner started this one cycle for one job: owner message \`$id\` (tier
+\`oneshot\`). When this cycle ends the team goes back to its normal schedule, but this cycle is for
+the job alone."
+      gate_line=""
+    else
+      on_team="halted
+team"
+      team_line="The team is halted. The owner started this one cycle for one job: owner message \`$id\` (tier
+\`oneshot\`). When this cycle ends the kit halts the team again, and no cycle follows until the owner
+says so."
+      gate_line=" The gate was paused while the team was
+  halted: it may now also judge branches submitted before the halt. Those verdicts are for a normal
+  cycle, not for you."
+    fi
     if [ "${3:-}" = "--head" ]; then
       # The team's cycle instructions tell the lead, in their first steps, to
       # pick roadmap work and to resume or remove leftover worktrees. A rule
       # that only comes after them may be read too late.
       cat <<EOF
-**Read this first: this cycle is a one-shot job.** The owner started this single cycle on a halted
-team for one job, owner message \`$id\`. The section "One-shot job: this cycle only" at the end of
+**Read this first: this cycle is a one-shot job.** The owner started this single cycle on a $on_team for one job, owner message \`$id\`. The section "One-shot job: this cycle only" at the end of
 this prompt holds the job and replaces the usual steps of a cycle wherever the two differ. Until you
 have read it: do not resume, finish, rebase or remove any worktree or branch left by an earlier
 cycle, and do not choose roadmap or milestone work. Read what follows for who is on your team, your
@@ -225,9 +247,7 @@ EOF
     cat <<EOF
 ## One-shot job: this cycle only
 
-The team is halted. The owner started this one cycle for one job: owner message \`$id\` (tier
-\`oneshot\`). When this cycle ends the kit halts the team again, and no cycle follows until the owner
-says so. Where this section and your usual cycle instructions differ, this section wins. The charter
+$team_line Where this section and your usual cycle instructions differ, this section wins. The charter
 and the gate contract bind as always.
 
 ### The job, in full
@@ -255,9 +275,7 @@ EOF
 - **See it through the gate.** No later cycle will read the verdicts, so after you submit, run
   \`gate-wait <topic>...\`. One call waits up to 90 seconds; a gate check can take many minutes, so run
   it again for as long as it says it is still waiting. Fix a failed or rejected branch and submit it
-  again, at most 3 times per topic; then park it and say so. The gate was paused while the team was
-  halted: it may now also judge branches submitted before the halt. Those verdicts are for a normal
-  cycle, not for you.
+  again, at most 3 times per topic; then park it and say so.$gate_line
 - **Record briefly.** Update your team notes as usual (what was asked, what landed), submit them
   through the gate, and wait for that verdict too.
 - **Answer the owner.** End with \`owner-inbox reply $id done\`: one line per task with what changed

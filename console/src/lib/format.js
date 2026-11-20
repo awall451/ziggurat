@@ -50,6 +50,30 @@ export function modelShort(id) {
   return m ? m[1] : id.replace(/^claude-/, '');
 }
 
+/** A VM time (unix seconds) in the viewer's own time, with the day when it is not today. */
+export function clock(secs, now = Date.now()) {
+  if (!Number.isFinite(secs)) return null;
+  const d = new Date(secs * 1000);
+  const sameDay = d.toDateString() === new Date(now).toDateString();
+  return d.toLocaleString([], sameDay ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+/** Why an idle team is idle, in one sentence (see idleWhy in live.js). */
+export function idleText(idle, now = Date.now()) {
+  if (!idle) return null;
+  const counted = idle.cap != null && idle.today != null ? ` (${idle.today} of ${idle.cap} today)` : '';
+  if (idle.reason === 'cap') {
+    const end = clock(idle.dayEndsAt, now);
+    return `Idle: the daily cycle cap is used up${counted}. It resets when the VM's day ends${end ? `, at ${end} your time` : ''}; the next cycle starts after that. Raise the cap under Controls, or start a one-shot job.`;
+  }
+  if (idle.reason === 'timer-off') return 'Idle: the lead timer is off, so no cycle starts on its own. Resume the team under Controls, or start a one-shot job.';
+  if (idle.reason === 'between') {
+    const next = clock(idle.nextAt, now);
+    return `Idle between cycles. The next one starts ${next ? `at ${next}` : 'soon'}${counted}.`;
+  }
+  return null;
+}
+
 export const STATUS_WORD = {
   running: 'running',
   waiting: 'waiting on agents',

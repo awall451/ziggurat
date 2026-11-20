@@ -227,7 +227,7 @@ The team runs without you. These are the ways to steer it, from lightest to heav
 
 <p align="center"><img src="docs/img/issue-note.webp" alt="A screenshot of the game opened for a note: a red ellipse drawn around a coffin, a title field and a Raise issue button" width="100%"></p>
 
-**Ask for one job.** On a halted team, a one-shot job runs a single cycle for the work you describe and halts again. Good for feedback and fixes you want now, without letting the team run on.
+**Ask for one job.** A one-shot job runs a single cycle for the work you describe, then puts the team back as it was: a halted team halts again, a team between cycles (or at its daily cap) runs on. Good for feedback and fixes you want now, without letting the team run on or waiting for the next cycle.
 
 **Stop it.** Now, after the cycle in progress, or at a set time:
 

@@ -51,7 +51,12 @@ case "${1:-show}" in
     exec 8> "$LOCK"
     flock 8
     grep -q '^stop' "$STATE/control" 2>/dev/null && die "the team is already halted"
-    [ ! -e "$STATE/oneshot" ] || die "a one-shot job is in progress: the team halts when it ends anyway"
+    # A job on a halted team halts again when it ends anyway. One started on an
+    # idle team goes back to running: a halt after it is worth asking for.
+    if [ -e "$STATE/oneshot" ]; then
+      read -r _ _ jafter _ < "$STATE/oneshot"
+      [ "${jafter:-}" = run ] || die "a one-shot job is in progress: the team halts when it ends anyway"
+    fi
     rm -f "$OVER"
     printf '%s %s %s\n' "$(date +%s)" "$mode" "$why" > "$MARK.tmp"
     chmod 644 "$MARK.tmp"
