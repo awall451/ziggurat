@@ -139,7 +139,9 @@ export function targetNet(t) {
   };
 }
 
-const PROJECT_KEYS = ['id', 'name', 'description', 'theme', 'accent', 'hidden', 'pull', 'ssh', 'kit', 'paths', 'agentAliases', 'target', 'vmid'];
+// git@host:owner/repo.git or ssh://[user@]host[:port]/path. No leading "-", no spaces.
+const REMOTE_RE = /^(?=.{1,200}$)(?:ssh:\/\/(?:[A-Za-z0-9][A-Za-z0-9._-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*(?::[0-9]{1,5})?\/[A-Za-z0-9._][A-Za-z0-9._\/-]*|[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._][A-Za-z0-9._\/-]*)$/;
+const PROJECT_KEYS = ['id', 'name', 'description', 'theme', 'accent', 'hidden', 'pull', 'ssh', 'kit', 'paths', 'agentAliases', 'target', 'vmid', 'publish'];
 
 function inside(child, parent) {
   const rel = path.relative(parent, child);
@@ -214,6 +216,10 @@ export function validateProject(input, roots = {}) {
     p.paths = paths;
   }
 
+  // Where main is published. An ssh address only; publish.js checks it again before use.
+  const publish = sub('publish', { remote: [REMOTE_RE, 'must be an ssh address: git@host:owner/repo.git or ssh://host/path'] });
+  if (publish?.remote) p.publish = publish;
+
   const aliases = c.get('agentAliases');
   if (aliases != null) {
     const ok =
@@ -229,7 +235,7 @@ export function validateProject(input, roots = {}) {
 
 const MODEL_RE = /^[a-z][a-z0-9.-]{1,39}$/;
 const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const DEPLOY_KEYS = ['id', 'name', 'description', 'target', 'source', 'charter', 'theme', 'accent', 'cores', 'memoryMb', 'diskGb', 'vmid', 'leadModel', 'fallbackModel', 'budgetUsd', 'cyclesPerDay'];
+const DEPLOY_KEYS = ['id', 'name', 'description', 'remote', 'target', 'source', 'charter', 'theme', 'accent', 'cores', 'memoryMb', 'diskGb', 'vmid', 'leadModel', 'fallbackModel', 'budgetUsd', 'cyclesPerDay'];
 
 /** What the "New project" form sends. `target` (validated) gives the id range. */
 export function validateDeployRequest(input, target = null) {
@@ -250,8 +256,14 @@ export function validateDeployRequest(input, target = null) {
     budgetUsd: c.int('budgetUsd', 1, 500, { fallback: 40 }),
     cyclesPerDay: c.int('cyclesPerDay', 0, 200, { fallback: 6 }),
     vmid: null,
-    charter: null
+    charter: null,
+    remote: null
   };
+  const remote = c.get('remote');
+  if (remote != null && remote !== '') {
+    if (typeof remote !== 'string' || !REMOTE_RE.test(remote)) c.bad('remote', 'must be an ssh address: git@host:owner/repo.git or ssh://host/path');
+    else r.remote = remote;
+  }
   const src = c.get('source');
   if (!src || typeof src !== 'object' || !['folder', 'example'].includes(src.kind) || typeof src.id !== 'string' || !SOURCE_RE.test(src.id)) {
     c.bad('source', 'pick a project folder or an example');

@@ -84,7 +84,7 @@ fi
 for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
-         owner-inbox gate-wait agent-kit-issues owner-issues; do
+         owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 
@@ -98,6 +98,9 @@ install -d -m 755 -o agent -g agent "$STATE/outbox" "$STATE/outbox/.seen"
 # Owner issues: root-owned like the inbox; the lead's updates go to issues-out.
 install -d -m 755 "$STATE/issues" "$STATE/issues/.owner"
 install -d -m 755 -o agent -g agent "$STATE/issues-out"
+# Publishing: the console's notes are root-owned; the lead's request goes to publish-out.
+install -d -m 755 "$STATE/publish"
+install -d -m 755 -o agent -g agent "$STATE/publish-out"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"
 
@@ -140,6 +143,8 @@ Work reaches main only through the gate: `ready/<topic>` branches, `gate-status`
 Playwright browsers are preinstalled at `$PLAYWRIGHT_BROWSERS_PATH`; do not run `playwright install`.
 A job the team installs for itself that runs Claude must load the same sign-in as the lead:
 add `EnvironmentFile=-/etc/agent-kit/auth.env` to its unit (the file exists only when a token is stored).
+Nobody here can push to a remote repository. If the project is published, the lead asks with
+`owner-publish request` and the owner's console pushes the gate's `main` (`owner-publish status`).
 EOF
   chown agent:agent "$WORKSPACE/CLAUDE.md"
 fi

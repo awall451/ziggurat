@@ -6,6 +6,7 @@ import { tierNames } from './theme.js';
 import { listSessions } from './transcripts.js';
 import { openAskCount } from './feedback.js';
 import { openCount as openIssueCount } from './issues.js';
+import { publishView, PUBLISH_KIT } from './publish.js';
 
 const CHECKING = { reachable: null, state: 'checking', leadActive: false };
 
@@ -65,6 +66,9 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canOneshotIdle: !!status.canOneshot && kitAtLeast(status.kitVersion, '0.6.0'),
     // Files attached to an issue (beyond its one picture) need kit 0.7.
     canIssueFiles: kitAtLeast(status.kitVersion, '0.7.0'),
+    // Publishing main to a remote repository needs kit 0.8.
+    canPublish: kitAtLeast(status.kitVersion, PUBLISH_KIT),
+    publish: publishView(project),
     // Halting after the cycle needs kit 0.5.
     canHaltAfter: !!status.canHaltAfter,
     cycle: current

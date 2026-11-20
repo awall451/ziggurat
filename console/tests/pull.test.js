@@ -33,6 +33,7 @@ vi.mock('../src/lib/server/live.js', () => ({
 }));
 vi.mock('../src/lib/server/config.js', () => ({ listProjects: () => [] }));
 vi.mock('../src/lib/server/feedback.js', () => ({ syncOutbox: async () => {} }));
+vi.mock('../src/lib/server/publish.js', () => ({ syncRequest: async () => {}, maybePublish: () => null }));
 
 const { touch, refresh, ledgerPulledAt } = await import('../src/lib/server/pull.js');
 

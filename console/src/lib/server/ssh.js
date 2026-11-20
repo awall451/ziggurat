@@ -214,6 +214,64 @@ export function kit(project, script, argv = [], opts = {}) {
 }
 
 /**
+ * Like kit(), for a script whose output is binary or large: stdout goes
+ * straight to the file `dest` (mode 600). Stops, and fails, past `maxBytes`.
+ */
+export function kitToFile(project, script, argv, dest, { timeout = 600000, maxBytes = 1024 ** 3 } = {}) {
+  if (!SCRIPT_RE.test(script)) throw new Error(`bad kit script name: ${script}`);
+  for (const a of argv) {
+    if (typeof a !== 'string' || !ARG_RE.test(a)) throw new Error(`bad argument for ${script}: ${JSON.stringify(a)}`);
+  }
+  const { args, dest: host } = sshArgs(project);
+  const remote = ['sudo', '-n', `/opt/agent-kit/bin/${script}`, ...argv].join(' ');
+  return withSlot(
+    project.id,
+    () =>
+      new Promise((resolve) => {
+        const child = spawn('ssh', [...args, host, remote], { stdio: ['ignore', 'pipe', 'pipe'] });
+        const out = fs.createWriteStream(dest, { mode: 0o600 });
+        let bytes = 0;
+        let stderr = '';
+        let over = false;
+        let code = null;
+        let left = 2; // the process and the file both have to finish
+        const done = () => {
+          if (--left > 0) return;
+          clearTimeout(timer);
+          resolve({ code: over ? -1 : (code ?? -1), stderr: over ? 'the output was larger than allowed' : stderr, bytes });
+        };
+        const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
+        child.stdout.on('data', (d) => {
+          bytes += d.length;
+          if (bytes > maxBytes && !over) {
+            over = true;
+            child.kill('SIGKILL');
+          }
+        });
+        child.stderr.on('data', (d) => {
+          if (stderr.length < 65536) stderr += d;
+        });
+        child.stdout.pipe(out);
+        out.on('close', done);
+        out.on('error', (e) => {
+          stderr += String(e);
+          child.kill('SIGKILL');
+        });
+        child.on('error', (e) => {
+          stderr += String(e);
+          out.destroy();
+          code = -1;
+          done();
+        });
+        child.on('close', (c) => {
+          code = c;
+          done();
+        });
+      })
+  );
+}
+
+/**
  * Pull-only rsync. Never deletes, never copies or follows symlinks.
  * `as`: 'agent' for agent-owned trees (so root never follows a path the agent
  * could have swapped), 'self' for world-readable root-owned files.

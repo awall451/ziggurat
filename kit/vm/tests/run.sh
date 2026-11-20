@@ -575,6 +575,13 @@ out=$(cycle 2>&1)
 check "a stale marker does not make a normal cycle a one-shot" '[ -s "$FAKE_PROMPT" ] && ! grep -q "One-shot job\|Read this first" "$FAKE_PROMPT" && grep -q "oneshot=no" <<< "$out"'
 check "a normal cycle's prompt starts with the team's own text" '[ "$(head -c 15 "$FAKE_PROMPT")" = "TEAM-CYCLE-TEXT" ]'
 check "a normal cycle's ledger line names no job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = null ]'
+check "no publishing section unless publishing is set up" '! grep -q "^## Publishing" "$FAKE_PROMPT"'
+"$BIN/agent-kit-publish" enable git@example.org:team/demo.git > /dev/null
+head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
+out=$(cycle 2>&1)
+check "the publishing section is added once it is set up, after the issues" '[ "$(grep -n "^## Publishing" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" ] && grep -q "git@example.org:team/demo.git" "$FAKE_PROMPT" && grep -q "Nothing has been published yet" "$FAKE_PROMPT"'
+"$BIN/agent-kit-publish" disable > /dev/null
+rm -rf "$S/publish" "$S/publish-out"
 echo "stop owner 2026-01-01T07:00:00+00:00" > "$S/control"
 out=$(cycle 2>&1)
 check "no cycle on a halted team" 'grep -q "control=stop" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
@@ -725,6 +732,76 @@ rm -f "$S/gate/paused"
 proof=$("$BIN/agent-kit-gate-proof" run); rc=$?
 check "refused while the team is not halted" '[ $rc = 1 ] && grep -q "not halted" <<< "$(jq -r .error <<< "$proof")"'
 refuse "unknown command" "$BIN/agent-kit-gate-proof" merge-everything
+
+echo "== agent-kit-publish, owner-publish"
+# Same repository as above: $T/ws is the agents' workspace, $T/bare the gate's.
+pub() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-publish" "$@"; }
+op() { "$BIN/owner-publish" "$@"; }
+main1=$(git -C "$T/bare" rev-parse main)
+st=$(pub status)
+check "status before setup: main, nothing published, no remote" '[ "$(jq -r .main <<< "$st")" = "$main1" ] && [ "$(jq -r .published <<< "$st")" = null ] && [ "$(jq -r .remote <<< "$st")" = null ] && [ "$(jq -r .cycle <<< "$st")" = false ]'
+check "no prompt and no request before publishing is set up" '[ -z "$(op prompt)" ] && ! echo hi | op request > /dev/null 2>&1'
+refuse "an https remote" pub enable https://example.org/team/demo.git
+refuse "a remote that is an ssh option" pub enable -oProxyCommand=id
+refuse "a remote whose user part is an ssh option" pub enable -oProxyCommand=id@example.org:team/demo.git
+refuse "a remote whose path starts with a dash" pub enable git@example.org:-team/demo.git
+refuse "a remote with shell characters" pub enable 'git@example.org:team/demo.git;id'
+refuse "a remote with a space" pub enable 'git@example.org:team/demo.git --upload-pack=id'
+pub enable ssh://git@example.org:2222/team/demo.git > /dev/null
+check "an ssh:// remote with a port is accepted" '[ "$(pub status | jq -r .remote)" = "ssh://git@example.org:2222/team/demo.git" ]'
+pub enable git@example.org:team/demo.git > /dev/null
+check "the prompt names the remote and the rules" 'grep -q "git@example.org:team/demo.git" <<< "$(op prompt)" && grep -q "You cannot push" <<< "$(op prompt)" && grep -q "Nothing has been published yet" <<< "$(op prompt)"'
+
+head -c 9000 /dev/zero | tr '\0' x | op request > /dev/null
+check "a request is a header and a capped summary" '[ "$(sed -n 1p "$S/publish-out/request.md")" = "Publish: yes" ] && grep -qE "^Date: [0-9T:-]{19}Z$" "$S/publish-out/request.md" && [ "$(wc -c < "$S/publish-out/request.md")" -lt 4100 ]'
+echo "Not this cycle." | op request no > /dev/null
+check "a request can be withdrawn" '[ "$(sed -n 1p "$S/publish-out/request.md")" = "Publish: no" ] && grep -q "Publish: no" <<< "$(op status)"'
+refuse "a request with an unknown word" bash -c "echo x | '$BIN/owner-publish' request maybe"
+check "no work file left behind" '[ ! -e "$S/publish-out/.request.tmp" ]'
+echo "Menu fixes." | op request > /dev/null
+
+# What the gate has not judged yet holds a publish back.
+G fetch -q gate; G checkout -q -B work-y gate/main; echo y > "$T/ws/y.txt"; G add -A; G commit -q -m "work y"
+G branch -f ready/work-y work-y > /dev/null
+ysha=$(G rev-parse work-y)
+check "a submitted branch without a verdict is counted" '[ "$(pub status | jq -r .unjudged)" = 1 ]'
+check "a running cycle is reported" '[ "$(FAKE_ACTIVE=active pub status | jq -r .cycle)" = true ]'
+( exec 9> "$T/run/agent-kit-gate.lock"; flock 9; sleep 3 ) &
+sleep 0.5
+check "a gate pass in progress is reported" '[ "$(pub status | jq -r .gateBusy)" = true ]'
+wait
+check "an idle gate is reported" '[ "$(pub status | jq -r .gateBusy)" = false ]'
+refuse "a commit that is not on main cannot be recorded" pub record "$ysha"
+"$T/opt/gate/bin/gate-run"
+main2=$(git -C "$T/bare" rev-parse main)
+check "after the gate's pass nothing is unjudged and main moved" '[ "$(pub status | jq -r .unjudged)" = 0 ] && [ "$main2" = "$ysha" ]'
+
+# The bundle: main only, the same commits.
+pub bundle > "$T/full.bundle"
+check "the full bundle holds main and nothing else" '[ "$(git bundle list-heads "$T/full.bundle")" = "$main2 refs/heads/main" ]'
+git init -q --bare "$T/mirror.git"
+check "the bundle passes git's own checks and gives the same commit" 'git -C "$T/mirror.git" -c transfer.fsckObjects=true fetch -q "$T/full.bundle" "+refs/heads/main:refs/heads/main" && [ "$(git -C "$T/mirror.git" rev-parse main)" = "$main2" ]'
+pub bundle "$main1" > "$T/part.bundle"
+check "a bundle since an older commit is smaller and fits a repository that has that commit" '[ "$(wc -c < "$T/part.bundle")" -lt "$(wc -c < "$T/full.bundle")" ] && git -C "$T/mirror.git" bundle verify -q "$T/part.bundle" 2> /dev/null '
+pub bundle "$main2" > "$T/none.bundle" 2> /dev/null; rc=$?
+check "nothing newer: exit 3 and no bundle" '[ $rc = 3 ] && [ ! -s "$T/none.bundle" ]'
+pub bundle 0000000000000000000000000000000000000001 > "$T/unknown.bundle" 2> /dev/null
+check "a commit main does not contain gives all of main" '[ "$(git bundle list-heads "$T/unknown.bundle")" = "$main2 refs/heads/main" ] && [ "$(wc -c < "$T/unknown.bundle")" = "$(wc -c < "$T/full.bundle")" ]'
+refuse "a bundle since something that is not a commit id" pub bundle main
+refuse "a bundle since an option" pub bundle --all
+
+pub record "$main1" > /dev/null
+st=$(pub status)
+check "a publish is recorded, with how far main is ahead" '[ "$(jq -r .published.sha <<< "$st")" = "$main1" ] && [ "$(jq -r .published.ahead <<< "$st")" = 1 ] && grep -q "main is 1 commit(s) ahead" <<< "$(op status)"'
+refuse "record needs a commit id" pub record main
+printf 'possible secret in commit %s, file config.py (rule generic-api-key) $(id) `id`\nsecond line\n' "${main2:0:9}" | pub blocked > /dev/null
+check "a refusal is shown to the lead as plain text" 'grep -q "REFUSED" <<< "$(op status)" && grep -q "rule generic-api-key" <<< "$(op prompt)" && ! grep -q "[\$\`]" "$S/publish/blocked"'
+pub record "$main2" > /dev/null
+check "the next publish clears the refusal" '[ ! -e "$S/publish/blocked" ] && [ "$(pub status | jq -r .published.ahead)" = 0 ]'
+pub disable > /dev/null
+check "disabled: no prompt, the record stays" '[ -z "$(op prompt)" ] && [ -f "$S/publish/last" ]'
+refuse "unknown command" pub push
+refuse "unknown command for the lead" op push
 
 check "lead-settings.json is a JSON object" 'jq -e "type == \"object\"" "$HERE/../lead-settings.json" > /dev/null'
 

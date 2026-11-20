@@ -325,6 +325,14 @@
       {:else}
         <p class="dim">Not run yet.</p>
       {/if}
+      {#if r.remote}
+        <h3>Publishing</h3>
+        <p>
+          Remote: <span class="mono">{r.remote}</span>. One step is left, and it is yours: the console made a key for this project. Add it to the
+          repository as a deploy key with write access, then press Verify.
+          <a href="/p/{d.id}/controls#publishing">Show the key</a>
+        </p>
+      {/if}
       <div class="actions">
         {#if d.can.proof}<button class="btn quiet" onclick={() => act('gate-proof', 'proof')} disabled={!!busy}>{d.proof ? 'Run the gate proof again' : 'Run the gate proof'}</button>{/if}
         <span class="grow"></span><a class="btn go" href="/p/{d.id}/controls">Open {r.name}</a>

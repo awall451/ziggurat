@@ -18,6 +18,7 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 | Gallery | Screenshots the gate took of the newest passing build, by day |
 | Briefs | A brief for every finished cycle and its spoken version (written by `workstation/agent-brief`); a cycle without one yet shows the lead's own final report |
 | Usage | Tokens and cost estimates by model, role and cycle, computed from the transcripts |
+| Publishing (on Controls) | Copy the gate's main to a remote git repository: the project's key to add there, verify, publish now, and what was published or refused |
 | Controls | Halt now or after the cycle in progress (optionally asking the team to wrap up), resume, a one-shot job (one cycle for the work you describe, on a halted team or one between cycles, then back as it was), why an idle team is idle (daily cap, timer off, next cycle), stop at a set time, cycle cap, budget, models, gate pause, audit log |
 
 ## How it gets its data
@@ -49,6 +50,30 @@ it genuine. The lead answers each message `done`, `planned` or `declined`, and c
 default it will take if you do not answer. See [docs/architecture.md](../docs/architecture.md).
 
 Needs kit 0.2 or later on the VM (`sudo bash install.sh --upgrade`).
+
+## Publishing
+
+A project can be published to a remote git repository. The team cannot push: the console does it, with a key
+that exists only on the console (one per project), and only what the gate has merged.
+
+1. Create an **empty** repository on your git host (no README, no licence).
+2. On the project's Controls tab, under Publishing, enter its ssh address (`git@github.com:owner/repo.git`).
+   For a new project you can enter it in the "New project" form instead.
+3. The console shows a public key. Add it to the repository as a **deploy key with write access**. A deploy key
+   works for that one repository only.
+4. Press **Verify**. The first time, the console shows the host's key fingerprint: compare it with the ones
+   your git host publishes and confirm. Verify then checks that the key can read and may push.
+5. On the remote, protect `main`: block force pushes and deletion, and let only the deploy key push. Turn off
+   issues, wiki and CI there unless you use them.
+
+From then on the lead asks for a publish at the end of a cycle, and the console pushes once the gate has
+judged that cycle's work. **Publish now** does the same on your word. Before every push the console checks
+what is new: the remote's history is never rewritten, a secret (found by `gitleaks`, or the stored Claude
+token) or a CI file stops the whole publish, and the lead is told why. See
+[docs/architecture.md](../docs/architecture.md), "Publishing to a remote repository".
+
+Needs kit 0.8 on the VM, `gitleaks` on the console (the Docker image and `deploy/bootstrap.sh` install it), and
+a git host that takes deploy keys over ssh. Hosts without them (Azure DevOps) are not supported yet.
 
 ## Run it
 

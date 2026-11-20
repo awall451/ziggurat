@@ -47,11 +47,51 @@ that from inside a VM.
 
 ## Getting data out
 
-The owner's side pulls; the VM never pushes and holds no credentials for anything else. The
+The owner's side pulls; the VM never pushes and holds no credentials for anything else (publishing to a
+remote repository is also done by the console: see below). The
 [console](../console/README.md) copies transcripts, the ledger, gate history, notes and screenshots every 15
 minutes (and the cycle in progress every 15 seconds while someone is watching it), append-only and without
 following symlinks. Agent-owned folders are read as the `agent` user, so a path an agent swapped for a link
 cannot make a root process read something else.
+
+## Publishing to a remote repository
+
+A project can have a remote git repository (GitHub, Gitea, GitLab: anything that takes a per-repository deploy
+key over ssh). The remote is a one-way mirror of the gate's `main`, with the same commits. The VM still holds
+no credentials and still cannot reach the forge: the console publishes, from outside.
+
+| Path | Owner | Purpose |
+|---|---|---|
+| `/var/lib/agent-kit/publish/enabled` | root | The remote's address, once the owner has verified it. While it exists the lead is told about publishing each cycle |
+| `/var/lib/agent-kit/publish/last`, `blocked` | root | What was published last; why the last attempt was refused |
+| `/var/lib/agent-kit/publish-out/request.md` | `agent` | The lead's request: `Publish: yes` or `no`, a date and a short summary |
+| `DATA_DIR/publish/<project>/key`, `key.pub` | console | The project's deploy key. It is made on the console and never leaves it; only the public half is shown |
+| `DATA_DIR/publish/<project>/mirror.git` | console | A bare copy of `main`, what the checks run on and what is pushed from |
+
+1. The lead ends a cycle with `owner-publish request` (a summary on stdin). All agents share one Unix user, so
+   a key "only the lead can use" cannot exist inside the VM; the request is all the lead needs.
+2. The console pulls the note with the cycle's other files. From then on it asks `agent-kit-publish status` once
+   a minute and waits until no cycle runs, the gate is idle and every submitted branch has its verdict.
+3. `agent-kit-publish bundle` writes a git bundle of `refs/heads/main` to stdout, as `gatekeeper`: only `main`,
+   never a candidate branch. A bundle carries commits and nothing else: no hooks, no config.
+4. The console fetches the bundle into its mirror with object checks on, then checks what the remote does not
+   have yet:
+   - the remote's `main` must be an ancestor of the new one. There is no forced push anywhere in the console;
+   - no secrets: `gitleaks` over the new commits, and an exact match against the stored Claude token;
+   - no CI files (`.github/workflows/`, `.gitea/workflows/`, `.forgejo/workflows/`, `.gitlab-ci.yml`,
+     `azure-pipelines.yml`, `.circleci/`): an agent must not be able to make a forge run code.
+   Without the scanner nothing is published.
+5. It pushes that one commit to `refs/heads/main` with the project's key only, to a host whose key the owner
+   confirmed once by its fingerprint, ignoring any ssh config.
+6. It records the result (`agent-kit-publish record` or `blocked`), so the lead reads next cycle what is
+   public, or why the publish was refused. A refused publish pushes nothing.
+
+"Publish now" on the Controls tab does the same on the owner's word, without the lead's request. It still
+waits for a gate pass in progress and it skips no check.
+
+Nothing comes back: the console never fetches from the remote into a VM, so a pull request or a comment on the
+forge cannot reach the agents. Protect `main` on the remote so that only the deploy key can push, and turn off
+what the project does not use there (issues, wiki, CI).
 
 ## Talking to the lead
 

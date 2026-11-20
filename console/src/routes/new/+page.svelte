@@ -10,6 +10,7 @@
     name: '',
     id: '',
     description: '',
+    remote: '',
     source: '',
     charter: '',
     target: data.targets[0]?.id || '',
@@ -94,6 +95,7 @@
       id: f.id,
       name: f.name,
       description: f.description,
+      remote: f.remote.trim() || null,
       target: f.target,
       source: { kind, id },
       // Only sent when it was changed, so a folder's own charter stays the source of truth.
@@ -162,6 +164,14 @@
       <label class="stack wide">
         <span>Description</span>
         <input class="field" bind:value={f.description} maxlength="200" placeholder="One line shown on the project card" />
+      </label>
+      <label class="stack wide">
+        <span>Remote repository (optional)</span>
+        <input class="field mono" bind:value={f.remote} maxlength="300" placeholder="git@github.com:owner/repo.git" />
+        <span class="small dim">
+          Where the project's main is published. An ssh address of an empty repository. When the project is ready, the console shows a key to add
+          there. Leave empty to set it up later on the Controls tab.
+        </span>
       </label>
     </div>
   </section>

@@ -7,6 +7,9 @@
 //              just the files of the cycle in progress
 //   end pass   a slow pass as soon as a cycle is seen to have ended, so its
 //              ledger line (cost, outcome) arrives with its last transcript
+//   publish    after a slow pass brought the lead's request: publish.js pushes
+//              the gate's main to the project's remote (the other direction,
+//              and never to a VM)
 //
 // Never deletes, never copies symlinks, and reads agent-owned trees as the
 // agent user, so a misbehaving VM cannot remove, redirect or over-read files.
@@ -17,6 +20,7 @@ import { pull, sshArgs, q } from './ssh.js';
 import { getStatus, peekStatus, UUID_RE } from './live.js';
 import { listProjects } from './config.js';
 import { syncOutbox } from './feedback.js';
+import { syncRequest, maybePublish } from './publish.js';
 
 const SLOW_EVERY = 15 * 60_000;
 const FAST_EVERY = 15_000;
@@ -104,6 +108,8 @@ async function slowPass(project) {
   await pullNotes(project, path.join(fleet, 'notes'));
   // Replies and questions from the lead (kits that have the owner inbox).
   if (status.kitVersion) await syncOutbox(project, { force: true });
+  // The lead's request to publish main (projects with a remote).
+  if (project.publish?.remote) await syncRequest(project).catch(() => {});
   s.error = errors.length ? errors.join('; ') : null;
 }
 
@@ -209,6 +215,9 @@ export function startScheduler() {
     for (const p of listProjects()) {
       if (p.pull === false) continue;
       const s = st(p.id);
+      // Publishing waits for the gate after a cycle, so it is looked at on every
+      // tick; it does nothing unless the lead's request is still open.
+      if (!s.slow) maybePublish(p);
       if (watchEnd(p, peekStatus(p.id))) continue;
       if (Date.now() - s.slowAt > SLOW_EVERY) runSlow(p);
       else if (Date.now() - s.viewedAt < VIEW_WINDOW) {
