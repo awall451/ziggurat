@@ -30,7 +30,9 @@ echo "== build"
 cd "$REPO/console"
 npm ci --no-audit --no-fund
 npm run build
-npm prune --omit=dev --no-audit --no-fund
+# --no-package-lock: prune would otherwise rewrite package-lock.json, and the
+# next `git pull --ff-only` would stop on the changed file.
+npm prune --omit=dev --no-package-lock --no-audit --no-fund
 
 echo "== playbooks parse"
 # A playbook that does not parse must fail here, not during a deploy.
