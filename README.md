@@ -311,7 +311,8 @@ About 38% cheaper per goal, with the independent reviewer and QA still on. Two r
 | [`sandbox/proxmox/`](sandbox/proxmox) | Ansible for the isolated network, the proxy gateway and one VM per project, with the wall check |
 | [`sandbox/install/`](sandbox/install) | Ansible that installs the kit and a team in a fresh sandbox VM |
 | [`console/`](console) | The web app: projects, topology, progress, inbox, issues, gallery, usage, controls, settings, and creating a project |
-| [`examples/python-starter/`](examples/python-starter) | A generic team with a venv/ruff/pytest gate and a starting repo that passes it. You write the goal |
+| [`templates/`](templates) | Team templates for new projects: Standard, Small and Device. Language-neutral: the team picks its stack and writes its checks (`tools/check`), and a change to them waits for your approval |
+| [`examples/python-starter/`](examples/python-starter) | A generic team with a venv/ruff/pytest gate and a starting repo that passes it (a reference bundle; new projects start from a template) |
 | [`examples/web-game/`](examples/web-game) | A TypeScript browser game: charter, gate checks (type check, unit tests, headless boot and fuzz, smoke playthrough), team |
 | [`examples/ps1-cpp/`](examples/ps1-cpp) | A PlayStation 1 game in C++20: charter, gate checks (host tests, console build, emulator playthrough, disc image), toolchain recipe, team |
 | [`themes/`](themes) | Display names for the roles. Behaviour never changes with a theme |
@@ -319,7 +320,7 @@ About 38% cheaper per goal, with the independent reviewer and QA still on. Two r
 | [`workstation/`](workstation) | A brief for every finished cycle, with a spoken version |
 | [`docs/`](docs) | [Architecture](docs/architecture.md) · [Getting started](docs/getting-started.md) · [Lessons](docs/lessons.md) · [Results](docs/results.md) · [Roadmap](docs/roadmap.md) |
 
-A project is described by one folder, the **team bundle**: `CHARTER.md` (the goal and the boundaries, written by you), `GATE-CONTRACT.md`, `gate-checks`, the lead's prompt and `agents/*.md`. The examples are bundles.
+A project is described by one folder, the **team bundle**: `CHARTER.md` (the goal and the boundaries), `GATE-CONTRACT.md`, `gate-checks`, the lead's prompt and `agents/*.md`. The examples are bundles; a template is a bundle with a slot for your goal. On the console's New project page you write the goal, drop in your plan and pick a template, or import a draft a planning talk with Claude produced.
 
 ## Requirements and getting started
 
@@ -336,7 +337,7 @@ A project is described by one folder, the **team bundle**: `CHARTER.md` (the goa
 
 - **Experimental.** Interfaces change. The kit can be upgraded on a running VM, but read the notes first.
 - **Proxmox only** today. The gate and the kit do not care where the VM runs; the sandbox playbooks do.
-- **Starting a brand-new project still needs a team bundle.** The console deploys one; it does not yet help you write one for a new stack ([#10](https://github.com/awall451/ziggurat/issues/10)).
+- **A new project's checks start weak.** Until the team's own `tools/check` is written and approved, the gate only runs the seed's `tests/*.sh`. Read that first change to the checks before you approve it.
 - **The gate is only as good as its checks.** A count of passing tests can rise while a test gets looser. Protect the checks that matter by name.
 - **Subscription usage is shared** between the teams and your own Claude use. Cycles wait out a limit and continue; watch your usage the first days.
 - **The topology is read from Claude Code's transcripts**, an internal format that can change between versions. The parser skips what it does not understand.
