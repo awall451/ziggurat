@@ -26,10 +26,14 @@ It waits for cloud-init, runs `agent-wall-check` **inside** the VM as the agent 
 
 ## 3. The project inside the VM
 
-Two ways. The console (section 4) does all of this from one form. By hand, either run the playbook:
+Two ways. The console (section 4) does all of this from one form: a goal, your plan documents and a team
+template (see [new-project-quickstart.md](new-project-quickstart.md)). By hand, either run the playbook:
 
 ```bash
 tools/render-team.py examples/python-starter --theme plain --out build/my-tool
+# or from a team template, with your goal in a file:
+#   tools/render-team.py templates/standard --theme plain --goal-file goal.txt --out build/my-tool
+#   (and templates/_seed as the seed, plus your documents in its docs/)
 # edit build/my-tool/CHARTER.md (the goal) and build/my-tool/project.env (PROJECT, WORKSPACE, BARE, ...)
 mkdir pay && cp -r kit/vm pay/kit && cp -r build/my-tool pay/bundle && cp -r examples/python-starter/seed pay/seed
 tar -czf my-tool.tar.gz -C pay kit bundle seed

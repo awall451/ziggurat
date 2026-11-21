@@ -218,9 +218,13 @@ template, "when it's ready" and the advanced settings. The schema is
 [`docs/new-project.example.json`](docs/new-project.example.json).
 
 ```bash
-curl -X POST -H 'Content-Type: application/json' --data-binary @draft.json http://<console>/api/drafts
+curl -X POST -H 'Content-Type: application/json' -H 'Origin: http://<console>' \
+  --data-binary @draft.json http://<console>/api/drafts
 # {"id":"…","url":"/new?draft=…","warnings":[]}
 ```
+
+The `Origin` header must name the console itself: like every request that changes something, a draft from
+another site is refused.
 
 The console checks the draft with the same rules as the form and keeps it. Opening the url fills the page.
 Read it, change what you like, then press Check. A draft never deploys anything, and it is deleted once it
@@ -231,10 +235,14 @@ drafts; `GET` and `DELETE /api/drafts/<id>` read or delete one.
 
 "New project" on the start page makes a new sandbox VM for a team:
 
-1. **The form.** A name, and what the team starts from: one of your project folders
-   (`CONSOLE_PROJECTS_DIR/<name>/team/`, usually with `seed/` beside it for the starting repo) or an example
-   that ships a seed. The charter can be edited in place. Target, size, theme, models and brakes are under
-   "Advanced".
+1. **The form.** A name; **what the team should build** (the goal, a few paragraphs); your **plan and design
+   documents** (Markdown files, dropped, chosen or pasted, put into the new repository's `docs/`); the
+   **team**: a template from `templates/` (Standard, Small or Device: how the team works, not the language);
+   and **when it's ready**: whether to start one planning cycle once the gate is proven, with a focus and at
+   most N proposals. Under "Advanced": target, size, theme, models and brakes, the full charter, and a
+   prepared team folder (`CONSOLE_PROJECTS_DIR/<name>/team/` with `seed/` beside it) instead of a template.
+   Registered projects are never offered as starting points. The form can also be filled from a draft
+   (above).
 2. **The check.** The console reads the team without running anything from it: required files, agent
    headers, no links, size limits. It writes `project.env` itself; a bundle's own env files are read as
    plain `KEY=value` lines and anything else is refused, because the kit later sources them as root in the VM.
@@ -260,6 +268,15 @@ drafts; `GET` and `DELETE /api/drafts/<id>` read or delete one.
    merged by the gate, and a change that deletes a test file (named by `GATE_PROOF_DELETE` in the team's
    `project.env`) must be refused. It uses the gate's real checks, spends no tokens, and leaves the team
    halted. A build that is broken in a way only your project knows is still yours to try once by hand.
+9. **Planning cycle** (when the form asked for one). After the gate proof passes, the console starts one
+   planning cycle with your focus and cap. The lead reads the goal and `docs/`, writes no code, and proposes
+   jobs on the Backlog tab, where you can talk them over. The team halts again when it ends.
+
+A project from a template starts with a placeholder `tools/check` (it runs `tests/*.sh`). The lead's first
+job is choosing the stack and writing the real checks. A change to `tools/check` is held by the gate until
+you approve it on the Inbox tab, which shows the lead's explanation and the diff. When the team needs a
+system package or a domain, it asks, and the Inbox shows the request. Approving adds the domains it needs to
+the gateway's allow-list (shared by all agent VMs), and the VM installs the package between cycles.
 
 About the token: it is read only to hand it to a VM. It goes to the VM on stdin inside a task whose output is
 never logged, and it is never written to a run folder, the audit log or a page. On the VM it sits in the
