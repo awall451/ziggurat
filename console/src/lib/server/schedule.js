@@ -85,9 +85,9 @@ function readSlotLog(fleet, from, to) {
  * Past cycles and the slot log are given for a wider stretch than the window,
  * so the page can pan a little before it has to ask again.
  */
-export async function timeline({ view = 'week', date = null, from = null, to = null } = {}) {
+export async function timeline({ view = 'day', date = null, from = null, to = null } = {}) {
   const settings = getSettings();
-  let v = VIEWS.includes(view) ? view : 'week';
+  let v = VIEWS.includes(view) ? view : 'day';
   const win = v === 'month' || from == null || to == null ? null : cleanWindow(Number(from), Number(to));
   const range = win ? windowRange(win.from, win.to, settings.timezone) : rangeFor(v, date, settings.timezone);
   const custom = !!win;
