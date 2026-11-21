@@ -26,6 +26,28 @@
   let picker = $state();
 
   const messages = $derived(data.messages.filter((m) => showClosed || m.open || (m.error && !m.closed)));
+
+  // Changes to what "done" means, held by the gate (kit 0.14).
+  let gateBusy = $state('');
+  let gateNote = $state('');
+  const diffClass = (l) => (l.startsWith('+++') || l.startsWith('---') ? 'meta' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hunk' : '');
+  async function decideGate(h, decision) {
+    const what = decision === 'approve' ? `Approve ${h.topic}? The gate checks it once more and merges it if it passes. From then on these checks define "done".` : `Decline ${h.topic}? It will not be merged.`;
+    if (!confirm(what)) return;
+    gateBusy = h.sha;
+    gateNote = '';
+    try {
+      const r = await fetch(`${base}/gate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha: h.sha, decision }) });
+      const res = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(res.message || 'The VM refused');
+      gateNote = decision === 'approve' ? `Approved ${h.topic}: the gate merges it on its next pass if it still passes.` : `Declined ${h.topic}.`;
+      await invalidateAll();
+    } catch (e) {
+      gateNote = e.message;
+    } finally {
+      gateBusy = '';
+    }
+  }
   const hiddenCount = $derived(data.messages.length - messages.length);
 
   async function upload(list) {
@@ -298,6 +320,47 @@
   </div>
 
   <aside class="side">
+    {#if data.gateHeld && (data.gateHeld.held.length || data.gateHeld.error || gateNote)}
+      <section class="block">
+        <h2>Changes to what "done" means</h2>
+        <p class="dim small">The gate holds any change to the project's checks until you approve that exact commit.</p>
+        {#if gateNote}<p class="small">{gateNote}</p>{/if}
+        {#if data.gateHeld.error && !data.gateHeld.held.length}<p class="small s-failed">Could not ask the VM: {data.gateHeld.error}</p>{/if}
+        {#each data.gateHeld.held as h (h.sha)}
+          <article class="panel msg">
+            <header>
+              <span class="pill halted">Waiting on you</span>
+              <span class="mono small">{h.topic}</span>
+              <span class="mono small dim">{h.sha.slice(0, 9)}</span>
+              <span class="grow"></span>
+              <span class="dim small mono">{when(h.at)}</span>
+            </header>
+            {#if h.summary}
+              {#if !h.summary.current}<p class="small dim">{lead} explained an earlier commit of this branch:</p>{/if}
+              <!-- sanitised by md() -->
+              <div class="md">{@html md(h.summary.text, { breaks: true })}</div>
+            {:else}
+              <p class="dim small">{lead} has not explained this change yet. Read the diff, or wait for the explanation.</p>
+            {/if}
+            {#if h.diff}
+              <details class="diff">
+                <summary class="small">The change to the checks{h.diff.cut ? ' (cut at 200 KB)' : ''}</summary>
+                <pre class="mono small">{#each h.diff.text.split('\n') as l, i (i)}<span class={diffClass(l)}>{l}</span>{'\n'}{/each}</pre>
+              </details>
+            {:else}
+              <p class="dim small">The diff could not be read.</p>
+            {/if}
+            {#if p.canControl}
+              <footer class="actions end">
+                <button class="btn sm" disabled={gateBusy === h.sha} onclick={() => decideGate(h, 'deny')}>Decline</button>
+                <button class="btn primary sm" disabled={gateBusy === h.sha} onclick={() => decideGate(h, 'approve')}>Approve</button>
+              </footer>
+            {/if}
+          </article>
+        {/each}
+      </section>
+    {/if}
+
     <section class="block">
       <h2>Questions from {lead}</h2>
       {#each data.asks as a (a.id)}
@@ -334,6 +397,25 @@
 </div>
 
 <style>
+  .diff pre {
+    max-height: 420px;
+    overflow: auto;
+    margin: 8px 0 0;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    white-space: pre;
+  }
+  .diff .add {
+    color: var(--good);
+  }
+  .diff .del {
+    color: var(--critical);
+  }
+  .diff .hunk,
+  .diff .meta {
+    color: var(--muted);
+  }
   .cols {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr);

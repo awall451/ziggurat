@@ -11,6 +11,9 @@
 #   - candidate must be a descendant of current main (agents rebase first)
 #   - all gate-checks steps pass (install, typecheck, unit, build, boot-fuzz, smoke)
 #   - passed unit-test count must not drop below main's
+#   - a change to a path in GATE_OWNER_PATHS (project.env, e.g. "tools/check")
+#     changes what "done" means: it is `held` until the owner approves that
+#     commit (agent-kit-gate approve <sha>), then judged again and merged
 #
 # gate-run --proof <topic>   (used by agent-kit-gate-proof, run by the owner)
 #   Judges exactly one branch, ready/<topic>, even while the team is halted or
@@ -48,6 +51,13 @@ mkdir -p "$RES" "$LOGS" "$WORKROOT"
 chmod 755 "$STATE/gate" "$RES" "$LOGS"
 [ "$(id -u)" = 0 ] && chown gaterun: "$WORKROOT"
 BASELINE=$STATE/gate/baseline-tests
+APPROVED=$STATE/gate/approved
+# Paths whose change waits for the owner (kit 0.14). Only plain relative paths count.
+OWNER_PATHS=() owner_raw=()
+read -ra owner_raw <<< "${GATE_OWNER_PATHS:-}"
+for p in "${owner_raw[@]}"; do
+  [[ $p =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ && $p != *..* ]] && OWNER_PATHS+=("$p")
+done
 [ -f "$BASELINE" ] || echo 0 > "$BASELINE"
 
 if [ -z "$PROOF" ]; then
@@ -116,7 +126,10 @@ for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' "$REFS"); do
     fi
     continue
   fi
-  if [ -f "$rf" ] && [ "$(jq -r .sha "$rf")" = "$sha" ]; then continue; fi   # already judged
+  if [ -f "$rf" ] && [ "$(jq -r .sha "$rf")" = "$sha" ]; then   # already judged
+    # ...unless it was held for the owner, who has approved it since: judge it again.
+    [ "$(jq -r .status "$rf")" = held ] && [ -e "$APPROVED/$sha" ] || continue
+  fi
   if ! $GK -C "$BARE" merge-base --is-ancestor "$main" "$sha"; then
     result "$topic" "$sha" rejected "not based on current main ($main). Rebase onto gate/main and recreate ready/$topic."
     continue
@@ -139,6 +152,9 @@ for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' "$REFS"); do
     result "$topic" "$sha" failed "$(grep -m1 'STEP .* FAIL' "$LOGS/$sha.log" || echo "gate-checks exit $rc") - see log"
   elif [ "$tests" -lt "$base" ]; then
     result "$topic" "$sha" failed "unit tests passed dropped from $base to $tests (tests may not be deleted or skipped)"
+  elif [ ${#OWNER_PATHS[@]} -gt 0 ] && [ ! -e "$APPROVED/$sha" ] \
+       && owned=$($GK -C "$BARE" diff --name-only "$main" "$sha" -- "${OWNER_PATHS[@]}" | head -5 | paste -sd, -) && [ -n "$owned" ]; then
+    result "$topic" "$sha" held "changes what done means ($owned): waiting for the owner's approval"
   elif $GK -C "$BARE" update-ref refs/heads/main "$sha" "$main"; then
     echo "$tests" > "$BASELINE"
     result "$topic" "$sha" merged "all checks passed; main -> ${sha:0:9} ($tests tests)"

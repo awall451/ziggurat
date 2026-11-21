@@ -103,6 +103,10 @@ fi
 if [ -x "$KIT/bin/owner-backlog" ]; then
   backlog=$("$KIT/bin/owner-backlog" prompt 2>/dev/null) && [ -n "$backlog" ] && prompt+=$'\n\n'"$backlog"
 fi
+# Changes to the gate's checks wait for the owner (kit 0.14): nothing unless the project has owner paths.
+if [ -x "$KIT/bin/owner-gate" ]; then
+  gateown=$("$KIT/bin/owner-gate" prompt 2>/dev/null) && [ -n "$gateown" ] && prompt+=$'\n\n'"$gateown"
+fi
 budget=$CYCLE_BUDGET_USD
 tools=()
 if [ -n "$plan" ]; then

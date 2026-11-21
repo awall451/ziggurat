@@ -1,0 +1,79 @@
+#!/bin/bash
+# owner-gate: how the lead explains a change to what "done" means (kit 0.14).
+# Runs as `agent`. Root-owned, like everything in /opt/agent-kit.
+#
+#   owner-gate explain <topic>     plain-language summary on stdin: what the change to the
+#                                  checks does and why. The owner reads it beside the diff.
+#   owner-gate list                held changes and whether each has an explanation
+#   owner-gate prompt              the protocol, and held changes (nothing when the project
+#                                  has no GATE_OWNER_PATHS)
+#
+# A ready/<topic> branch that touches a path in GATE_OWNER_PATHS is `held` by
+# the gate until the owner approves that commit (agent-kit-gate). The
+# explanation is data the console checks; it cannot approve anything.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+RES=$STATE/gate/results
+OUT=$STATE/gate-out
+TOPIC_RE='^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$'
+MAX_BODY=8000
+shopt -s nullglob
+
+die() { echo "owner-gate: $*" >&2; exit 2; }
+header() { sed -n "1,/^---\$/s/^$2: //p" "$1" 2>/dev/null | head -1; }
+
+held_lines() { # "<topic> <sha>" per held change
+  local f
+  for f in "$RES"/*.json; do jq -r 'select(.status == "held") | "\(.topic) \(.sha)"' "$f" 2>/dev/null; done
+}
+
+case "${1:-list}" in
+  explain)
+    t=${2:-}; t=${t#ready/}
+    [[ $t =~ $TOPIC_RE && $t != *..* ]] || die "usage: owner-gate explain <topic>   (summary on stdin)"
+    sha=$(git -C "$WORKSPACE" rev-parse -q --verify "refs/heads/ready/$t" 2>/dev/null) || die "no branch ready/$t in $WORKSPACE"
+    text=$(head -c $((MAX_BODY + 1)) | tr -d '\r')
+    [ -n "$(printf '%s' "$text" | tr -d '[:space:]')" ] || die "the summary is empty (write it on stdin)"
+    [ ${#text} -le $MAX_BODY ] || die "the summary is longer than $MAX_BODY bytes"
+    mkdir -p "$OUT"
+    f=$OUT/${t//\//_}.md tmp=$(mktemp "$OUT/.explain.XXXXXX")
+    { printf 'Topic: %s\nSha: %s\nDate: %s\n---\n' "$t" "$sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%s\n' "$text"; } > "$tmp"
+    chmod 644 "$tmp" && mv "$tmp" "$f"
+    echo "explained ready/$t (${sha:0:9}) for the owner"
+    ;;
+  list)
+    n=0
+    while read -r t sha; do
+      [ -n "$t" ] || continue
+      n=$((n + 1))
+      f=$OUT/${t//\//_}.md
+      if [ "$(header "$f" Sha)" = "$sha" ]; then e="explained"; else e="NOT EXPLAINED (owner-gate explain $t)"; fi
+      printf '%s  %s  %s\n' "$t" "${sha:0:9}" "$e"
+    done < <(held_lines)
+    [ "$n" -gt 0 ] || echo "Nothing is held for the owner."
+    ;;
+  prompt)
+    [ -n "${GATE_OWNER_PATHS:-}" ] || exit 0
+    cat <<PROMPT
+## What "done" means: changes wait for the owner
+
+These paths define what the gate checks: ${GATE_OWNER_PATHS}
+A ready branch that changes any of them is not merged by the gate: its verdict is \`held\` until the owner
+approves that exact commit. Before you submit such a change, explain it for the owner in plain words, what
+the checks will do differently and why, with \`owner-gate explain <topic>\` (text on stdin). The owner sees
+your explanation beside the diff. Moving the branch to a new commit needs a new approval, so keep the
+change to the checks on its own branch, separate from product work. A declined change shows as \`failed\`.
+PROMPT
+    held=$("$0" list)
+    if [ "$held" != "Nothing is held for the owner." ]; then
+      echo
+      echo "Held for the owner now:"
+      printf '%s\n' "$held" | sed 's/^/  /'
+    fi
+    ;;
+  *)
+    die "usage: owner-gate explain <topic> | list | prompt"
+    ;;
+esac

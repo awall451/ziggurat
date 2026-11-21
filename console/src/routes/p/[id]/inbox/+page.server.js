@@ -4,6 +4,7 @@ import { threads, syncOutbox } from '$lib/server/feedback.js';
 import { peekStatus } from '$lib/server/live.js';
 import { notes } from '$lib/server/aggregate.js';
 import { list as backlog } from '$lib/server/backlog.js';
+import { heldChanges, kitHasGateHold } from '$lib/server/gatehold.js';
 
 export async function load({ params, parent }) {
   const project = getProject(params.id);
@@ -17,5 +18,10 @@ export async function load({ params, parent }) {
   // The chat with the lead about the latest plan lives on the Backlog tab.
   const plan = backlog(project, status).plans.find((x) => x.newest && !x.ended && x.chat.length);
   const backlogChat = plan ? { answered: plan.chat.filter((c) => c.reply).length, waiting: plan.waiting } : null;
-  return { ...threads(project), escalations: notes(project).escalations, backlogChat };
+  // Changes to what "done" means, held by the gate for the owner (kit 0.14).
+  let gateHeld = null;
+  if (status?.reachable && kitHasGateHold(status.kitVersion)) {
+    gateHeld = await Promise.race([heldChanges(project), new Promise((r) => setTimeout(() => r({ held: [], error: 'the VM took too long to answer' }), 12000))]);
+  }
+  return { ...threads(project), escalations: notes(project).escalations, backlogChat, gateHeld };
 }

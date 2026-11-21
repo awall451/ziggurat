@@ -85,7 +85,7 @@ for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-re
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
          owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule \
-         agent-kit-backlog owner-backlog agent-kit-chat; do
+         agent-kit-backlog owner-backlog agent-kit-chat owner-gate; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 
@@ -106,6 +106,10 @@ install -d -m 755 -o agent -g agent "$STATE/publish-out"
 # root-owned; the lead's proposals and chat answers go to backlog-out.
 install -d -m 755 "$STATE/backlog" "$STATE/backlog/plans" "$STATE/backlog/.owner" "$STATE/backlog/chat"
 install -d -m 755 -o agent -g agent "$STATE/backlog-out" "$STATE/ledger/plans"
+# Changes to what "done" means (kit 0.14): the owner's approvals are root-owned;
+# the lead's explanations go to gate-out.
+install -d -m 755 "$STATE/gate/approved"
+install -d -m 755 -o agent -g agent "$STATE/gate-out"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"
 
