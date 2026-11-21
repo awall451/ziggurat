@@ -14,6 +14,7 @@
     ['inbox', 'Inbox'],
     ['notes', 'Notes'],
     ['issues', 'Issues'],
+    ['backlog', 'Backlog'],
     ['gallery', 'Gallery'],
     ['briefs', 'Briefs'],
     ['usage', 'Usage'],

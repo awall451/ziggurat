@@ -111,6 +111,7 @@
     (p.status.state === 'halted' || (p.status.state === 'idle' && p.canOneshotIdle && !p.status.haltAfter)) &&
     !p.status.oneshot &&
     !justStarted(m) &&
+    !m.scheduledFor &&
     (m.delivered || m.error);
   async function startJob(m) {
     const ok = window.confirm(
@@ -148,6 +149,7 @@
 
   function stateOf(m) {
     if (m.closed && !m.delivered) return ['idle', 'Closed by you'];
+    if (m.scheduledFor && !m.closed) return ['queued', `Set for ${new Date(m.scheduledFor * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (from the Backlog)`];
     if (m.error) return ['failed', m.tier === 'oneshot' ? 'Not started' : 'Not delivered'];
     if (m.tier === 'oneshot' && !m.reply && !m.closed && (p.status.oneshot?.id === m.id || justStarted(m))) return ['running', `${lead} is working on it`];
     if (!m.delivered) return ['queued', 'Sending'];
@@ -169,6 +171,12 @@
         <p class="dim">Its VM runs a kit without the owner inbox (or cannot be reached). Upgrade the kit to send messages here.</p>
       </div>
     {:else}
+      {#if data.backlogChat}
+        <div class="panel block small">
+          Chat with {lead} about the latest plan: {data.backlogChat.answered} answer{data.backlogChat.answered === 1 ? '' : 's'}{data.backlogChat.waiting ? ', one on its way' : ''}.
+          <a href="/p/{p.id}/backlog">Open the Backlog</a>
+        </div>
+      {/if}
       <section class="block" id="compose">
         <div class="row">
           <h2>{replyTo ? `Answer ${lead}'s question` : `Message to ${lead}`}</h2>

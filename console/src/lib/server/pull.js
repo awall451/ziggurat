@@ -108,6 +108,12 @@ async function slowPass(project) {
   await pullNotes(project, path.join(fleet, 'notes'));
   // Replies and questions from the lead (kits that have the owner inbox).
   if (status.kitVersion) await syncOutbox(project, { force: true });
+  // The lead's proposals and chat answers (kit 0.10).
+  // Loaded here, not at the top: backlog.js pulls in the audit log and controls.
+  if (status.kitVersion) {
+    const { syncBacklog, kitHasBacklog } = await import('./backlog.js');
+    if (kitHasBacklog(status.kitVersion)) await syncBacklog(project, { force: true });
+  }
   // The lead's request to publish main (projects with a remote).
   if (project.publish?.remote) await syncRequest(project).catch(() => {});
   s.error = errors.length ? errors.join('; ') : null;
