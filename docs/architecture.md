@@ -274,5 +274,81 @@ own `PATH`. `gate-run` reads `agent.env` too and resets its `PATH` after that, f
   the message stays open. The owner can start the job again from the Inbox (`agent-kit-oneshot start` with
   the same id), or resume the team: a normal cycle treats an open `oneshot` message as `priority`.
 
+### Planning cycle and backlog
+
+From kit 0.10. An extra lane next to the normal cycles, not a replacement: the owner asks the lead to
+"find what to do next", the lead writes proposals with estimates and no code, and the owner decides.
+Normal cycles keep choosing and doing their own work as before.
+
+- A planning cycle is a one-shot job with a `-p-` id: `agent-kit-oneshot start <id> <from> --plan`, with an
+  optional focus text on stdin. The request goes to `backlog/plans/<id>/request.md` (root-owned) through
+  `agent-kit-backlog plan`, not to the inbox, so normal cycles never see it as an open owner message.
+  `backlog/current` names the newest plan. Same rules as a one-shot job otherwise: on a halted or idle
+  team, not while a cycle runs, counted in the ledger, not blocked by the daily cap.
+- `lead-cycle` builds its prompt from `owner-backlog plan <id> --head`, the team's `lead-cycle.md`, the
+  usual sections, and `owner-backlog plan <id>`: the request, the rules (read notes before code, no code,
+  at most 90 minutes per proposal, split and order larger work, 3 to 8 proposals) and the last 10 ledger
+  lines as numbers to estimate from. It runs with `--tools Read,Grep,Glob,Bash` (no Edit, Write, agents or
+  scheduling tools) and `PLAN_BUDGET_USD` (default 2). The shell stays, for `owner-backlog`, so the kit
+  also hashes the workspace (HEAD, status, worktrees, branches) before and after: a change sets
+  `touched_code: true` on the ledger line, and the console shows it.
+- The session id goes to `ledger/plans/<id>`, for the chat.
+- `owner-backlog propose` writes `backlog-out/<pid>.md` (agent): `Plan`, `Rev`, `Date`, `Title`, `Minutes`
+  (1-90), `Cost-usd`, `Confidence` (low, medium, high), `Areas`, `Depends`, `Order`, `Risk`, `---`, then why
+  and steps (at most 8000 bytes). `owner-backlog revise <pid>` writes the next revision.
+- The owner's decision is root-owned: `agent-kit-backlog set <pid> approved|rejected|new <rev>` writes
+  `backlog/.owner/<pid>`. It counts only for the revision the owner saw; a later revision needs a new one.
+- An approved item runs as a one-shot job the owner starts, now or at a set time (below). Nothing runs by
+  itself, unless the owner sets `FREE_TAKE_APPROVED=1` (`agent-kit-caps`, off by default): then a normal
+  cycle's prompt offers the approved items, and the lead marks the one it takes with `owner-backlog taken`.
+- Every normal cycle's prompt has a short "Backlog" section that says the lane exists.
+
+| Path | Owner | What |
+|---|---|---|
+| `/var/lib/agent-kit/backlog/plans/<id>/request.md` | root | What the owner asked the lead to plan |
+| `/var/lib/agent-kit/backlog/current` | root | The newest plan id: the only one a chat can resume |
+| `/var/lib/agent-kit/backlog/.owner/<pid>` | root | `<status> <rev> <utc>` |
+| `/var/lib/agent-kit/backlog/chat/<id>/<msgid>.md` | root | The owner's chat messages; `.ended` when the owner ended the chat |
+| `/var/lib/agent-kit/backlog-out/<pid>.md` | agent | The lead's proposals, data to check |
+| `/var/lib/agent-kit/backlog-out/chat/<id>/<msgid>.md` | agent | The lead's answers (`Re`, `Status: ok|error`, `Date`, `---`, text) |
+| `/var/lib/agent-kit/ledger/plans/<id>` | agent | The planning cycle's session id |
+
+### Chat with the lead
+
+After a planning cycle the owner can talk with the lead about its proposals. There is no process waiting
+for the owner: each message resumes the planning cycle's own session for one answer, so the lead keeps
+what it read.
+
+1. `agent-kit-chat say <plan-id> <msgid> <from>` (text on stdin, at most 20 KB) stores the message
+   root-side, writes the marker `/var/lib/agent-kit/chat` and starts `agent-kit-chat.service`. It refuses
+   while a cycle or one-shot job runs, while a turn is still answering, for any plan but the newest, and
+   after the owner ended the chat (`agent-kit-chat end`).
+2. `lead-chat` (as `agent`, in the workspace like a cycle) runs `claude -p --resume <session id>` with the
+   chat notice and the message. Tool limits and the permission mode are not kept by a resumed session, so
+   it passes them every turn: the same tools as a planning cycle, `CHAT_BUDGET_USD` (default 1). The lead
+   may revise or add proposals; still no code. The answer goes to `backlog-out/chat/`.
+3. The ledger line has `kind: chat`, `counted: false` and this turn's cost only: a resumed run reports the
+   whole session's total, so `lead-chat` subtracts what the ledger already holds for that session.
+4. `ExecStopPost` runs `agent-kit-chat finish`, which drops the marker; `agent-kit-tick` reaps a marker whose
+   turn is gone. While the marker is there, `lead-cycle` and the schedule start no cycle. A halt stops a
+   turn too.
+
+On a subscription the prompt cache lasts an hour. A turn later than that reads the whole session again at
+the full rate, so the first answer after a long pause costs more than the next ones.
+
+### Scheduled one-shot job
+
+From kit 0.10. `agent-kit-oneshot at <unix> <id> <from> [--plan]` keeps a job (or a planning request) in
+`oneshot-at/` (root, 700), not in the inbox, until its time: from 30 seconds to 31 days ahead. `unat <id>`
+cancels it, `list-at` lists them. Every minute `agent-kit-tick` runs `agent-kit-oneshot due`, after the
+slots: a job whose time has come goes through the normal `start`. If the team is busy (a cycle, another job,
+a chat turn) it tries again each minute; after 30 minutes it drops the job and writes `missed` to
+`schedule.log` (`job:<id>` in the slot field), so nothing starts hours late. One start per tick.
+
+### Ledger kinds
+
+From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,
+or null). Planning and chat lines also carry `touched_code`.
+
 A team unit counts as a token spender when it is listed in `/etc/agent-kit/token-units`, or when what it
 executes mentions `claude`; `/etc/agent-kit/keep-units` overrides both.

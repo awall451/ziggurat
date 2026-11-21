@@ -22,16 +22,27 @@ fi
 # once the cycle is over, which can take longer than the timer does: no new
 # cycle may start in between.
 if [ -f "$STATE/halt-after" ]; then echo "a halt after the last cycle is pending: not running"; exit 0; fi
+# A chat turn with the lead (agent-kit-chat, kit 0.10) is the same lead: wait for it.
+if [ -f "$STATE/chat" ]; then echo "a chat turn with the lead is running: not running"; exit 0; fi
 
 # A one-shot job (agent-kit-oneshot): this cycle works on one owner message and
 # the team halts again when it ends. The marker and the control line are both
 # root-owned and must agree, so a stale marker cannot change a normal cycle.
-oneshot=
+# A planning cycle (kit 0.10) is the same kind of start with a -p- id: its
+# request is in the backlog folder, not in the inbox.
+oneshot= plan= kind=normal
 if [ -f "$STATE/oneshot" ]; then
   read -r oneshot _ < "$STATE/oneshot"
-  { [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$ ]] && grep -q "^run oneshot $oneshot " "$STATE/control" 2>/dev/null \
-    && [ -f "$STATE/inbox/$oneshot/message.md" ]; } || oneshot=
+  if [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$ ]]; then
+    { grep -q "^run oneshot $oneshot " "$STATE/control" 2>/dev/null \
+      && [ -f "$STATE/backlog/plans/$oneshot/request.md" ]; } && plan=$oneshot
+    oneshot=$plan
+  else
+    { [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$ ]] && grep -q "^run oneshot $oneshot " "$STATE/control" 2>/dev/null \
+      && [ -f "$STATE/inbox/$oneshot/message.md" ]; } || oneshot=
+  fi
 fi
+if [ -n "$plan" ]; then kind=plan; elif [ -n "$oneshot" ]; then kind=oneshot; fi
 
 # A schedule (agent-kit-schedule): a normal cycle starts only at one of its
 # slots. The tick leaves a root-owned marker just before it starts this unit;
@@ -62,6 +73,11 @@ if [ -z "$oneshot" ] && [ "$n_today" -ge "$MAX_CYCLES_PER_DAY" ]; then
 fi
 
 cd "$WORKSPACE" || exit 1
+# What a planning cycle may use (kit 0.10): no Edit, Write, agents or
+# scheduling tools. The shell stays, for owner-backlog; a change to the
+# workspace anyway is recorded in the ledger (touched_code) for the owner.
+PLAN_TOOLS="Read,Grep,Glob,Bash"
+workspace_print() { { git rev-parse HEAD 2>/dev/null; git status --porcelain 2>/dev/null; git worktree list --porcelain 2>/dev/null; git branch --list 2>/dev/null; } | sha256sum | cut -c1-16; }
 git fetch -q gate 2>/dev/null || true
 start=$(date -Is); t0=$SECONDS
 run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)
@@ -86,7 +102,26 @@ fi
 if [ -x "$KIT/bin/owner-publish" ]; then
   publish=$("$KIT/bin/owner-publish" prompt 2>/dev/null) && [ -n "$publish" ] && prompt+=$'\n\n'"$publish"
 fi
-if [ -n "$oneshot" ]; then
+if [ -x "$KIT/bin/owner-backlog" ]; then
+  backlog=$("$KIT/bin/owner-backlog" prompt 2>/dev/null) && [ -n "$backlog" ] && prompt+=$'\n\n'"$backlog"
+fi
+budget=$CYCLE_BUDGET_USD
+tools=()
+if [ -n "$plan" ]; then
+  # A planning cycle writes proposals, not code: the file-writing tools and
+  # agents are not there at all, and the budget is the small planning one.
+  head=$("$KIT/bin/owner-backlog" plan "$plan" --head 2>/dev/null)
+  job=$("$KIT/bin/owner-backlog" plan "$plan" 2>/dev/null)
+  if [ -z "$head" ] || [ -z "$job" ]; then
+    rm -f "$STATE/ledger/current"
+    echo "planning cycle $plan: could not build its prompt: not running"; exit 1
+  fi
+  prompt=$head$'\n\n'$prompt$'\n\n'$job
+  budget=${PLAN_BUDGET_USD:-2}
+  tools=(--tools "$PLAN_TOOLS")
+  mkdir -p "$STATE/ledger/plans"
+  printf '%s\n' "$sid" > "$STATE/ledger/plans/$plan"
+elif [ -n "$oneshot" ]; then
   # The job and its rules go last, and a notice that this is a one-shot cycle
   # goes before the team's own instructions, which say the opposite in places.
   # Without them this would be a normal cycle the owner did not ask for.
@@ -107,14 +142,18 @@ unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 # ledger line below is still written for the interrupted cycle.
 halted=false
 trap 'halted=true' TERM
+before=""
+[ "$kind" = plan ] && before=$(workspace_print)
 claude -p "$prompt" \
-  --session-id "$sid" "${settings[@]}" \
+  --session-id "$sid" "${settings[@]}" "${tools[@]}" \
   --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" \
   --dangerously-skip-permissions \
-  --max-budget-usd "$CYCLE_BUDGET_USD" \
+  --max-budget-usd "$budget" \
   --output-format json > "$run.json" 2> "$run.err"
 rc=$?
 rm -f "$STATE/ledger/current"
+touched=false
+[ "$kind" = plan ] && [ "$(workspace_print)" != "$before" ] && touched=true
 # Usage-limit hit? (session/weekly limit, rate limit). Then this attempt is
 # not counted and the timer simply retries later; after the reset the next
 # attempt runs normally. No human needed.
@@ -126,19 +165,21 @@ fi
 # A cycle that was stopped leaves an empty result file. jq prints nothing for
 # an empty file and still exits 0, so check for content first: otherwise a
 # halted cycle would get no ledger line at all.
-if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" \
+if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched \
       --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted \
   '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
     oneshot:(if $oneshot == "" then null else $oneshot end),
     slot:(if $slot == "" then null else $slot end),
+    kind:$kind, plan:(if $plan == "" then null else $plan end), touched_code:$touched,
     cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
     session:(.session_id // $sid), is_error:(.is_error // null),
     summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; }; then
-  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --argjson rc $rc \
+  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched --argjson rc $rc \
      --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --arg err "$(tail -c 600 "$run.err")" \
      '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted,
        oneshot:(if $oneshot == "" then null else $oneshot end),
-    slot:(if $slot == "" then null else $slot end), session:$sid, summary:((if $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
+    slot:(if $slot == "" then null else $slot end), kind:$kind, plan:(if $plan == "" then null else $plan end),
+    touched_code:$touched, session:$sid, summary:((if $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
 fi
 echo "cycle done rc=$rc limited=$limited halted=$halted oneshot=${oneshot:-no} in $((SECONDS - t0))s"
 exit 0

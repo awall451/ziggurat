@@ -54,6 +54,9 @@ mv "$STATE/control.tmp" "$STATE/control"
 # A one-shot job in progress is stopped like any cycle; its marker goes, so
 # that its end does not rewrite the reason given here.
 rm -f "$STATE/oneshot"
+# A chat turn with the lead is stopped too (kit 0.10).
+systemctl stop agent-kit-chat.service > /dev/null 2>&1
+rm -f "$STATE/chat"
 # A halt that was waiting for the cycle to end is settled by this one.
 rm -f "$STATE/halt-after" "$STATE/halt-after.over"
 

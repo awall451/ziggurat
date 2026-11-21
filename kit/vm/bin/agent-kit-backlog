@@ -1,0 +1,75 @@
+#!/bin/bash
+# agent-kit-backlog: the owner's side of the backlog (kit 0.10). Run with sudo
+# (the console calls it over ssh). Agents cannot write to the backlog folder,
+# which is what lets the lead trust what it finds there.
+#
+#   agent-kit-backlog plan <plan-id> <from>      store a planning request (focus text on stdin, may be
+#                                                empty). Used by `agent-kit-oneshot start|at`.
+#   agent-kit-backlog set <pid> approved|rejected|new <rev>
+#                                                the owner decided on revision <rev> of a proposal
+#   agent-kit-backlog list                       plan ids, newest last
+#
+# Layout (see docs/architecture.md, "Planning cycle and backlog"):
+#   $STATE/backlog/plans/<plan-id>/request.md    root: what the owner asked the lead to plan
+#   $STATE/backlog/current                       root: the newest plan id (the one a chat resumes)
+#   $STATE/backlog/.owner/<pid>                  root: "<status> <rev> <utc>"
+#   $STATE/backlog/chat/<plan-id>/<msgid>.md     root: the owner's chat messages (agent-kit-chat)
+#   $STATE/backlog-out/<pid>.md                  agent: the lead's proposals (owner-backlog)
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+BL=$STATE/backlog
+OUT=$STATE/backlog-out
+PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
+PID_RE='^[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}$'
+MAX_TEXT=8000
+
+die() { echo "agent-kit-backlog: $*" >&2; exit 2; }
+umask 022
+
+case "${1:-}" in
+  plan)
+    id=${2:-} from=${3:-}
+    [[ $id =~ $PLAN_RE ]] || die "bad plan id"
+    [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
+    [ ! -e "$BL/plans/$id" ] || die "that plan already exists"
+    install -d -m 755 "$BL" "$BL/plans"
+    tmp=$BL/plans/.tmp-$id
+    rm -rf -- "$tmp"
+    install -d -m 755 "$tmp"
+    text=$(head -c $((MAX_TEXT + 1)))
+    [ ${#text} -le $MAX_TEXT ] || { rm -rf -- "$tmp"; die "focus text is longer than $MAX_TEXT bytes"; }
+    {
+      printf 'Ziggurat-Owner-Plan: 1\nId: %s\nFrom: %s\nAsked: %s\n---\n' "$id" "$from" "$(date -u +%FT%TZ)"
+      printf '%s\n' "$text"
+    } > "$tmp/request.md"
+    chmod 644 "$tmp/request.md"
+    mv "$tmp" "$BL/plans/$id"
+    printf '%s\n' "$id" > "$BL/.current.tmp"
+    chmod 644 "$BL/.current.tmp"
+    mv "$BL/.current.tmp" "$BL/current"
+    echo "stored plan $id"
+    ;;
+
+  set)
+    pid=${2:-} status=${3:-} rev=${4:-}
+    [[ $pid =~ $PID_RE ]] || die "bad proposal id"
+    [[ $status =~ ^(approved|rejected|new)$ ]] || die "status must be approved, rejected or new"
+    [[ $rev =~ ^[0-9]{1,4}$ ]] || die "bad revision"
+    [ -f "$OUT/$pid.md" ] || die "no such proposal: $pid"
+    install -d -m 755 "$BL/.owner"
+    printf '%s %s %s\n' "$status" "$rev" "$(date -u +%FT%TZ)" > "$BL/.owner/.$pid.tmp"
+    mv "$BL/.owner/.$pid.tmp" "$BL/.owner/$pid"
+    echo "set $pid $status rev $rev"
+    ;;
+
+  list)
+    shopt -s nullglob
+    for d in "$BL"/plans/2*/; do basename "$d"; done
+    ;;
+
+  *)
+    die "usage: agent-kit-backlog plan <plan-id> <from> | set <pid> <status> <rev> | list"
+    ;;
+esac
