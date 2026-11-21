@@ -229,8 +229,10 @@
     const whole = range.from === first.from && range.to === last.to;
     if (whole && range.days.length === 1) return dateText(first.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
     if (whole) return `${dateText(first.date, { day: 'numeric', month: 'short' })} to ${dateText(last.date, { day: 'numeric', month: 'short', year: 'numeric' })}`;
-    const endDay = range.days.findLast((d) => d.from < range.to) || last;
-    return `${dateText(first.date, { weekday: 'short', day: 'numeric', month: 'short' })}, ${clockAt(range.from)} to ${dateText(endDay.date, { weekday: 'short', day: 'numeric', month: 'short' })}, ${clockAt(range.to)}`;
+    // The end's own date: a window that ends at midnight ends on the next day.
+    const e = wallClock(settings.timezone, range.to);
+    const endDate = `${e.y}-${String(e.m).padStart(2, '0')}-${String(e.d).padStart(2, '0')}`;
+    return `${dateText(first.date, { weekday: 'short', day: 'numeric', month: 'short' })}, ${clockAt(range.from)} to ${dateText(endDate, { weekday: 'short', day: 'numeric', month: 'short' })}, ${clockAt(range.to)}`;
   });
   const lengthText = (secs) => (secs >= 3600 ? `${Math.floor(secs / 3600)} h ${String(Math.round((secs % 3600) / 60)).padStart(2, '0')} min` : `${Math.round(secs / 60)} min`);
   const strideText = $derived(stride >= 86_400_000 ? `${Math.round(stride / 86_400_000)} day${stride >= 2 * 86_400_000 ? 's' : ''}` : stride >= 3_600_000 ? `${Math.round(stride / 3_600_000)} hours` : `${Math.round(stride / 60000)} minutes`);
@@ -268,7 +270,7 @@
       {#each ['day', 'week', 'month'] as v (v)}
         <a class="btn quiet" class:on={tl.view === v && !tl.custom && !win} aria-current={tl.view === v && !tl.custom && !win ? 'page' : undefined} href={link(v, range.date)}>{v[0].toUpperCase() + v.slice(1)}</a>
       {/each}
-      <a class="btn quiet" href={link(tl.view, null)} title="Jump to today">Today</a>
+      <a class="btn quiet" href={link('day', null)} title="Today, as a day">Today</a>
     </div>
     <div class="seg" aria-label="Move through time">
       {#if isMonth}

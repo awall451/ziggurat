@@ -226,6 +226,11 @@ describe('the server side', () => {
     expect(server.typicalSecs([c(600), c(1200), c(9000, { halted: true }), c(20, {}), c(30000, { counted: false })])).toBe(900);
   });
 
+  it('leaves planning cycles and chat turns out of the typical length', () => {
+    const c = (secs, kind) => ({ secs, counted: true, halted: false, kind });
+    expect(server.typicalSecs([c(600, 'normal'), c(1200, 'oneshot'), c(90, 'plan'), c(70, 'plan'), c(65, 'chat')])).toBe(900);
+  });
+
   it('builds the timeline from the ledger, the status and the slot log', async () => {
     const dir = path.join(FLEET, 'alpha');
     fs.writeFileSync(
