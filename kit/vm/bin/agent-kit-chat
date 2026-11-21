@@ -11,8 +11,9 @@
 #
 # A turn resumes the planning cycle's own session (lead-chat), so the lead
 # keeps what it read. Only the newest planning session can be resumed: the
-# next planning cycle replaces it. No turn while a cycle runs, and no cycle
-# while a turn runs (lead-cycle and the schedule wait for the marker).
+# next planning cycle replaces it. From kit 0.10.1 a turn may run while a
+# cycle or a one-shot job runs, and a cycle may start during a turn; the
+# chat notice tells the lead what is running.
 # The marker ($STATE/chat) is "<plan-id> <msgid> <since>".
 set -uo pipefail
 PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
@@ -53,8 +54,11 @@ case "${1:-show}" in
     [ "${cur:-}" = "$plan" ] || die "a newer planning cycle has replaced this session"
     [ ! -e "$BL/chat/$plan/.ended" ] || die "this chat was ended"
     [ ! -e "$MARK" ] || die "the lead is still answering the last message"
-    [ ! -e "$STATE/oneshot" ] || die "a one-shot job or planning cycle is running. Try again when it has ended"
-    active "$LEAD" && die "a cycle is running. Try again when it has ended"
+    # A chat turn may run next to a cycle or a one-shot job (kit 0.10.1): it
+    # resumes the planning session, not the cycle's. Only the planning cycle of
+    # this same session must have ended first, or two runs would write one transcript.
+    job=""; [ -r "$STATE/oneshot" ] && read -r job _ < "$STATE/oneshot"
+    [ "${job:-}" != "$plan" ] || die "the planning cycle is still running. Try again when it has ended"
     # Written by lead-cycle as the agent: checked, and only ever used as a session id.
     read -r sid _ < "$STATE/ledger/plans/$plan" 2>/dev/null
     [[ ${sid:-} =~ $UUID_RE ]] || die "the planning session has no session id (did its cycle run?)"

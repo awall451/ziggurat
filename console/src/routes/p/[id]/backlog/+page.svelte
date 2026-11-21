@@ -244,8 +244,11 @@
             {:else}
               <textarea class="field" rows="3" bind:this={chatBox} bind:value={chatText} placeholder="Ask about a proposal, or ask {lead} to change, split or drop one"></textarea>
               <div class="row">
-                <button class="btn primary" disabled={!!busy || busyTeam || !chatText.trim()} onclick={sendChat}>Send</button>
-                <span class="small dim">Each message resumes the planning session for one answer (counts as usage, not as a cycle).</span>
+                <button class="btn primary" disabled={!!busy || !!data.busy?.chat || plan.running || !chatText.trim()} onclick={sendChat}>Send</button>
+                <span class="small dim">
+                  Each message resumes the planning session for one answer (counts as usage, not as a cycle).
+                  {#if data.busy?.oneshot && !data.busy.oneshot.plan}The chat stays open while a job runs; {lead} is told what is running.{/if}
+                </span>
                 <span class="grow"></span>
                 <button class="btn quiet" disabled={!!busy} onclick={() => post({ action: 'chat-end', plan: plan.id }, 'end')}>End chat</button>
               </div>

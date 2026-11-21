@@ -264,9 +264,27 @@ session. Answer in a few plain lines. You may change proposals (\`owner-backlog 
 new ones (\`owner-backlog propose\`) when the owner asks or agrees; say which you changed. Still no
 code: no edits, no branches, no agents. The owner decides on the backlog page.
 
-The owner's message:
-
 EOF
+    # What the team is doing right now, so the lead can keep it in mind.
+    job=""
+    [ -r "$STATE/oneshot" ] && read -r job jsince _ < "$STATE/oneshot"
+    if [[ ${job:-} =~ ^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$ ]] && [ -r "$STATE/inbox/$job/message.md" ]; then
+      item=$(body "$STATE/inbox/$job/message.md" | grep -m1 -oE '^Backlog item [0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}' | awk '{print $3}')
+      echo
+      if [ -n "$item" ] && [ -f "$OUT/$item.md" ]; then
+        echo "Right now a one-shot job is running in its own cycle (since ${jsince:-?}): backlog item \`$item\`,"
+        echo "\"$(header "$OUT/$item.md" Title)\". The owner started it from this backlog. Keep it in mind: that work is in"
+        echo "progress, so do not propose it again, and say so if a change you discuss would touch it."
+      else
+        echo "Right now a one-shot job is running in its own cycle (since ${jsince:-?}): owner message \`$job\`."
+      fi
+    elif [ -s "$STATE/ledger/current" ]; then
+      echo
+      echo "Right now a normal cycle of the team is running. Keep in mind that the code may change while you talk."
+    fi
+    echo
+    echo "The owner's message:"
+    echo
     body "$BL/chat/$id/$msg.md"
     ;;
 
