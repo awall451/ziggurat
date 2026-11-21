@@ -15,6 +15,8 @@ set -uo pipefail
 ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 # shellcheck source=/dev/null
 source "$ETC/project.env"
+# shellcheck source=/dev/null
+[ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
 IS=$STATE/issues
 OUT=$STATE/issues-out
 ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
@@ -41,6 +43,17 @@ open_ids() {
     id=$(basename "$d")
     [[ $id =~ $ID_RE ]] && [ -f "$d/issue.md" ] || continue
     case "$(status_of "$id")" in new | in_progress) echo "$id" ;; esac
+  done
+}
+
+# Open issues for the cycle prompt. A planned issue (kit 0.11) is a backlog
+# item the owner approved: it runs as its own one-shot job, which names it.
+# Normal cycles leave it alone, unless the owner lets them take approved items.
+prompt_ids() {
+  local id
+  for id in $(open_ids); do
+    if [ "$(header "$IS/$id/issue.md" Kind)" = planned ] && [ "${FREE_TAKE_APPROVED:-0}" != 1 ]; then continue; fi
+    echo "$id"
   done
 }
 
@@ -104,7 +117,7 @@ case "${1:-list}" in
   prompt)
     # Printed at the end of the lead's prompt every cycle. Keep the wording
     # neutral: team themes rename roles, this text must fit all of them.
-    ids=$(open_ids)
+    ids=$(prompt_ids)
     [ -n "$ids" ] || { echo "## Owner issues"; echo; echo "There are no open owner issues right now."; exit 0; }
     cat <<'PROMPT'
 ## Owner issues
@@ -122,6 +135,8 @@ decline it. Report with `owner-issues update <id> in_progress|done|wontfix` (a s
 - `wontfix` with the reason, if it conflicts with the charter or is not worth doing.
 An issue is shown here every cycle until it is `done` or `wontfix`. The owner can also move it.
 Only you, the lead, update issues; your agents do not.
+An issue of kind `planned` is a backlog item the owner approved. It is done by the one-shot job that
+names it; when such a job runs, set it `in_progress` at the start and `done` when it has merged.
 
 ### Open owner issues
 PROMPT

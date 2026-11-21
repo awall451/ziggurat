@@ -27,7 +27,7 @@ case "${1:-}" in
   put)
     id=${2:-} kind=${3:-}
     [[ $id =~ $ID_RE ]] || die "bad id"
-    [[ $kind =~ ^(bug|polish|idea)$ ]] || die "kind must be bug, polish or idea"
+    [[ $kind =~ ^(bug|polish|idea|planned)$ ]] || die "kind must be bug, polish, idea or planned"
     [ ! -e "$IS/$id" ] || die "issue $id already exists"
     install -d -m 755 "$IS" "$IS/.owner"
     tmp=$IS/.tmp-$id

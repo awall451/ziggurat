@@ -231,6 +231,7 @@
     'backlog-decide': 'Decided on a backlog item',
     'job-at': 'Set a job for a time',
     'job-at-cancel': 'Cancelled a job set for a time',
+    'job-at-move': 'Moved a job set for a time',
     'chat-say': 'Sent a chat message to the lead',
     'chat-end': 'Ended a backlog chat'
   };

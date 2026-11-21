@@ -32,8 +32,17 @@
     ['all', 'All'],
     ['bug', 'Bugs'],
     ['polish', 'Polish'],
-    ['idea', 'Ideas']
+    ['idea', 'Ideas'],
+    ['planned', 'Planned']
   ];
+  // A planned issue: an approved backlog item, done by its own job.
+  function jobText(i) {
+    const j = i.job;
+    if (!j || i.status !== 'new') return '';
+    if (j.scheduledFor) return `set for ${new Date(j.scheduledFor * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`;
+    if (j.startedAt) return 'job started';
+    return '';
+  }
   const shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return data.issues.filter(
@@ -147,6 +156,7 @@
             <span class="meta small">
               <span class="pill kind {i.kind}">{i.kind}</span>
               {#if i.origin?.screen}<span class="dim cap">{screenName(i)}</span>{/if}
+              {#if jobText(i)}<span class="dim">{jobText(i)}</span>{/if}
               <span class="grow"></span>
               {#if !i.delivered}<span class="s-failed" title={i.error || 'Not delivered to the VM yet'}>not sent</span>{/if}
               {#if i.status === 'wontfix'}<span class="dim">won't fix</span>{/if}
@@ -169,6 +179,7 @@
           <div class="small dim">
             <span class="pill kind {open.kind}">{open.kind}</span>
             {#if open.origin?.screen}<span class="cap">{screenName(open)}</span> · {open.origin.date}{/if}{#if open.origin?.type === 'upload'}<span class="mono">{open.origin.name}</span>{/if} · raised by {open.by} {ago(open.createdAt, p.now)}
+            {#if open.proposal}· <a href="{base}/backlog">approved backlog item, see the Backlog</a>{#if jobText(open)} · {jobText(open)}{/if}{/if}
           </div>
         </div>
         <span class="pill st {open.status}">{WORD[open.status]}</span>
@@ -337,6 +348,10 @@
   }
   .kind.idea {
     color: var(--cyan);
+  }
+  .kind.planned {
+    color: var(--accent);
+    border-style: dashed;
   }
   .sheet {
     position: fixed;

@@ -175,6 +175,19 @@ mkdir -p "$T/work/i8/att"; echo x > "$T/work/i8/issue.md"; for n in 1 2 3 4 5 6 
 refuse "more than 8 attachments" bash -c "tar -c -C '$T/work/i8' . | '$BIN/agent-kit-issues' put 20260101T120009Z-i-a00004 bug"
 check "refused attachments left no issue" '[ ! -e "$S/issues/20260101T120006Z-i-a00001" ] && [ ! -e "$S/issues/20260101T120007Z-i-a00002" ] && [ ! -e "$S/issues/20260101T120009Z-i-a00004" ]'
 "$BIN/agent-kit-issues" set $I4 wontfix > /dev/null
+# A planned issue (kit 0.11): an approved backlog item, done by its own job.
+IP=20260101T120010Z-i-a00005
+mkdir -p "$T/work/ip"; printf '# 1. Save slots\n\nBacklog item 20260101T000000Z-b-abcdef. Code word JASPER.\n' > "$T/work/ip/issue.md"
+tarball ip | "$BIN/agent-kit-issues" put $IP planned > /dev/null
+check "a planned issue is stored" 'grep -q "^Kind: planned$" "$S/issues/$IP/issue.md"'
+check "a planned issue is listed" 'grep -q "$IP  planned" <<< "$("$BIN/owner-issues" list)"'
+check "normal cycles are not given planned issues" '! grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
+echo "FREE_TAKE_APPROVED=1" > "$T/etc/caps.env"
+check "unless the owner lets them take approved items" 'grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
+rm -f "$T/etc/caps.env"
+echo "Started." | "$BIN/owner-issues" update $IP in_progress > /dev/null
+check "the job that names it can update it" 'grep -q "$IP  planned .*in_progress" <<< "$("$BIN/owner-issues" list)"'
+"$BIN/agent-kit-issues" set $IP done > /dev/null
 
 echo "== agent-kit-caps"
 "$BIN/agent-kit-caps" set MAX_CYCLES_PER_DAY 3 > /dev/null

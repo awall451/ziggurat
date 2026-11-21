@@ -10,6 +10,8 @@
   import { md } from '$lib/md.js';
   import { instantOf, wallClock, clockLabel, zoneLabel } from '$lib/schedule.js';
   import Popover from '$lib/components/Popover.svelte';
+  import ProposalCard from '$lib/components/ProposalCard.svelte';
+  import PlaceModal from '$lib/components/PlaceModal.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -26,6 +28,8 @@
   let chatText = $state('');
   let atFor = $state(null); // pid whose time picker is open
   let atValue = $state('');
+  let atMode = $state('menu'); // the Schedule pop-over: 'menu', then 'time'
+  let placing = $state(null); // {pid | null (a planning cycle), title, minutes}
   let openPlan = $state(null);
   let chatBox = $state(null);
 
@@ -91,11 +95,33 @@
     });
   }
 
-  function runAt(pid) {
-    const at = epochOf(atValue);
+  function runAt(pid, epoch = null) {
+    const at = epoch ?? epochOf(atValue);
     if (!at) return (flash = { ok: false, text: 'Pick a date and time' });
     post({ action: 'run-at', pid, at }, `at-${pid}`).then((out) => {
-      if (out) atFor = null;
+      if (out) {
+        atFor = null;
+        placing = null;
+      }
+    });
+  }
+  function openSchedule(pid) {
+    atMode = 'menu';
+    atValue = '';
+    atFor = atFor === pid ? null : pid;
+  }
+  function place(prop) {
+    atFor = null;
+    placing = { pid: prop.pid, title: prop.title, minutes: prop.minutes };
+  }
+  function placed(epoch) {
+    if (placing?.pid) return runAt(placing.pid, epoch);
+    post({ action: 'plan', focus, at: epoch }, 'plan').then((out) => {
+      if (out) {
+        focus = '';
+        placing = null;
+        planLater = false;
+      }
     });
   }
 
@@ -144,8 +170,9 @@
         {#snippet trigger()}
           <button class="btn quiet" disabled={!!busy} onclick={() => (planLater = !planLater)}>Later…</button>
         {/snippet}
+        <button class="btn sm" onclick={() => ((planLater = false), (placing = { pid: null, title: 'planning cycle', minutes: data.planMinutes || 5 }))}>On the timeline…</button>
         <label class="fieldrow small">
-          <span class="dim">Start at ({zoneLabel(data.timezone)})</span>
+          <span class="dim">Or at a time ({zoneLabel(data.timezone)})</span>
           <input class="field" type="datetime-local" bind:value={planAt} />
         </label>
         <div class="actions end">
@@ -195,23 +222,12 @@
         <div class="cards">
           {#each plan.proposals as prop (prop.pid)}
             {@const job = prop.run ? timedJob(prop.run.jobId) : null}
-            <article class="panel card {prop.state}">
-              <header class="row">
-                {#if prop.order != null}<span class="mono dim">{prop.order}.</span>{/if}
-                <h3 class="grow">{prop.title}</h3>
-                <span class="pill st">{prop.taken ? 'Taken by a cycle' : STATE_WORD[prop.state] || prop.state}</span>
-              </header>
-              <div class="est small">
-                <span><b>{prop.minutes}</b> min</span>
-                <span><b>{usd(prop.cost)}</b></span>
-                <span class="conf {prop.confidence}">{prop.confidence} confidence</span>
-                {#if prop.rev > 1}<span class="dim">revision {prop.rev}</span>{/if}
-              </div>
-              {#if prop.areas}<div class="small"><span class="dim">Areas:</span> {prop.areas}</div>{/if}
-              {#if prop.risk}<div class="small"><span class="dim">Risk:</span> {prop.risk}</div>{/if}
-              {#if prop.depends.length}<div class="small"><span class="dim">After:</span> {prop.depends.map((d) => title(plans, d)).join(', ')}</div>{/if}
-              <div class="md small">{@html md(prop.text)}</div>
-              <div class="actions foot">
+            <ProposalCard
+              {prop}
+              stateText={prop.taken ? 'Taken by a cycle' : STATE_WORD[prop.state] || prop.state}
+              after={prop.depends.map((d) => title(plans, d)).join(', ')}
+            >
+              {#snippet actions()}
                 {#if prop.state !== 'rejected' && !prop.taken}
                   <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'rejected' }, prop.pid)}>Reject</button>
                 {/if}
@@ -229,21 +245,26 @@
                 {:else}
                   <Popover open={atFor === prop.pid} onclose={() => (atFor = null)}>
                     {#snippet trigger()}
-                      <button class="btn quiet sm" disabled={!!busy} onclick={() => ((atFor = atFor === prop.pid ? null : prop.pid), (atValue = ''))}>Schedule…</button>
+                      <button class="btn quiet sm" disabled={!!busy} onclick={() => openSchedule(prop.pid)}>Schedule ▾</button>
                     {/snippet}
-                    <label class="fieldrow small">
-                      <span class="dim">Start at ({zoneLabel(data.timezone)})</span>
-                      <input class="field" type="datetime-local" bind:value={atValue} />
-                    </label>
-                    <div class="actions end">
-                      <button class="btn quiet sm" onclick={() => (atFor = null)}>Cancel</button>
-                      <button class="btn primary sm" disabled={!!busy || !atValue} onclick={() => runAt(prop.pid)}>Set</button>
-                    </div>
+                    {#if atMode === 'menu'}
+                      <button class="btn sm" onclick={() => place(prop)}>On the timeline…</button>
+                      <button class="btn quiet sm" onclick={() => (atMode = 'time')}>At a time…</button>
+                    {:else}
+                      <label class="fieldrow small">
+                        <span class="dim">Start at ({zoneLabel(data.timezone)})</span>
+                        <input class="field" type="datetime-local" bind:value={atValue} />
+                      </label>
+                      <div class="actions end">
+                        <button class="btn quiet sm" onclick={() => (atFor = null)}>Cancel</button>
+                        <button class="btn primary sm" disabled={!!busy || !atValue} onclick={() => runAt(prop.pid)}>Set</button>
+                      </div>
+                    {/if}
                   </Popover>
                   <button class="btn primary sm" disabled={!!busy || busyTeam} onclick={() => post({ action: 'run', pid: prop.pid }, `run-${prop.pid}`)}>Run now</button>
                 {/if}
-              </div>
-            </article>
+              {/snippet}
+            </ProposalCard>
           {/each}
         </div>
 
@@ -284,6 +305,10 @@
   {/each}
 {/if}
 
+{#if placing}
+  <PlaceModal project={p.id} title={placing.title} minutes={placing.minutes} busy={!!busy} onclose={() => (placing = null)} onset={placed} />
+{/if}
+
 <style>
   .block {
     padding: 18px;
@@ -291,9 +316,6 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-  }
-  .card {
-    padding: 12px 14px;
   }
   .ask textarea,
   .chat textarea {
@@ -335,31 +357,6 @@
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 10px;
     margin-top: 10px;
-  }
-  .card {
-    border-radius: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .card.rejected {
-    opacity: 0.55;
-  }
-  .card.approved {
-    border-color: var(--accent);
-  }
-  .est {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .conf.low {
-    color: var(--warn, #d9a441);
-  }
-  .actions.foot {
-    margin-top: auto;
-    padding-top: 8px;
-    border-top: 1px solid var(--line);
   }
   .chat {
     margin-top: 14px;

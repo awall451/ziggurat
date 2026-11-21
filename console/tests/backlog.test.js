@@ -34,7 +34,7 @@ beforeAll(() => {
   // read with nothing, and exits with the code and stderr the test chose.
   fs.writeFileSync(
     path.join(fake, 'ssh'),
-    `#!/bin/sh\nfor a; do last=$a; done\nif [ "$last" = "bash -s" ]; then cat > /dev/null; echo '{}'; exit 0; fi\n` +
+    `#!/bin/sh\nfor a; do last=$a; done\nif [ "$last" = "bash -s" ]; then cat > /dev/null; cat ${fake}/status 2>/dev/null || echo '{}'; exit 0; fi\n` +
       `cat > ${fake}/stdin\necho "$last" >> ${fake}/log\ncat ${fake}/stderr >&2\nexit $(cat ${fake}/code)\n`,
     { mode: 0o755 }
   );
@@ -219,5 +219,95 @@ describe('chat with the lead', () => {
     expect(calls().at(-1)).toBe(`sudo -n /opt/agent-kit/bin/agent-kit-chat end ${PLAN}`);
     await expect(bl.chatSay(user, project, PLAN, 'more')).rejects.toThrow('ended');
     expect(bl.list(project).plans[0].ended).toBe(true);
+  });
+});
+
+describe('planned issues and jobs on the timeline (kit 0.11)', () => {
+  const live = () => import('../src/lib/server/live.js');
+  const issues = () => import('../src/lib/server/issues.js');
+  const NEXT = '20260102T110000Z-b-eeeeee';
+  let PLAN2;
+
+  beforeAll(async () => {
+    vm(0);
+    fs.writeFileSync(path.join(fake, 'status'), JSON.stringify({ kitver: '0.11.0', lead: 'inactive', control: 'stop owner', now: '1' }) + '\n');
+    await (await live()).getStatus(project, { fresh: true });
+    PLAN2 = (await bl.startPlan(user, project, { focus: '' })).id;
+    fs.writeFileSync(
+      path.join(out, `${NEXT}.md`),
+      prop({ Plan: PLAN2, Rev: 1, Date: '2026-01-02T11:00:00Z', Title: 'Autosave', Minutes: 40, 'Cost-usd': '2.00', Confidence: 'high', Order: 1 })
+    );
+  });
+
+  it('approving makes a planned issue, delivered with its kind', async () => {
+    const res = await bl.decide(user, project, NEXT, 'approved');
+    expect(res.issueId).toMatch(/^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$/);
+    const issue = (await issues()).get(project, res.issueId);
+    expect(issue).toMatchObject({ kind: 'planned', status: 'new', title: '1. Autosave', proposal: { pid: NEXT, rev: 1, plan: PLAN2 } });
+    expect(calls()).toContain(`sudo -n /opt/agent-kit/bin/agent-kit-issues put ${res.issueId} planned`);
+    expect((await issues()).openCount(project)).toBe(0);
+  });
+
+  it('a later revision replaces the issue; rejecting closes it', async () => {
+    const d1 = JSON.parse(fs.readFileSync(path.join(base, 'decisions', `${NEXT}.json`), 'utf8'));
+    fs.writeFileSync(
+      path.join(out, `${NEXT}.md`),
+      prop({ Plan: PLAN2, Rev: 2, Date: '2026-01-02T11:05:00Z', Title: 'Autosave', Minutes: 30, 'Cost-usd': '2.00', Confidence: 'high', Order: 1 })
+    );
+    await bl.decide(user, project, NEXT, 'approved');
+    const d2 = JSON.parse(fs.readFileSync(path.join(base, 'decisions', `${NEXT}.json`), 'utf8'));
+    expect(d2.issueId).not.toBe(d1.issueId);
+    expect((await issues()).get(project, d1.issueId).status).toBe('wontfix');
+    expect((await issues()).get(project, d2.issueId).proposal.rev).toBe(2);
+    await bl.decide(user, project, NEXT, 'rejected');
+    expect((await issues()).get(project, d2.issueId).status).toBe('wontfix');
+    await bl.decide(user, project, NEXT, 'approved');
+  });
+
+  it('the job names its issue, and Run now draws a running bar at once', async () => {
+    const d = JSON.parse(fs.readFileSync(path.join(base, 'decisions', `${NEXT}.json`), 'utf8'));
+    let text = '';
+    await bl.runNow(user, project, NEXT, async (_u, _p, job) => {
+      text = job.text;
+      return { id: '20260102T120500Z-o-a1b2c3', started: true };
+    });
+    expect(text).toContain(`Owner issue ${d.issueId}`);
+    expect((await issues()).get(project, d.issueId).job.id).toBe('20260102T120500Z-o-a1b2c3');
+    const jobs = bl.jobsFor(project, {});
+    const j = jobs.find((x) => x.id === '20260102T120500Z-o-a1b2c3');
+    expect(j).toMatchObject({ kind: 'job', state: 'running', title: 'Autosave', minutes: 30, pid: NEXT });
+    expect(j.estEnd - j.start).toBe(30 * 60000);
+  });
+
+  it('a job set for a time, a finished job, and forged run files', () => {
+    const runs = path.join(base, 'runs');
+    const at = Math.floor(Date.now() / 1000) + 3600;
+    fs.writeFileSync(path.join(runs, '20260102T100100Z-b-bbbbbb.json'), JSON.stringify({ jobId: '20260102T130000Z-o-setjob', rev: 1, at: '2026-01-02T12:00:00Z', scheduledFor: at }));
+    fs.writeFileSync(path.join(runs, '20260102T100400Z-b-eeeeee.json'), JSON.stringify({ jobId: '; rm -rf /', rev: 1, at: new Date().toISOString() }));
+    fs.writeFileSync(path.join(runs, 'not-a-pid.json'), JSON.stringify({ jobId: '20260102T130000Z-o-forged', at: new Date().toISOString() }));
+    fs.appendFileSync(
+      path.join(project.paths.fleet, 'cycles.jsonl'),
+      JSON.stringify({ kind: 'oneshot', oneshot: '20260102T120000Z-o-abcdef', start: '2026-01-02T12:00:00Z', end: '2026-01-02T12:50:00Z', secs: 3000 }) + '\n'
+    );
+    const jobs = bl.jobsFor(project, { atJobs: [{ id: '20260102T130000Z-o-setjob', at, from: 'owner', plan: false }] });
+    const ids = jobs.map((x) => x.id);
+    expect(ids).not.toContain('20260102T130000Z-o-forged');
+    expect(ids.every((x) => /^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]+$/.test(x))).toBe(true);
+    expect(jobs.find((x) => x.id === '20260102T130000Z-o-setjob')).toMatchObject({ state: 'set', start: at * 1000 });
+    const done = jobs.find((x) => x.id === '20260102T120000Z-o-abcdef');
+    expect(done).toMatchObject({ state: 'done', start: Date.parse('2026-01-02T12:00:00Z'), end: Date.parse('2026-01-02T12:50:00Z') });
+  });
+
+  it('moving a job set for a time sends it again for the new time', async () => {
+    const at = Math.floor(Date.now() / 1000) + 7200;
+    const res = await bl.runAt(user, project, NEXT, at);
+    expect(res.scheduled).toBe(true);
+    const to = at + 1800;
+    await bl.moveAt(user, project, res.id, to);
+    const c = calls();
+    expect(c.at(-2)).toBe(`sudo -n /opt/agent-kit/bin/agent-kit-oneshot unat ${res.id}`);
+    expect(c.at(-1)).toBe(`sudo -n /opt/agent-kit/bin/agent-kit-oneshot at ${to} ${res.id} owner`);
+    await expect(bl.moveAt(user, project, res.id, 5)).rejects.toThrow('between one minute and 30 days');
+    await expect(bl.moveAt(user, project, 'x; id', to)).rejects.toThrow();
   });
 });

@@ -348,6 +348,21 @@ slots: a job whose time has come goes through the normal `start`. If the team is
 a chat turn) it tries again each minute; after 30 minutes it drops the job and writes `missed` to
 `schedule.log` (`job:<id>` in the slot field), so nothing starts hours late. One start per tick.
 
+### Planned issues and jobs on the timeline
+
+From kit 0.11. Approving a proposal on the Backlog also raises an owner issue of kind `planned` (made by the
+console, not by the owner's own forms). It holds the job's text and a link to the proposal. Normal cycles do
+not see planned issues (`owner-issues prompt` leaves them out) unless the owner allows them to take approved
+items (`FREE_TAKE_APPROVED=1`). The one-shot job of that item names the issue, so the lead sets it
+`in_progress` and `done` as usual. A later revision approved again replaces the issue (the old one becomes
+`wontfix`); rejecting closes it. Planned issues are not counted in the Issues tab's badge.
+
+The Schedule page draws backlog jobs from the console's own run records, the VM's status (jobs set for a
+time, the job running) and the ledger: the estimate dashed, what ran hatched, hover for the title, click for
+the proposal. Run now shows a running bar at once. A job set for a time can be moved (`unat`, then `at` again
+with the stored job) or cancelled there. On the Backlog, "Schedule ▾ → On the timeline…" opens a day of all
+teams in a pop-up: the job's estimate follows the pointer in its team's row and a click picks the start.
+
 ### Ledger kinds
 
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,

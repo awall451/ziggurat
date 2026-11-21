@@ -6,6 +6,9 @@
   //   click an empty place     add a start time there
   //   drag across empty space  zoom in to that stretch
   //   scroll sideways          move through time (also Shift + wheel)
+  // Backlog jobs (row.jobs) are drawn with their estimate; hover shows what
+  // they are, a click calls onjob. With `ghost` set, the pointer carries a bar
+  // of that length along its row and a click calls onpick with the start.
   import { wallClock, timeOfDay, hourLabel, clockLabel, DAYS } from '$lib/schedule.js';
 
   let {
@@ -20,8 +23,14 @@
     onadd = () => {}, // (project, 'HH:MM', day name)
     onselect = () => {}, // (project, slot index)
     onzoom = () => {}, // (from, to)
-    onpan = () => {} // (milliseconds, positive is later)
+    onpan = () => {}, // (milliseconds, positive is later)
+    onjob = null, // (project, job): a backlog job was clicked
+    ghost = null, // {project, minutes}: place a job of this length
+    onpick = () => {} // (project, start in ms)
   } = $props();
+  // Ids inside the SVG must be unique on the page: there can be two timelines.
+  const uid = $props.id();
+  const SNAP = 15 * 60000;
 
   const LABEL = 150;
   const HEAD = 40;
@@ -113,6 +122,13 @@
     const p = pick;
     pick = null;
     if (Math.abs(p.x1 - p.x0) < 6) {
+      if (ghost) {
+        if (p.row?.id === ghost.project) {
+          const t = Math.round(timeAt(p.x0) / SNAP) * SNAP;
+          if (t >= now + 60000) onpick(p.row.id, t);
+        }
+        return;
+      }
       if (!p.row?.editable) return;
       const t = timeAt(p.x0);
       const c = wallClock(p.row.tz, t);
@@ -131,6 +147,29 @@
     return { x: a, w: b - a, from: timeAt(Math.min(pick.x0, pick.x1)), to: timeAt(Math.max(pick.x0, pick.x1)) };
   });
 
+  // ---- placing a job (ghost mode) ----
+  let hoverT = $state(null); // snapped start under the pointer, in the ghost's row
+  function hover(e, row) {
+    if (!ghost || row?.id !== ghost.project || pick) return;
+    hoverT = Math.round(timeAt(e.clientX) / SNAP) * SNAP;
+  }
+  const ghostOk = $derived(hoverT != null && hoverT >= now + 60000);
+
+  // ---- backlog jobs: hover card and click ----
+  let tip = $state(null); // {row, job, left, top}
+  let wrapEl = $state();
+  function showTip(e, row, job) {
+    const r = wrapEl.getBoundingClientRect();
+    tip = { row, job, left: Math.max(0, Math.min(e.clientX - r.left + 12, r.width - 280)), top: e.clientY - r.top + 14 };
+  }
+  const JOB_STATE = { set: 'set for', running: 'running since', done: 'ran' };
+  function jobKey(e, row, job) {
+    if ((e.key === 'Enter' || e.key === ' ') && onjob) {
+      e.preventDefault();
+      onjob(row.id, job);
+    }
+  }
+
   // ---- sideways scrolling moves through time ----
   function wheel(node) {
     const on = (e) => {
@@ -145,13 +184,17 @@
   }
 </script>
 
-<div class="wrap" bind:clientWidth={width}>
+<div class="wrap" bind:clientWidth={width} bind:this={wrapEl}>
   <svg bind:this={svg} {width} {height} role="group" aria-label="Cycle timeline" use:wheel>
     <defs>
-      <pattern id="tl-limit" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <pattern id="{uid}-limit" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
         <rect width="3" height="6" fill="var(--critical)" opacity="0.55" />
       </pattern>
-      <clipPath id="tl-track"><rect x={LABEL} y="0" width={track} {height} /></clipPath>
+      <pattern id="{uid}-job" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+        <rect width="7" height="7" fill="var(--accent)" opacity="0.32" />
+        <rect width="3" height="7" fill="var(--accent)" opacity="0.75" />
+      </pattern>
+      <clipPath id="{uid}-track"><rect x={LABEL} y="0" width={track} {height} /></clipPath>
     </defs>
 
     <!-- the header strip also takes a drag to zoom -->
@@ -181,17 +224,30 @@
         <text class="name" x={8} y={y + 20}>{row.name}</text>
         <text class="sub" x={8} y={y + 36}>{row.note}</text>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <rect class="lane zoomable" class:editable={row.editable} x={LABEL} y={y + 2} width={track} height={ROW - 4} onpointerdown={(e) => press(e, row)} onpointermove={sweep} onpointerup={release} onpointercancel={() => (pick = null)}>
-          <title>{row.editable ? 'Click to add a start time here. Drag to zoom in.' : 'Drag to zoom in.'}</title>
+        <rect
+          class="lane zoomable"
+          class:editable={row.editable && !ghost}
+          class:placing={ghost?.project === row.id}
+          x={LABEL}
+          y={y + 2}
+          width={track}
+          height={ROW - 4}
+          onpointerdown={(e) => press(e, row)}
+          onpointermove={(e) => (sweep(e), hover(e, row))}
+          onpointerleave={() => (hoverT = null)}
+          onpointerup={release}
+          onpointercancel={() => (pick = null)}
+        >
+          <title>{ghost?.project === row.id ? 'Click to start the job here' : row.editable && !ghost ? 'Click to add a start time here. Drag to zoom in.' : 'Drag to zoom in.'}</title>
         </rect>
 
-        <g clip-path="url(#tl-track)">
+        <g clip-path="url(#{uid}-track)">
           {#each row.past as c (c.start)}
             {#if visible(c.start, c.end)}
               <rect class="past" x={x(c.start)} y={y + 10} width={Math.max(3, x(c.end) - x(c.start))} height={ROW - 20} rx="3">
                 <title>{row.name}: ran {clockText(c.start)} to {clockText(c.end)} ({lengthText(c.end - c.start)}){c.limited ? ', hit a usage limit' : ''}{c.halted ? ', halted' : ''}</title>
               </rect>
-              {#if c.limited}<rect class="limited" x={x(c.start)} y={y + 10} width={Math.max(3, x(c.end) - x(c.start))} height={ROW - 20} rx="3" />{/if}
+              {#if c.limited}<rect class="limited" fill="url(#{uid}-limit)" x={x(c.start)} y={y + 10} width={Math.max(3, x(c.end) - x(c.start))} height={ROW - 20} rx="3" />{/if}
             {/if}
           {/each}
 
@@ -232,6 +288,44 @@
               </g>
             {/if}
           {/each}
+
+          {#each row.jobs || [] as job (job.id)}
+            {@const end = job.state === 'done' ? job.end : job.state === 'running' ? Math.max(now, job.start) : job.start}
+            {#if visible(job.start, Math.max(job.estEnd, end))}
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+              <g
+                class="job {job.state}"
+                class:plan={job.kind === 'plan'}
+                class:clickable={!!onjob}
+                role={onjob ? 'button' : 'img'}
+                tabindex={onjob ? 0 : -1}
+                aria-label="{job.kind === 'plan' ? 'Planning cycle' : `Backlog job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}"
+                onpointerdown={(e) => e.stopPropagation()}
+                onpointerenter={(e) => showTip(e, row, job)}
+                onpointermove={(e) => showTip(e, row, job)}
+                onpointerleave={() => (tip = null)}
+                onclick={() => onjob?.(row.id, job)}
+                onkeydown={(e) => jobKey(e, row, job)}
+              >
+                <rect class="est" x={x(job.start)} y={y + 6} width={Math.max(6, x(job.estEnd) - x(job.start))} height={ROW - 12} rx="4" />
+                {#if end > job.start}
+                  <rect class="did" fill="url(#{uid}-job)" x={x(job.start)} y={y + 10} width={Math.max(3, x(end) - x(job.start))} height={ROW - 20} rx="3" />
+                {/if}
+                {#if inside(job.start)}
+                  <line class="start" x1={x(job.start)} x2={x(job.start)} y1={y + 3} y2={y + ROW - 3} />
+                  <text class="mark" x={x(job.start) + 5} y={y + 19}>◆{job.order != null ? ` ${job.order}` : ''}</text>
+                {/if}
+              </g>
+            {/if}
+          {/each}
+
+          {#if ghost && ghost.project === row.id && hoverT != null}
+            <g class="ghost" class:bad={!ghostOk}>
+              <rect x={x(hoverT)} y={y + 6} width={Math.max(6, x(hoverT + ghost.minutes * 60000) - x(hoverT))} height={ROW - 12} rx="4" />
+              <line x1={x(hoverT)} x2={x(hoverT)} y1={y + 3} y2={y + ROW - 3} />
+              <text x={x(hoverT) + 4} y={y + ROW - 8}>{ghostOk ? clockText(hoverT) : 'not in the past'}</text>
+            </g>
+          {/if}
         </g>
       </g>
     {/each}
@@ -246,10 +340,25 @@
       <text class="picktext" x={pickBox.x + 4} y={height - 10}>{clockText(pickBox.from)} to {clockText(pickBox.to)}</text>
     {/if}
   </svg>
+  {#if tip}
+    <div class="tip panel lit" style="left: {tip.left}px; top: {tip.top}px" role="tooltip">
+      <div class="tt">
+        {#if tip.job.kind === 'plan'}Planning cycle{:else}{tip.job.order != null ? `#${tip.job.order} · ` : ''}{tip.job.title}{/if}
+      </div>
+      <div class="small dim">
+        {tip.row.name} · {JOB_STATE[tip.job.state]} {clockText(tip.job.start)}{tip.job.state === 'done' ? ` to ${clockText(tip.job.end)}` : ''}
+      </div>
+      <div class="small">
+        est {lengthText(tip.job.estEnd - tip.job.start)}{tip.job.cost != null ? ` · $${tip.job.cost.toFixed(2)}` : ''}{tip.job.state === 'done' ? ` · took ${lengthText(tip.job.end - tip.job.start)}` : ''}
+      </div>
+      {#if onjob}<div class="small dim">Click for details</div>{/if}
+    </div>
+  {/if}
 </div>
 
 <style>
   .wrap {
+    position: relative;
     width: 100%;
     overflow: hidden;
   }
@@ -313,8 +422,83 @@
     opacity: 0.85;
   }
   .limited {
-    fill: url(#tl-limit);
     pointer-events: none;
+  }
+  /* Backlog jobs: the estimate dashed in the accent colour, what ran hatched. */
+  .job .est {
+    fill: rgba(var(--glow), 0.08);
+    stroke: var(--accent);
+    stroke-width: 1.4;
+    stroke-dasharray: 3 3;
+  }
+  .job.done .est {
+    stroke-opacity: 0.6;
+  }
+  .job.running .did {
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .job .start {
+    stroke: var(--accent);
+    stroke-width: 3;
+  }
+  .job .mark {
+    fill: var(--ink-strong);
+    font-size: 10px;
+    font-weight: 700;
+    pointer-events: none;
+  }
+  .job.plan .est {
+    stroke: var(--ink-2);
+  }
+  .job.clickable {
+    cursor: pointer;
+  }
+  .job:focus-visible {
+    outline: none;
+  }
+  .job:focus-visible .est,
+  .job:hover .est {
+    stroke-width: 2.2;
+    stroke-dasharray: none;
+  }
+  .lane.placing {
+    cursor: crosshair;
+  }
+  .ghost {
+    pointer-events: none;
+  }
+  .ghost rect {
+    fill: rgba(var(--glow), 0.3);
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+  .ghost line {
+    stroke: var(--ink-strong);
+    stroke-width: 2;
+  }
+  .ghost text {
+    fill: var(--ink-strong);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .ghost.bad rect {
+    fill: rgba(248, 113, 113, 0.18);
+    stroke: var(--critical);
+  }
+  .tip {
+    position: absolute;
+    z-index: 20;
+    width: 270px;
+    padding: 8px 10px;
+    pointer-events: none;
+    background: var(--panel-solid);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .tt {
+    font-weight: 600;
+    font-size: 13px;
   }
   .running {
     fill: var(--row);

@@ -17,8 +17,12 @@ export async function load({ params, parent }) {
     noteScheduledStart(project, status);
   }
   const settings = getSettings();
+  const backlog = list(project, status);
+  // How long a planning cycle of this team takes: for placing one on the timeline.
+  const mins = backlog.plans.map((x) => x.minutes).filter((m) => Number.isFinite(m)).sort((a, b) => a - b);
   return {
-    backlog: list(project, status),
+    backlog,
+    planMinutes: mins.length ? Math.max(1, mins[Math.floor(mins.length / 2)]) : 5,
     ready,
     kitVersion: status?.kitVersion || null,
     atJobs: status?.atJobs || [],
