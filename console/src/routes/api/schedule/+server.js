@@ -6,13 +6,13 @@ import * as schedule from '$lib/server/schedule.js';
 /**
  * Cycle schedules: {action: 'set', project, tz, slots} replaces a project's
  * schedule on its VM, {action: 'clear', project} removes it, and
- * {action: 'settings', timezone, quiet} saves the owner's time zone and quiet hours.
+ * {action: 'settings', timezone, quiet, clock} saves the owner's time zone, quiet hours and 12 or 24 hour clock.
  */
 export async function POST({ request, locals }) {
   const b = await body(request);
   const user = locals.user;
   return reply(async () => {
-    if (b.action === 'settings') return schedule.saveSettings(user, { timezone: b.timezone, quiet: b.quiet });
+    if (b.action === 'settings') return schedule.saveSettings(user, { timezone: b.timezone, quiet: b.quiet, clock: b.clock });
     const project = typeof b.project === 'string' ? getProject(b.project) : null;
     if (!project) error(404, 'No such project');
     if (b.action === 'set') return schedule.setSchedule(user, project, { tz: b.tz, slots: b.slots });

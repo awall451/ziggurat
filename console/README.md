@@ -18,7 +18,7 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 | Gallery | Screenshots the gate took of the newest passing build, by day |
 | Briefs | A brief for every finished cycle and its spoken version (written by `workstation/agent-brief`); a cycle without one yet shows the lead's own final report |
 | Usage | Tokens and cost estimates by model, role and cycle, computed from the transcripts |
-| Schedule (all projects) | One timeline for every team: cycles that ran, the one running, and the slots still to come, by day, week or month. Drag a slot to another time, add or remove slots, mark your own quiet hours; overlaps between teams are pointed out |
+| Schedule (all projects) | One timeline for every team: cycles that ran, the one running, and the start times still to come, by day, week or month. Move and zoom through time, drag a start time to another time, add or remove them, mark your own quiet hours; overlaps between teams are pointed out |
 | Publishing (on Controls) | Copy the gate's main to a remote git repository: the project's key to add there, verify, publish now, and what was published or refused |
 | Controls | Halt now or after the cycle in progress (optionally asking the team to wrap up), resume, a one-shot job (one cycle for the work you describe, on a halted team or one between cycles, then back as it was), why an idle team is idle (daily cap, timer off, next cycle), stop at a set time, cycle cap, budget, models, gate pause, audit log |
 
@@ -54,23 +54,29 @@ Needs kit 0.2 or later on the VM (`sudo bash install.sh --upgrade`).
 
 ## Schedule
 
-By default a team runs its cycles back to back until its daily cap is used up. On the Schedule page (link in
-the header) you give a project **slots** instead: times of day, on every day or on chosen days of the week, in
-a time zone you pick. From then on its cycles start at those times only.
+By default a team runs its cycles back to back until its daily cap is used up. On the **Schedule** tab (top
+left, beside Projects) you give a project **start times** instead: times of day, on every day or on chosen
+days of the week, in a time zone you pick. From then on its cycles start at those times only.
 
-- **Day** and **Week** can be edited: drag a planned slot (it snaps to 15 minutes), click an empty place in a
-  row to add one, click a slot to set its time and days or to remove it. Changes are a draft until you press
-  **Save to the VM**. **Clear schedule** returns the project to back-to-back cycles.
-- **Month** is an overview: per day, the cycles that ran and the slots still to come.
-- A planned slot is drawn as long as that team's typical cycle (the median of its last ten). A cycle has no
+- **Day** and **Week** show a timeline; **Month** is an overview (per day, the cycles that ran and the start
+  times still to come). **Today** jumps back to now.
+- **Move through time** with the arrows (half of what is shown, so what was at the edge comes to the middle),
+  or scroll sideways over the timeline (Shift + wheel). **Zoom in** by dragging across empty space.
+- **Change times**: drag a planned start (it snaps to 15 minutes), click an empty place in a row to add one,
+  or click a start time to set its time and days or to remove it.
+- A change is **not active** until you press **Apply to <project>**, which sends the new times to that
+  project's VM. **Undo changes** drops it. **Remove all** returns the project to back-to-back cycles.
+- A planned start is drawn as long as that team's typical cycle (the median of its last ten). A cycle has no
   fixed length, so the end is a guess and overlaps between teams are "likely", not certain.
-- **Your hours**: mark the hours you work with Claude yourself. They are shaded, and a slot that starts in them
-  is pointed out. Nothing is blocked.
-- The page also warns when a project has more slots on a day than its daily cap allows: the cap still applies.
+- **Your hours**: the time zone of the timeline (picked by familiar names such as "EST · UTC-05:00 · Eastern
+  Time") and your quiet hours, the hours you work with Claude yourself. They are shaded, and a start time
+  inside them is pointed out. Nothing is blocked. **24 h / 12 h** switches how times are written.
+- The page also warns when a project has more start times on a day than its daily cap allows: the cap still
+  applies.
 
-If a slot comes while that team's previous cycle is still running, the slot is skipped (shown as a small ×).
-Halt, resume and one-shot jobs work as before. The schedule is kept on the VM and the VM starts the cycles, so
-it holds while the console is off. Needs kit 0.9 on the VM.
+If a start time comes while that team's previous cycle is still running, it is skipped (shown as a small ×).
+Halt, resume and one-shot jobs work as before. The times are kept on the VM and the VM starts the cycles, so
+they hold while the console is off. Needs kit 0.9 on the VM.
 
 ## Publishing
 

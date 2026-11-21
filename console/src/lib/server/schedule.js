@@ -12,7 +12,7 @@ import { audit } from './audit.js';
 import { invalidateStatus, kitAtLeast } from './live.js';
 import { readCycles } from './aggregate.js';
 import { statusSoon } from './view.js';
-import { parseScheduleText, formatScheduleText, validateSchedule, validateSettings, validTimeZone, rangeFor } from '../schedule.js';
+import { parseScheduleText, formatScheduleText, validateSchedule, validateSettings, validTimeZone, rangeFor, windowRange, cleanWindow } from '../schedule.js';
 
 export const SCHEDULE_KIT = '0.9.0';
 const SETTINGS_FILE = path.join(CONFIG_DIR, 'schedule.json');
@@ -31,7 +31,7 @@ export function getSettings() {
     /* a file edited by hand into something unusable: fall back */
   }
   const guess = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return { timezone: validTimeZone(guess) ? guess : 'UTC', quiet: [] };
+  return { timezone: validTimeZone(guess) ? guess : 'UTC', quiet: [], clock: '24' };
 }
 
 export function saveSettings(user, input) {
@@ -42,7 +42,7 @@ export function saveSettings(user, input) {
     throw fail(400, e.message);
   }
   writeJson(SETTINGS_FILE, s);
-  audit(user, null, 'schedule-settings', { timezone: s.timezone, quiet: s.quiet.length });
+  audit(user, null, 'schedule-settings', { timezone: s.timezone, quiet: s.quiet.length, clock: s.clock });
   return s;
 }
 
@@ -76,11 +76,22 @@ function readSlotLog(fleet, from, to) {
   return out;
 }
 
-/** Everything the Schedule page shows for one view. */
-export async function timeline({ view = 'week', date = null } = {}) {
+/**
+ * Everything the Schedule page shows. Either a calendar view (`view`, `date`),
+ * or any window (`from`, `to` in ms) that the owner panned or zoomed to; a
+ * window keeps `view` as the kind it came from ('day' or 'week').
+ * Past cycles and the slot log are given for a wider stretch than the window,
+ * so the page can pan a little before it has to ask again.
+ */
+export async function timeline({ view = 'week', date = null, from = null, to = null } = {}) {
   const settings = getSettings();
-  const v = VIEWS.includes(view) ? view : 'week';
-  const range = rangeFor(v, date, settings.timezone);
+  let v = VIEWS.includes(view) ? view : 'week';
+  const win = v === 'month' || from == null || to == null ? null : cleanWindow(Number(from), Number(to));
+  const range = win ? windowRange(win.from, win.to, settings.timezone) : rangeFor(v, date, settings.timezone);
+  const custom = !!win;
+  const pad = v === 'month' ? 0 : range.to - range.from;
+  const dataFrom = range.from - pad;
+  const dataTo = range.to + pad;
   const projects = await Promise.all(
     listProjects()
       .filter((p) => !p.hidden)
@@ -91,7 +102,7 @@ export async function timeline({ view = 'week', date = null } = {}) {
         for (const c of cycles) {
           const start = Date.parse(c.start);
           const end = Date.parse(c.end);
-          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= range.from || start >= range.to) continue;
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= dataFrom || start >= dataTo) continue;
           past.push({ start, end, limited: c.limited, halted: c.halted, costUsd: c.costUsd });
         }
         const since = status.leadActive && status.leadSince ? Date.parse(status.leadSince) : NaN;
@@ -108,11 +119,11 @@ export async function timeline({ view = 'week', date = null } = {}) {
           typicalSecs: typicalSecs(cycles),
           past,
           running: Number.isFinite(since) ? { start: since } : null,
-          log: readSlotLog(p.paths.fleet, range.from, range.to)
+          log: readSlotLog(p.paths.fleet, dataFrom, dataTo)
         };
       })
   );
-  return { view: v, range, settings, projects, now: Date.now() };
+  return { view: v, custom, range, settings, projects, now: Date.now() };
 }
 
 /** Replace a project's schedule on its VM. `input`: {tz, slots}. */

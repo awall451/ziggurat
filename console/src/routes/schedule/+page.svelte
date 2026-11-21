@@ -1,16 +1,41 @@
 <script>
-  import { invalidateAll } from '$app/navigation';
+  import { goto, invalidateAll } from '$app/navigation';
   import Timeline from '$lib/components/Timeline.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-  import { DAYS, plan, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock } from '$lib/schedule.js';
+  import { DAYS, plan, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
 
   let { data } = $props();
   const tl = $derived(data.timeline);
   const settings = $derived(tl.settings);
-  const range = $derived(tl.range);
-  const editable = $derived(tl.view !== 'month');
+  const clock = $derived(settings.clock);
+  const isMonth = $derived(tl.view === 'month');
+  const editable = $derived(!isMonth);
 
-  // Changes are kept here, per project, until they are saved to the VM.
+  // The stretch of time on screen. Moving and zooming change it here at once;
+  // the data for the new stretch is fetched a moment later.
+  let win = $state(null); // {from, to} while it differs from what the server sent
+  $effect(() => {
+    tl.range; // new data arrived: it is the window now
+    win = null;
+  });
+  const range = $derived(win ? windowRange(win.from, win.to, settings.timezone) : tl.range);
+  const span = $derived(range.to - range.from);
+  let fetching;
+  function show(from, to) {
+    const w = cleanWindow(from, to);
+    if (!w) return;
+    win = w;
+    clearTimeout(fetching);
+    fetching = setTimeout(() => goto(`/schedule?view=${tl.view}&from=${w.from}&to=${w.to}`, { replaceState: true, noScroll: true, keepFocus: true }), 250);
+  }
+  const pan = (ms) => show(range.from + ms, range.to + ms);
+  // A stretch picked by dragging: its ends go to the quarter hour.
+  const QUARTER = 900_000;
+  const zoom = (from, to) => show(Math.floor(from / QUARTER) * QUARTER, Math.ceil(to / QUARTER) * QUARTER);
+  // The arrows move half a window, so what was at the edge comes to the middle; a week moves by a day.
+  const stride = $derived(tl.view === 'week' && !tl.custom && !win ? 86_400_000 : span / 2);
+
+  // Changes are kept here, per project, until they are applied to the VM.
   let drafts = $state({});
   let selected = $state(null); // {project, slot}
   let busy = $state('');
@@ -22,8 +47,9 @@
   const copy = (v) => JSON.parse(JSON.stringify(v));
   const scheduleOf = (p) => (drafts[p.id] !== undefined ? drafts[p.id] : p.schedule);
   const usable = (s) => !!s && s.slots.length > 0 && validTimeZone(s.tz);
+  const changed = $derived(tl.projects.filter((p) => drafts[p.id] !== undefined));
 
-  // What is planned in the shown range, with drafts counted as if they were saved.
+  // What is planned in the shown stretch, with changes counted as if they were applied.
   const planning = $derived(
     plan(
       tl.projects.map((p) => ({ id: p.id, name: p.name, schedule: usable(scheduleOf(p)) ? scheduleOf(p) : null, typicalSecs: p.typicalSecs, cap: p.cap })),
@@ -38,9 +64,9 @@
     const s = scheduleOf(p);
     if (!p.reachable && p.reachable !== null) return 'VM not reachable';
     if (!p.canSchedule) return p.kitVersion ? `kit ${p.kitVersion}: needs 0.9` : 'no kit status yet';
-    if (drafts[p.id] !== undefined) return 'not saved yet';
+    if (drafts[p.id] !== undefined) return 'changed, not applied';
     if (!s) return 'back to back';
-    return `${s.slots.length} slot${s.slots.length === 1 ? '' : 's'}${p.cap != null ? ` · cap ${p.cap}` : ''}`;
+    return `${s.slots.length} start time${s.slots.length === 1 ? '' : 's'}${p.cap != null ? ` · cap ${p.cap}` : ''}`;
   }
   const rows = $derived(
     tl.projects.map((p) => ({
@@ -68,7 +94,7 @@
   function move(id, index, time) {
     const d = draftOf(id);
     if (clash(d, { ...d.slots[index], time }, index)) {
-      problem = 'There is already a slot at that time on the same days.';
+      problem = 'There is already a start time then, on the same days.';
       return;
     }
     problem = '';
@@ -77,7 +103,8 @@
   }
   function add(id, time, day) {
     const d = draftOf(id);
-    const slot = { days: tl.view === 'week' ? [day] : ['daily'], time };
+    // In a stretch of several days a click means that day; otherwise every day.
+    const slot = { days: span > 36 * 3_600_000 ? [day] : ['daily'], time };
     if (clash(d, slot, -1)) return;
     problem = '';
     d.slots.push(slot);
@@ -131,7 +158,7 @@
       confirm = null;
     }
   }
-  async function save(p) {
+  async function apply(p) {
     let s;
     try {
       s = validateSchedule(drafts[p.id]);
@@ -139,27 +166,31 @@
       problem = `${p.name}: ${e.message}`;
       return;
     }
-    const out = await send({ action: 'set', project: p.id, tz: s.tz, slots: s.slots }, `save-${p.id}`);
+    const out = await send({ action: 'set', project: p.id, tz: s.tz, slots: s.slots }, `apply-${p.id}`);
     if (!out) return;
     discard(p.id);
-    done = `${p.name}: schedule saved. Cycles now start at its slots only.`;
+    done = `${p.name}: applied. Its cycles now start at these times only.`;
   }
   function askClear(p) {
     confirm = {
-      title: `Clear the schedule of ${p.name}?`,
-      body: 'Its cycles follow each other again, 15 minutes apart, until the daily cap is used up. That is how every team runs without a schedule.',
-      word: 'Clear schedule',
+      title: `Remove all start times of ${p.name}?`,
+      body: 'Its cycles follow each other again, 15 minutes apart, until the daily cap is used up. That is how every team runs without set times.',
+      word: 'Remove all',
       danger: true,
       run: async () => {
         const out = await send({ action: 'clear', project: p.id }, `clear-${p.id}`);
         if (!out) return;
         discard(p.id);
-        done = `${p.name}: schedule cleared.`;
+        done = `${p.name}: start times removed. Its cycles run back to back again.`;
       }
     };
   }
 
-  // Quiet hours and the time zone of the timeline.
+  // The owner's own settings: time zone of the timeline, clock, quiet hours.
+  async function setClock(value) {
+    if (value === clock) return;
+    await send({ action: 'settings', timezone: settings.timezone, quiet: settings.quiet, clock: value }, 'clock');
+  }
   function editSettings() {
     quietDraft = copy(settings);
   }
@@ -174,27 +205,39 @@
     q.days = days.length === 7 ? ['daily'] : days;
   }
   async function saveSettings() {
-    const out = await send({ action: 'settings', timezone: quietDraft.timezone, quiet: quietDraft.quiet }, 'settings');
+    const out = await send({ action: 'settings', timezone: quietDraft.timezone, quiet: quietDraft.quiet, clock }, 'settings');
     if (!out) return;
     quietDraft = null;
-    done = 'Settings saved.';
+    done = 'Saved.';
   }
 
-  const zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
+  // Time zones by the names people use, plus whatever is already in use here.
+  const zones = $derived(zoneChoices([settings.timezone, ...tl.projects.map((p) => scheduleOf(p)?.tz).filter(Boolean), quietDraft?.timezone].filter(Boolean), tl.now));
   const link = (view, date) => `/schedule?view=${view}${date ? `&date=${date}` : ''}`;
   const has = (slot, day) => slot.days[0] === 'daily' || slot.days.includes(day);
   const daysText = (slot) => (slot.days[0] === 'daily' ? 'every day' : slot.days.map((d) => d[0].toUpperCase() + d.slice(1)).join(', '));
+  const two = (n) => String(n).padStart(2, '0');
+  const clockAt = (ms) => {
+    const c = wallClock(settings.timezone, ms);
+    return clockLabel(`${two(c.H)}:${two(c.M)}`, clock);
+  };
+  const dateText = (d, o) => new Date(`${d}T12:00:00Z`).toLocaleDateString([], { timeZone: 'UTC', ...o });
   const rangeText = $derived.by(() => {
-    const f = (d, o) => new Date(`${d}T12:00:00Z`).toLocaleDateString([], { timeZone: 'UTC', ...o });
-    if (tl.view === 'day') return f(range.days[0].date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    if (tl.view === 'month') return f(range.days[0].date, { month: 'long', year: 'numeric' });
-    return `${f(range.days[0].date, { day: 'numeric', month: 'short' })} to ${f(range.days.at(-1).date, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    if (isMonth) return dateText(range.days[0].date, { month: 'long', year: 'numeric' });
+    const first = range.days[0];
+    const last = range.days.at(-1);
+    const whole = range.from === first.from && range.to === last.to;
+    if (whole && range.days.length === 1) return dateText(first.date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    if (whole) return `${dateText(first.date, { day: 'numeric', month: 'short' })} to ${dateText(last.date, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    const endDay = range.days.findLast((d) => d.from < range.to) || last;
+    return `${dateText(first.date, { weekday: 'short', day: 'numeric', month: 'short' })}, ${clockAt(range.from)} to ${dateText(endDay.date, { weekday: 'short', day: 'numeric', month: 'short' })}, ${clockAt(range.to)}`;
   });
   const lengthText = (secs) => (secs >= 3600 ? `${Math.floor(secs / 3600)} h ${String(Math.round((secs % 3600) / 60)).padStart(2, '0')} min` : `${Math.round(secs / 60)} min`);
+  const strideText = $derived(stride >= 86_400_000 ? `${Math.round(stride / 86_400_000)} day${stride >= 2 * 86_400_000 ? 's' : ''}` : stride >= 3_600_000 ? `${Math.round(stride / 3_600_000)} hours` : `${Math.round(stride / 60000)} minutes`);
 
-  // Month: per project and day, cycles that ran and slots still to come.
+  // Month: per project and day, cycles that ran and start times still to come.
   const month = $derived.by(() => {
-    if (tl.view !== 'month') return [];
+    if (!isMonth) return [];
     return tl.projects.map((p) => ({
       p,
       cells: range.days.map((day) => ({
@@ -206,207 +249,232 @@
     }));
   });
   const today = $derived(todayIn(settings.timezone, tl.now));
-  const zoneClock = $derived.by(() => {
-    const c = wallClock(settings.timezone, tl.now);
-    return `${String(c.H).padStart(2, '0')}:${String(c.M).padStart(2, '0')}`;
-  });
 </script>
 
 <svelte:head><title>Schedule · Ziggurat</title></svelte:head>
 
 <div class="page">
-<div class="top">
-  <div>
-    <h1>Schedule</h1>
-    <p class="dim small">
-      When each team's cycles start. Times in {settings.timezone} (now {zoneClock}). A team without a schedule runs its cycles back to back.
-    </p>
-  </div>
-  <span class="grow"></span>
-  <div class="seg" role="tablist" aria-label="View">
-    {#each ['day', 'week', 'month'] as v (v)}
-      <a class="btn quiet" class:on={tl.view === v} role="tab" aria-selected={tl.view === v} href={link(v, range.date)}>{v[0].toUpperCase() + v.slice(1)}</a>
-    {/each}
-  </div>
-  <div class="seg">
-    <a class="btn quiet" href={link(tl.view, range.prev)} aria-label="Earlier">‹</a>
-    <a class="btn quiet" href={link(tl.view, null)}>Today</a>
-    <a class="btn quiet" href={link(tl.view, range.next)} aria-label="Later">›</a>
-  </div>
-</div>
-
-{#if problem}<div class="panel note bad" role="alert">{problem}</div>{/if}
-{#if done}<div class="panel note good" role="status">{done}</div>{/if}
-
-<section class="panel block">
-  <div class="row">
-    <h2>{rangeText}</h2>
+  <div class="top">
+    <div>
+      <h1>Schedule</h1>
+      <p class="dim small">When each team's cycles start. Times in {zoneLabel(settings.timezone, tl.now)}, now {clockAt(tl.now)}. A team with no start times runs its cycles back to back.</p>
+    </div>
     <span class="grow"></span>
-    <span class="legend small dim">
-      <span class="key past"></span> ran <span class="key plan"></span> planned (typical length) <span class="key quiet"></span> quiet hours
-      <span class="key over"></span> likely overlap
-    </span>
+    <div class="seg" aria-label="Clock">
+      <button class="btn quiet" class:on={clock === '24'} aria-pressed={clock === '24'} onclick={() => setClock('24')} disabled={!!busy}>24 h</button>
+      <button class="btn quiet" class:on={clock === '12'} aria-pressed={clock === '12'} onclick={() => setClock('12')} disabled={!!busy}>12 h</button>
+    </div>
+    <div class="seg" aria-label="How much time to show">
+      {#each ['day', 'week', 'month'] as v (v)}
+        <a class="btn quiet" class:on={tl.view === v && !tl.custom && !win} aria-current={tl.view === v && !tl.custom && !win ? 'page' : undefined} href={link(v, range.date)}>{v[0].toUpperCase() + v.slice(1)}</a>
+      {/each}
+      <a class="btn quiet" href={link(tl.view, null)} title="Jump to today">Today</a>
+    </div>
+    <div class="seg" aria-label="Move through time">
+      {#if isMonth}
+        <a class="btn quiet" href={link('month', tl.range.prev)} aria-label="Earlier" title="The month before">‹</a>
+        <a class="btn quiet" href={link('month', tl.range.next)} aria-label="Later" title="The month after">›</a>
+      {:else}
+        <button class="btn quiet" onclick={() => pan(-stride)} aria-label="Earlier" title="{strideText} earlier">‹</button>
+        <button class="btn quiet" onclick={() => pan(stride)} aria-label="Later" title="{strideText} later">›</button>
+      {/if}
+    </div>
   </div>
 
-  {#if !tl.projects.length}
-    <p class="dim">No projects yet.</p>
-  {:else if tl.view === 'month'}
-    <div class="scroll-x">
-      <div class="month" style="--days: {range.days.length}">
-        <span></span>
-        {#each range.days as day (day.date)}
-          <a class="mhead small" class:today={day.date === today} href={link('day', day.date)} title="Open this day">{Number(day.date.slice(8))}<br /><span class="dim">{day.name[0].toUpperCase()}</span></a>
-        {/each}
-        {#each month as r (r.p.id)}
-          <span class="mname" style="--row: {r.p.accent}">{r.p.name}</span>
-          {#each r.cells as c (c.day.date)}
-            <span class="mcell" class:today={c.day.date === today} style="--row: {r.p.accent}" title="{r.p.name}, {c.day.date}: {c.ran} ran{c.limited ? ' (usage limit hit)' : ''}, {c.planned} planned">
-              {#if c.ran}<b class:limited={c.limited}>{c.ran}</b>{/if}
-              {#if c.planned}<i>{c.planned}</i>{/if}
-            </span>
-          {/each}
-        {/each}
-      </div>
-    </div>
-    <p class="dim small">Per day: cycles that ran (filled) and slots still to come (outlined). Open a day or the week to change times.</p>
-  {:else}
-    <Timeline {rows} {range} view={tl.view} tz={settings.timezone} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} />
-    <p class="dim small">Drag a planned slot to another time (it snaps to 15 minutes), or click an empty place in a row to add one. Nothing changes on a VM until you save.</p>
-  {/if}
-</section>
+  {#if problem}<div class="panel note bad" role="alert">{problem}</div>{/if}
+  {#if done}<div class="panel note good" role="status">{done}</div>{/if}
 
-{#if sel && editable}
-  <section class="panel lit block" aria-label="Selected slot">
+  <section class="panel block">
     <div class="row">
-      <h2>{sel.p.name}: slot at {sel.slot.time}, {daysText(sel.slot)}</h2>
+      <h2>{rangeText}</h2>
       <span class="grow"></span>
-      <button class="btn quiet" onclick={() => (selected = null)}>Close</button>
+      <span class="legend small dim">
+        <span class="key past"></span> ran <span class="key plan"></span> planned (typical length) <span class="key quiet"></span> quiet hours
+        <span class="key over"></span> likely overlap
+      </span>
     </div>
-    <div class="row wrap">
-      <label class="stack"
-        ><span class="small dim">Start ({scheduleOf(sel.p).tz})</span>
-        <input class="field mono" type="time" step="900" value={sel.slot.time} onchange={(e) => setTime(e.currentTarget.value)} /></label
-      >
-      <div class="stack">
-        <span class="small dim">Days</span>
-        <div class="days">
-          {#each DAYS as day (day)}
-            <button class="btn quiet day" class:on={has(sel.slot, day)} aria-pressed={has(sel.slot, day)} onclick={() => toggleDay(day)}>{day[0].toUpperCase() + day.slice(1)}</button>
+
+    {#if !tl.projects.length}
+      <p class="dim">No projects yet.</p>
+    {:else if isMonth}
+      <div class="scroll-x">
+        <div class="month" style="--days: {range.days.length}">
+          <span></span>
+          {#each range.days as day (day.date)}
+            <a class="mhead small" class:today={day.date === today} href={link('day', day.date)} title="Open this day">{Number(day.date.slice(8))}<br /><span class="dim">{day.name[0].toUpperCase()}</span></a>
+          {/each}
+          {#each month as r (r.p.id)}
+            <span class="mname" style="--row: {r.p.accent}">{r.p.name}</span>
+            {#each r.cells as c (c.day.date)}
+              <span class="mcell" class:today={c.day.date === today} style="--row: {r.p.accent}" title="{r.p.name}, {c.day.date}: {c.ran} ran{c.limited ? ' (usage limit hit)' : ''}, {c.planned} planned">
+                {#if c.ran}<b class:limited={c.limited}>{c.ran}</b>{/if}
+                {#if c.planned}<i>{c.planned}</i>{/if}
+              </span>
+            {/each}
           {/each}
         </div>
       </div>
-      <span class="grow"></span>
-      <button class="btn stop" onclick={removeSlot}>Remove slot</button>
-    </div>
-    <p class="dim small">A cycle of {sel.p.name} typically takes {lengthText(sel.p.typicalSecs)} (median of its last cycles). If the previous cycle is still running when a slot comes, that slot is skipped.</p>
+      <p class="dim small">Per day: cycles that ran (filled) and start times still to come (outlined). Open a day or the week to change times.</p>
+    {:else}
+      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} />
+      <p class="dim small">
+        <b>Move through time:</b> the arrows, or scroll sideways (Shift + wheel). <b>Zoom in:</b> drag across empty space. <b>Change times:</b> drag a planned start, or
+        click an empty place in a row to add one. Changes are not active until you apply them.
+      </p>
+    {/if}
   </section>
-{/if}
 
-{#if planning.warnings.length}
-  <section class="panel note caution block">
-    <h2>Worth a look</h2>
-    <ul class="warns">
-      {#each planning.warnings as w (w.kind + w.text)}<li>{w.text}</li>{/each}
-    </ul>
-    <p class="dim small">Nothing here is blocked. A cycle has no fixed length: overlaps are judged from each team's typical one.</p>
-  </section>
-{/if}
+  {#if changed.length}
+    <section class="panel note caution block" aria-label="Changes not applied yet">
+      <h2>Not active yet</h2>
+      <p class="small">You changed start times here. A team keeps its old times until you apply the change, which sends the new times to that team's VM.</p>
+      {#each changed as p (p.id)}
+        <div class="row wrap">
+          <span class="grow"><b>{p.name}</b>: {scheduleOf(p).slots.length ? scheduleOf(p).slots.map((s) => `${clockLabel(s.time, clock)} ${daysText(s)}`).join(' · ') : 'no start times left'}</span>
+          <button class="btn go" onclick={() => apply(p)} disabled={!!busy || !usable(scheduleOf(p))}>{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
+          <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Undo changes</button>
+        </div>
+      {/each}
+    </section>
+  {/if}
 
-<div class="cols">
-  {#each tl.projects as p (p.id)}
-    {@const s = scheduleOf(p)}
-    <section class="panel block" style="--row: {p.accent}">
+  {#if sel && editable}
+    <section class="panel lit block" aria-label="Selected start time">
       <div class="row">
-        <h2><span class="dot"></span>{p.name}</h2>
+        <h2>{sel.p.name}: starts at {clockLabel(sel.slot.time, clock)}, {daysText(sel.slot)}</h2>
         <span class="grow"></span>
-        <a class="small" href="/p/{p.id}/controls">Controls</a>
+        <button class="btn quiet" onclick={() => (selected = null)}>Close</button>
       </div>
-      {#if !p.canSchedule}
-        <p class="dim">{p.kitVersion ? `This VM runs kit ${p.kitVersion}. Schedules need kit 0.9 or later.` : 'The VM does not answer, or has no kit yet.'}</p>
-      {:else}
-        <p class="small dim">
-          {#if !s}No schedule: cycles follow each other until the daily cap{p.cap != null ? ` (${p.cap})` : ''} is used up.
-          {:else if drafts[p.id] !== undefined}Changed here, not saved to the VM yet.
-          {:else}Cycles start only at these times. Daily cap: {p.cap ?? 'not known'}. Typical cycle: {lengthText(p.typicalSecs)}.{/if}
-        </p>
-        {#if s}
-          <label class="stack"
-            ><span class="small dim">Time zone of these times</span>
-            <input
-              class="field mono"
-              list="zones"
-              value={s.tz}
-              onchange={(e) => {
-                draftOf(p.id).tz = e.currentTarget.value.trim();
-              }}
-            /></label
-          >
-          {#if !validTimeZone(s.tz)}<p class="s-failed small">Not a time zone name. Example: Europe/Amsterdam.</p>{/if}
-          <div class="chips">
-            {#each s.slots as slot, i (slotId(slot) + i)}
-              <button class="btn quiet chipbtn mono" class:on={selected?.project === p.id && selected.slot === i} onclick={() => select(p.id, i)} disabled={!editable}>
-                {slot.time} <span class="dim">{daysText(slot)}</span>
-              </button>
+      <div class="row wrap">
+        <label class="stack"
+          ><span class="small dim">Start</span>
+          <input class="field mono" type="time" step="900" value={sel.slot.time} onchange={(e) => setTime(e.currentTarget.value)} /></label
+        >
+        <div class="stack">
+          <span class="small dim">On</span>
+          <div class="days">
+            {#each DAYS as day (day)}
+              <button class="btn quiet day" class:on={has(sel.slot, day)} aria-pressed={has(sel.slot, day)} onclick={() => toggleDay(day)}>{day[0].toUpperCase() + day.slice(1)}</button>
             {/each}
-            {#if !s.slots.length}<span class="dim small">No slots yet.</span>{/if}
+          </div>
+        </div>
+        <span class="grow"></span>
+        <button class="btn stop" onclick={removeSlot}>Remove this start time</button>
+      </div>
+      <p class="dim small">
+        Time zone: {zoneLabel(scheduleOf(sel.p).tz, tl.now)}. A cycle of {sel.p.name} typically takes {lengthText(sel.p.typicalSecs)}. If its previous cycle is still running at a
+        start time, that one is skipped.
+      </p>
+    </section>
+  {/if}
+
+  {#if planning.warnings.length}
+    <section class="panel note caution block">
+      <h2>Worth a look</h2>
+      <ul class="warns">
+        {#each planning.warnings as w (w.kind + w.text)}<li>{w.text}</li>{/each}
+      </ul>
+      <p class="dim small">Nothing here is blocked. A cycle has no fixed length: overlaps are judged from each team's typical one.</p>
+    </section>
+  {/if}
+
+  <div class="cols">
+    {#each tl.projects as p (p.id)}
+      {@const s = scheduleOf(p)}
+      <section class="panel block" style="--row: {p.accent}">
+        <div class="row">
+          <h2><span class="dot"></span>{p.name}</h2>
+          <span class="grow"></span>
+          <a class="small" href="/p/{p.id}/controls">Controls</a>
+        </div>
+        {#if !p.canSchedule}
+          <p class="dim">{p.kitVersion ? `This VM runs kit ${p.kitVersion}. Start times need kit 0.9 or later.` : 'The VM does not answer, or has no kit yet.'}</p>
+        {:else}
+          <p class="small dim">
+            {#if !s}No start times: its cycles follow each other until the daily cap{p.cap != null ? ` (${p.cap})` : ''} is used up.
+            {:else if drafts[p.id] !== undefined}Changed here. Not active until you apply it.
+            {:else}Its cycles start only at these times. Daily cap: {p.cap ?? 'not known'}. Typical cycle: {lengthText(p.typicalSecs)}.{/if}
+          </p>
+          {#if s}
+            <div class="chips">
+              {#each s.slots as slot, i (slotId(slot) + i)}
+                <button class="btn quiet chipbtn mono" class:on={selected?.project === p.id && selected.slot === i} onclick={() => select(p.id, i)} disabled={!editable} title="Change or remove this start time">
+                  {clockLabel(slot.time, clock)} <span class="dim">{daysText(slot)}</span>
+                </button>
+              {/each}
+              {#if !s.slots.length}<span class="dim small">None yet.</span>{/if}
+            </div>
+            <label class="stack"
+              ><span class="small dim">These times are in</span>
+              <select
+                class="field"
+                value={s.tz}
+                onchange={(e) => {
+                  draftOf(p.id).tz = e.currentTarget.value;
+                }}
+                disabled={!editable}
+              >
+                {#each zones as z (z.tz)}<option value={z.tz}>{z.label}</option>{/each}
+              </select></label
+            >
+          {/if}
+          <div class="row wrap">
+            <button class="btn quiet" onclick={() => add(p.id, '00:00', range.days[0].name)} disabled={!editable || !!busy} title="Adds a start time at midnight; then set its time and days">+ Start time</button>
+            {#if drafts[p.id] !== undefined}
+              <button class="btn go" onclick={() => apply(p)} disabled={!!busy || !usable(s)} title="Send these start times to {p.name}'s VM">{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
+              <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Undo changes</button>
+            {/if}
+            <span class="grow"></span>
+            {#if p.schedule}<button class="btn quiet" onclick={() => askClear(p)} disabled={!!busy}>Remove all…</button>{/if}
           </div>
         {/if}
-        <div class="row wrap">
-          <button class="btn quiet" onclick={() => add(p.id, '00:00', range.days[0].name)} disabled={!editable || !!busy}>Add a slot</button>
-          {#if drafts[p.id] !== undefined}
-            <button class="btn go" onclick={() => save(p)} disabled={!!busy || !usable(s)}>{busy === `save-${p.id}` ? 'Saving…' : 'Save to the VM'}</button>
-            <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Discard changes</button>
-          {/if}
-          <span class="grow"></span>
-          {#if p.schedule}<button class="btn quiet" onclick={() => askClear(p)} disabled={!!busy}>Clear schedule…</button>{/if}
-        </div>
-      {/if}
-    </section>
-  {/each}
-</div>
-<datalist id="zones">
-  {#each zones as z (z)}<option value={z}></option>{/each}
-</datalist>
-
-<section class="panel block">
-  <div class="row">
-    <h2>Your hours</h2>
-    <span class="grow"></span>
-    {#if !quietDraft}<button class="btn quiet" onclick={editSettings}>Change</button>{/if}
-  </div>
-  {#if !quietDraft}
-    <p class="small dim">
-      The timeline is shown in {settings.timezone}.
-      {#if settings.quiet.length}
-        Quiet hours: {settings.quiet.map((q) => `${daysText(q)} ${q.from} to ${q.to}`).join('; ')}.
-      {:else}
-        No quiet hours set.
-      {/if}
-      Quiet hours are shaded and a slot that starts in them is pointed out. Nothing is blocked.
-    </p>
-  {:else}
-    <label class="stack narrow"><span class="small dim">Time zone of the timeline</span><input class="field mono" list="zones" bind:value={quietDraft.timezone} /></label>
-    {#each quietDraft.quiet as q, i (i)}
-      <div class="row wrap">
-        <div class="days">
-          {#each DAYS as day (day)}
-            <button class="btn quiet day" class:on={has(q, day)} aria-pressed={has(q, day)} onclick={() => toggleQuietDay(q, day)}>{day[0].toUpperCase() + day.slice(1)}</button>
-          {/each}
-        </div>
-        <input class="field mono" type="time" bind:value={q.from} aria-label="From" />
-        <span class="dim">to</span>
-        <input class="field mono" type="time" bind:value={q.to} aria-label="To" />
-        <button class="btn quiet" onclick={() => quietDraft.quiet.splice(i, 1)}>Remove</button>
-      </div>
+      </section>
     {/each}
-    <div class="row wrap">
-      <button class="btn quiet" onclick={addQuiet}>Add quiet hours</button>
-      <button class="btn go" onclick={saveSettings} disabled={!!busy}>{busy === 'settings' ? 'Saving…' : 'Save'}</button>
-      <button class="btn quiet" onclick={() => (quietDraft = null)} disabled={!!busy}>Cancel</button>
-    </div>
-  {/if}
-</section>
+  </div>
 
+  <section class="panel block">
+    <div class="row">
+      <h2>Your hours</h2>
+      <span class="grow"></span>
+      {#if !quietDraft}<button class="btn quiet" onclick={editSettings}>Change</button>{/if}
+    </div>
+    {#if !quietDraft}
+      <p class="small dim">
+        The timeline is shown in {zoneLabel(settings.timezone, tl.now)}.
+        {#if settings.quiet.length}
+          Quiet hours: {settings.quiet.map((q) => `${daysText(q)} ${clockLabel(q.from, clock)} to ${clockLabel(q.to, clock)}`).join('; ')}.
+        {:else}
+          No quiet hours set.
+        {/if}
+        Quiet hours are shaded, and a start time inside them is pointed out. Nothing is blocked.
+      </p>
+    {:else}
+      <label class="stack narrow"
+        ><span class="small dim">Time zone of the timeline</span>
+        <select class="field" bind:value={quietDraft.timezone}>
+          {#each zones as z (z.tz)}<option value={z.tz}>{z.label}</option>{/each}
+        </select></label
+      >
+      {#each quietDraft.quiet as q, i (i)}
+        <div class="row wrap">
+          <div class="days">
+            {#each DAYS as day (day)}
+              <button class="btn quiet day" class:on={has(q, day)} aria-pressed={has(q, day)} onclick={() => toggleQuietDay(q, day)}>{day[0].toUpperCase() + day.slice(1)}</button>
+            {/each}
+          </div>
+          <input class="field mono" type="time" bind:value={q.from} aria-label="From" />
+          <span class="dim">to</span>
+          <input class="field mono" type="time" bind:value={q.to} aria-label="To" />
+          <button class="btn quiet" onclick={() => quietDraft.quiet.splice(i, 1)}>Remove</button>
+        </div>
+      {/each}
+      <div class="row wrap">
+        <button class="btn quiet" onclick={addQuiet}>+ Quiet hours</button>
+        <button class="btn go" onclick={saveSettings} disabled={!!busy}>{busy === 'settings' ? 'Saving…' : 'Save'}</button>
+        <button class="btn quiet" onclick={() => (quietDraft = null)} disabled={!!busy}>Cancel</button>
+      </div>
+    {/if}
+  </section>
 </div>
 
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
@@ -479,7 +547,10 @@
     gap: 4px;
   }
   .stack.narrow {
-    max-width: 320px;
+    max-width: 460px;
+  }
+  select.field {
+    min-height: 36px;
   }
   .days,
   .chips {

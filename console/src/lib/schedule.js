@@ -174,6 +174,34 @@ export function rangeFor(view, date, tz, now = Date.now()) {
   return { from: days[0].from, to: days.at(-1).to, date: dateString(d), prev: dateString(prev), next: dateString(next), days };
 }
 
+export const MIN_WINDOW = 3_600_000; // one hour
+export const MAX_WINDOW = 62 * DAY_MS;
+
+/**
+ * Any stretch of time as a range the timeline can draw: {from, to, days}, where
+ * `days` are the calendar days in `tz` that it touches (whole days, so a day's
+ * own from/to may lie outside the window).
+ */
+export function windowRange(from, to, tz) {
+  const days = [];
+  let day = parseDate(todayIn(tz, from));
+  for (let i = 0; i < 70; i++) {
+    const start = startOfDay(tz, day);
+    if (start >= to) break;
+    const next = addDays(day, 1);
+    days.push({ date: dateString(day), name: dayName(day), from: start, to: startOfDay(tz, next) });
+    day = next;
+  }
+  return { from, to, days, date: days[0]?.date ?? todayIn(tz, from) };
+}
+
+/** A window kept inside sensible limits: at least an hour, at most two months. null when it is not one. */
+export function cleanWindow(from, to) {
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  const span = Math.min(Math.max(to - from, MIN_WINDOW), MAX_WINDOW);
+  return { from: Math.round(from), to: Math.round(from + span) };
+}
+
 /** Every start a schedule plans in [from, to): [{at, slot (index), id}], oldest first. */
 export function occurrences(schedule, from, to) {
   if (!schedule?.slots?.length) return [];
@@ -206,9 +234,98 @@ export function timeOfDay(tz, ms, snap = 15) {
   return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
 }
 
+// ---- how times and zones are shown --------------------------------------------
+
+/** 'HH:MM' as the owner reads it: '13:30' or '1:30 PM'. */
+export function clockLabel(time, clock = '24') {
+  if (clock !== '12') return time;
+  const [H, M] = time.split(':').map(Number);
+  return `${H % 12 || 12}:${pad(M)} ${H < 12 ? 'AM' : 'PM'}`;
+}
+/** An hour on the axis: '14' or '2p'. */
+export function hourLabel(H, clock = '24') {
+  if (clock !== '12') return pad(H);
+  return `${H % 12 || 12}${H < 12 ? 'a' : 'p'}`;
+}
+
+// The zones people usually mean, with the names they are known by. The list a
+// browser offers has several hundred city names, most of them unfamiliar.
+const COMMON_ZONES = [
+  ['Pacific/Honolulu', 'Hawaii Time'],
+  ['America/Anchorage', 'Alaska Time'],
+  ['America/Los_Angeles', 'Pacific Time (Los Angeles)'],
+  ['America/Phoenix', 'Mountain Time, no daylight saving (Phoenix)'],
+  ['America/Denver', 'Mountain Time (Denver)'],
+  ['America/Chicago', 'Central Time (Chicago)'],
+  ['America/New_York', 'Eastern Time (New York)'],
+  ['America/Halifax', 'Atlantic Time (Halifax)'],
+  ['America/Mexico_City', 'Mexico City'],
+  ['America/Bogota', 'Colombia, Peru (Bogota)'],
+  ['America/Sao_Paulo', 'Brasilia Time (Sao Paulo)'],
+  ['America/Argentina/Buenos_Aires', 'Argentina (Buenos Aires)'],
+  ['UTC', 'Coordinated Universal Time'],
+  ['Europe/London', 'UK Time (London)'],
+  ['Europe/Lisbon', 'Western European Time (Lisbon)'],
+  ['Europe/Amsterdam', 'Central European Time (Amsterdam, Berlin, Paris)'],
+  ['Europe/Athens', 'Eastern European Time (Athens, Helsinki)'],
+  ['Europe/Istanbul', 'Turkey (Istanbul)'],
+  ['Europe/Moscow', 'Moscow Time'],
+  ['Africa/Lagos', 'West Africa Time (Lagos)'],
+  ['Africa/Cairo', 'Egypt (Cairo)'],
+  ['Africa/Johannesburg', 'South Africa (Johannesburg)'],
+  ['Asia/Dubai', 'Gulf Time (Dubai)'],
+  ['Asia/Karachi', 'Pakistan (Karachi)'],
+  ['Asia/Kolkata', 'India Time (Kolkata)'],
+  ['Asia/Dhaka', 'Bangladesh (Dhaka)'],
+  ['Asia/Bangkok', 'Indochina Time (Bangkok, Jakarta)'],
+  ['Asia/Shanghai', 'China Time (Shanghai)'],
+  ['Asia/Singapore', 'Singapore, Malaysia'],
+  ['Asia/Tokyo', 'Japan Time (Tokyo)'],
+  ['Asia/Seoul', 'Korea Time (Seoul)'],
+  ['Australia/Perth', 'Australian Western Time (Perth)'],
+  ['Australia/Adelaide', 'Australian Central Time (Adelaide)'],
+  ['Australia/Sydney', 'Australian Eastern Time (Sydney)'],
+  ['Pacific/Auckland', 'New Zealand Time (Auckland)']
+];
+
+/** Minutes a zone is ahead of UTC at instant `ms`. */
+function offsetMinutes(tz, ms) {
+  const c = wallClock(tz, ms);
+  return Math.round((Date.UTC(c.y, c.m - 1, c.d, c.H, c.M) - Math.floor(ms / 60000) * 60000) / 60000);
+}
+/** 'EST', 'CDT'... when the zone has a letter name in English; '' otherwise. */
+function shortName(tz, ms) {
+  try {
+    const part = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(new Date(ms)).find((p) => p.type === 'timeZoneName');
+    return part && /^[A-Z]{2,5}$/.test(part.value) && part.value !== 'GMT' ? part.value : '';
+  } catch {
+    return '';
+  }
+}
+/** 'EST · UTC-05:00 · Eastern Time (New York)' for a zone, as of `now`. */
+export function zoneLabel(tz, now = Date.now()) {
+  if (!validTimeZone(tz)) return tz;
+  const off = offsetMinutes(tz, now);
+  const sign = off < 0 ? '-' : '+';
+  const utc = tz === 'UTC' ? 'UTC' : `UTC${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`;
+  const known = COMMON_ZONES.find(([z]) => z === tz);
+  const abbr = shortName(tz, now);
+  return [abbr, abbr === utc ? '' : utc, known ? known[1] : tz.replace(/_/g, ' ')].filter(Boolean).join(' · ');
+}
+/** The zones offered in a picker, west to east: [{tz, label}]. `also`: zones in use that are not on the list. */
+export function zoneChoices(also = [], now = Date.now()) {
+  const all = [...COMMON_ZONES.map(([z]) => z)];
+  for (const z of also) if (validTimeZone(z) && !all.includes(z)) all.push(z);
+  return all
+    .filter((z) => validTimeZone(z))
+    .map((tz) => ({ tz, label: zoneLabel(tz, now), off: offsetMinutes(tz, now) }))
+    .sort((a, b) => a.off - b.off || a.label.localeCompare(b.label))
+    .map(({ tz, label }) => ({ tz, label }));
+}
+
 // ---- quiet hours and warnings ------------------------------------------------
 
-/** Owner settings: {timezone, quiet: [{days, from, to}]}. Throws an Error that says what is wrong. */
+/** Owner settings: {timezone, quiet: [{days, from, to}], clock: '12' | '24'}. Throws an Error that says what is wrong. */
 export function validateSettings(input) {
   if (!input || typeof input !== 'object') throw new Error('settings: must be an object');
   if (!validTimeZone(input.timezone)) throw new Error('timezone: must be a time zone name like Europe/Amsterdam');
@@ -219,7 +336,8 @@ export function validateSettings(input) {
     if (!TIME_RE.test(q.from || '') || !TIME_RE.test(q.to || '') || q.from === q.to) throw new Error(`quiet hours ${i + 1}: two different times, HH:MM`);
     return { days, from: q.from, to: q.to };
   });
-  return { timezone: input.timezone, quiet };
+  if (input.clock != null && input.clock !== '12' && input.clock !== '24') throw new Error('clock: 12 or 24');
+  return { timezone: input.timezone, quiet, clock: input.clock === '12' ? '12' : '24' };
 }
 
 /** Quiet hours as intervals inside [from, to): [{from, to}]. A range that ends before it starts runs past midnight. */
@@ -244,7 +362,7 @@ export function quietIntervals(settings, from, to) {
   return out.sort((x, y) => x.from - y.from);
 }
 
-const slotWords = (slot) => `${slot.days[0] === 'daily' ? 'daily' : slot.days.join(', ')} ${slot.time}`;
+const slotWords = (slot, clock) => `${slot.days[0] === 'daily' ? 'daily' : slot.days.join(', ')} ${clockLabel(slot.time, clock)}`;
 
 /**
  * What is planned in [from, to) and what the owner should know about it.
@@ -255,6 +373,7 @@ const slotWords = (slot) => `${slot.days[0] === 'daily' ? 'daily' : slot.days.jo
 export function plan(projects, settings, from, to) {
   const planned = {};
   const warnings = [];
+  const clock = settings?.clock;
   const said = new Set();
   const warn = (key, w) => {
     if (said.has(key)) return;
@@ -269,7 +388,7 @@ export function plan(projects, settings, from, to) {
     for (const bar of planned[p.id]) {
       if (quiet.some((q) => bar.at >= q.from && bar.at < q.to)) {
         bar.flags.push('quiet');
-        warn(`quiet ${p.id} ${bar.id}`, { kind: 'quiet', project: p.id, slot: bar.id, text: `${p.name}: the slot ${slotWords(p.schedule.slots[bar.slot])} starts in your quiet hours.` });
+        warn(`quiet ${p.id} ${bar.id}`, { kind: 'quiet', project: p.id, slot: bar.id, text: `${p.name}: the start time ${slotWords(p.schedule.slots[bar.slot], clock)} is inside your quiet hours.` });
       }
     }
     // The cap counts by the VM's day, which is a UTC day.
@@ -280,7 +399,7 @@ export function plan(projects, settings, from, to) {
         perDay.set(day, (perDay.get(day) || 0) + 1);
       }
       const most = Math.max(0, ...perDay.values());
-      if (most > p.cap) warn(`cap ${p.id}`, { kind: 'cap', project: p.id, slot: null, text: `${p.name}: up to ${most} slots on one day, but the daily cap is ${p.cap}. The slots beyond the cap are skipped. Raise the cap under Controls.` });
+      if (most > p.cap) warn(`cap ${p.id}`, { kind: 'cap', project: p.id, slot: null, text: `${p.name}: up to ${most} start times on one day, but the daily cap is ${p.cap}. The ones beyond the cap are skipped. Raise the cap under Controls.` });
     }
   }
   for (let i = 0; i < projects.length; i++) {
@@ -296,7 +415,7 @@ export function plan(projects, settings, from, to) {
               kind: 'overlap',
               project: a.id,
               slot: x.id,
-              text: `${a.name} (${slotWords(a.schedule.slots[x.slot])}) and ${b.name} (${slotWords(b.schedule.slots[y.slot])}) are likely to run at the same time.`
+              text: `${a.name} (${slotWords(a.schedule.slots[x.slot], clock)}) and ${b.name} (${slotWords(b.schedule.slots[y.slot], clock)}) are likely to run at the same time.`
             });
           }
         }
