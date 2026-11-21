@@ -403,6 +403,19 @@ commit on the branch needs a new approval. Projects without `GATE_OWNER_PATHS` b
 `GATE_OWNER_PATHS` covering `tools/check`, the team can set up checks for any language while the owner keeps the
 last word on what they test, and the gate's own rules (no drop in passed tests, rebased on main) still apply.
 
+### One-day changes and overlaps
+
+From kit 0.14.1. The schedule file may hold `move <date> <days@HH:MM> <HH:MM>` and `skip <date> <days@HH:MM>`
+lines: that day only, a start is moved or dropped, like one event of a recurring calendar entry (a moved
+start keeps its slot's name in the log). On the Schedule page, dragging a start asks "Only <that day>" or
+"Every day". `agent-kit-schedule skip|unskip <slot> <date>` drops one start without a new schedule; the
+console uses it when a backlog job is given that time.
+
+Placing or moving a backlog job checks its row first: if it overlaps a planned cycle or another job, the
+owner chooses "Place it after", "Skip that cycle" (one cycle only) or another time. A job that still meets a
+running cycle waits up to 4 hours (was 30 minutes); a job dropped after that shows as missed on the timeline
+and on its backlog card.
+
 ### Ledger kinds
 
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,

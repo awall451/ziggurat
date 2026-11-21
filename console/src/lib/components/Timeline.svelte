@@ -21,7 +21,7 @@
     quiet = [], // [{from, to}]
     now = Date.now(),
     selected = null, // {project, slot}
-    onmove = () => {}, // (project, slot index, 'HH:MM')
+    onmove = () => {}, // (project, slot index, 'HH:MM', the bar that was dragged)
     onadd = () => {}, // (project, 'HH:MM', day name)
     onselect = () => {}, // (project, slot index)
     onzoom = () => {}, // (from, to)
@@ -82,7 +82,7 @@
     if (!row.editable) return;
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag = { project: row.id, slot: bar.slot, at: bar.at, startX: e.clientX, dx: 0, moved: false, tz: row.tz };
+    drag = { project: row.id, slot: bar.slot, at: bar.at, startX: e.clientX, dx: 0, moved: false, tz: row.tz, bar };
   }
   function pull(e) {
     if (!drag) return;
@@ -94,9 +94,10 @@
     const d = drag;
     drag = null;
     if (!d.moved) return onselect(d.project, d.slot);
-    onmove(d.project, d.slot, timeOfDay(d.tz, d.at + (d.dx / track) * span));
+    onmove(d.project, d.slot, timeOfDay(d.tz, d.at + (d.dx / track) * span), d.bar);
   }
-  const shift = (row, bar) => (drag && drag.project === row.id && drag.slot === bar.slot ? drag.dx : 0);
+  // Only the dragged bar moves: one day of a slot can be changed on its own.
+  const shift = (row, bar) => (drag && drag.project === row.id && drag.slot === bar.slot && drag.at === bar.at ? drag.dx : 0);
   function key(e, row, bar) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -187,7 +188,7 @@
     const r = wrapEl.getBoundingClientRect();
     tip = { row, job, left: Math.max(0, Math.min(e.clientX - r.left + 12, r.width - 280)), top: e.clientY - r.top + 14 };
   }
-  const JOB_STATE = { set: 'set for', running: 'running since', done: 'ran' };
+  const JOB_STATE = { set: 'set for', running: 'running since', done: 'ran', missed: 'missed, was set for' };
   function jobKey(e, row, job) {
     if ((e.key === 'Enter' || e.key === ' ') && onjob) {
       e.preventDefault();
@@ -466,6 +467,10 @@
     stroke: var(--accent);
     stroke-width: 1.4;
     stroke-dasharray: 3 3;
+  }
+  .job.missed .est {
+    stroke: var(--critical);
+    fill: rgba(248, 113, 113, 0.08);
   }
   .job.done .est {
     stroke-opacity: 0.6;

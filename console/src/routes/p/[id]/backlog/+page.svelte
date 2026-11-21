@@ -95,10 +95,10 @@
     });
   }
 
-  function runAt(pid, epoch = null) {
+  function runAt(pid, epoch = null, skip = null) {
     const at = epoch ?? epochOf(atValue);
     if (!at) return (flash = { ok: false, text: 'Pick a date and time' });
-    post({ action: 'run-at', pid, at }, `at-${pid}`).then((out) => {
+    post({ action: 'run-at', pid, at, skip }, `at-${pid}`).then((out) => {
       if (out) {
         atFor = null;
         placing = null;
@@ -114,9 +114,9 @@
     atFor = null;
     placing = { pid: prop.pid, title: prop.title, minutes: prop.minutes };
   }
-  function placed(epoch) {
-    if (placing?.pid) return runAt(placing.pid, epoch);
-    post({ action: 'plan', focus, at: epoch }, 'plan').then((out) => {
+  function placed(epoch, skip = null) {
+    if (placing?.pid) return runAt(placing.pid, epoch, skip);
+    post({ action: 'plan', focus, at: epoch, skip }, 'plan').then((out) => {
       if (out) {
         focus = '';
         placing = null;
@@ -240,9 +240,10 @@
                 {:else if job}
                   <span class="small">Set for {whenText(job.at)}</span>
                   <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'cancel-at', id: job.id }, 'cancel')}>Cancel it</button>
-                {:else if prop.run && prop.run.rev === prop.rev && !prop.run.cancelled}
+                {:else if prop.run && prop.run.rev === prop.rev && !prop.run.cancelled && !prop.run.missed}
                   <a class="small" href="{base}/inbox">Job sent {ago(prop.run.at, p.now)}: see the Inbox</a>
                 {:else}
+                  {#if prop.run?.missed}<span class="small s-failed" title="The team was busy for hours after the set time">Missed</span>{/if}
                   <Popover open={atFor === prop.pid} onclose={() => (atFor = null)}>
                     {#snippet trigger()}
                       <button class="btn quiet sm" disabled={!!busy} onclick={() => openSchedule(prop.pid)}>Schedule ▾</button>

@@ -48,8 +48,9 @@ PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
 ANY_RE='^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}$'
 REAP_AFTER=120
 AT=$STATE/oneshot-at
-# A job set for a time waits at most this long for a busy team, then is dropped.
-AT_GRACE=1800
+# A job set for a time waits at most this long for a busy team (a cycle that
+# started at the same time, say), then is dropped and logged as missed.
+AT_GRACE=$((4 * 3600))
 MAX_JOB=$((200 * 1024 * 1024))
 
 timer_held=0 # start stopped the lead timer: a refusal must turn it back on

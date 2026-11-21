@@ -41,7 +41,7 @@ beforeEach(() => {
 describe('a schedule', () => {
   it('is kept in one fixed form', () => {
     const s = lib.validateSchedule({ tz: NY, slots: [{ days: ['wed', 'mon', 'wed'], time: '13:30' }, { days: DAYS7(), time: '01:00' }] });
-    expect(s).toEqual({ tz: NY, slots: [{ days: ['daily'], time: '01:00' }, { days: ['mon', 'wed'], time: '13:30' }] });
+    expect(s).toEqual({ tz: NY, slots: [{ days: ['daily'], time: '01:00' }, { days: ['mon', 'wed'], time: '13:30' }], changes: [] });
     expect(lib.formatScheduleText(s)).toBe('tz America/New_York\nslot daily 01:00\nslot mon,wed 13:30\n');
     expect(lib.parseScheduleText(lib.formatScheduleText(s))).toEqual(s);
   });
@@ -59,7 +59,7 @@ describe('a schedule', () => {
   });
 
   it('read from a VM, lines that do not fit are left out', () => {
-    expect(lib.parseScheduleText('tz America/New_York\nslot daily 01:00\nslot daily 99:00\nrun something\nslot nope 02:00\n')).toEqual({ tz: NY, slots: [{ days: ['daily'], time: '01:00' }] });
+    expect(lib.parseScheduleText('tz America/New_York\nslot daily 01:00\nslot daily 99:00\nrun something\nslot nope 02:00\n')).toEqual({ tz: NY, slots: [{ days: ['daily'], time: '01:00' }], changes: [] });
     expect(lib.parseScheduleText('')).toBeNull();
     expect(lib.parseScheduleText('slot daily 01:00\n')).toBeNull();
     expect(lib.parseScheduleText('tz Nowhere/Land\nslot daily 01:00\n')).toBeNull();
@@ -68,6 +68,29 @@ describe('a schedule', () => {
 function DAYS7() {
   return [...lib.DAYS];
 }
+
+describe('one-day changes (kit 0.12.1)', () => {
+  it('move or skip one day of a slot, kept through the VM text form', () => {
+    const s = lib.validateSchedule({
+      tz: NY,
+      slots: [{ days: ['daily'], time: '09:30' }],
+      changes: [
+        { kind: 'move', date: '2026-01-26', slot: 'daily@09:30', time: '11:15' },
+        { kind: 'skip', date: '2026-01-27', slot: 'daily@09:30' },
+        { kind: 'move', date: '2026-01-28', slot: 'mon@08:00', time: '10:00' }, // no such slot: dropped
+        { kind: 'move', date: 'x; id', slot: 'daily@09:30', time: '10:00' }
+      ]
+    });
+    expect(s.changes).toHaveLength(2);
+    expect(lib.formatScheduleText(s)).toContain('move 2026-01-26 daily@09:30 11:15\nskip 2026-01-27 daily@09:30\n');
+    expect(lib.parseScheduleText(lib.formatScheduleText(s))).toEqual(s);
+    const r = lib.rangeFor('week', '2026-01-25', NY);
+    const at = lib.occurrences(s, r.from, r.to).map((o) => `${o.date} ${iso(o.at)}${o.moved ? ' moved' : ''}`);
+    expect(at).toContain('2026-01-26 2026-01-26T16:15 moved');
+    expect(at.some((x) => x.startsWith('2026-01-27'))).toBe(false);
+    expect(at).toContain('2026-01-28 2026-01-28T14:30');
+  });
+});
 
 describe('times in a time zone', () => {
   const s = { tz: NY, slots: [{ days: ['daily'], time: '02:30' }, { days: ['daily'], time: '01:30' }] };

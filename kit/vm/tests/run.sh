@@ -738,6 +738,30 @@ tick_at "$(ny "2026-01-20 09:33")"
 check "a slot that passed just before the schedule was set does not fire" '[ "$(starts)" = 0 ]'
 tick_at "$(ny "2026-01-21 09:30")"
 check "it fires the next day" '[ "$(starts)" = 1 ]'
+# Kit 0.14.1: the owner gives one start to a backlog job.
+sch skip daily@09:30 2026-01-22 > /dev/null
+tick_at "$(ny "2026-01-22 09:30")"
+check "a skipped start does not fire, and says why" '[ "$(starts)" = 1 ] && grep -q " daily@09:30 2026-01-22 skipped: the owner gave this time to a backlog job$" "$S/schedule.log"'
+tick_at "$(ny "2026-01-23 09:30")"
+check "only that once" '[ "$(starts)" = 2 ]'
+sch skip daily@09:30 2026-01-24 > /dev/null; sch unskip daily@09:30 2026-01-24 > /dev/null
+tick_at "$(ny "2026-01-24 09:30")"
+check "a skip can be taken back" '[ "$(starts)" = 3 ]'
+# Kit 0.14.1: one day of a slot moved or skipped in the schedule itself (like one event of a recurring entry).
+printf 'tz America/New_York\nslot daily 09:30\nmove 2026-01-26 daily@09:30 11:15\nskip 2026-01-27 daily@09:30\n' | AGENT_KIT_NOW=$(ny "2026-01-25 12:00") sch set > /dev/null
+check "one-day changes are kept and shown" 'grep -qx "move 2026-01-26 daily@09:30 11:15" "$T/etc/schedule" && [ "$(sch show | jq -r ".changes | length")" = 2 ]'
+n0=$(starts)
+tick_at "$(ny "2026-01-26 09:30")"
+check "a start moved for one day does not fire at its own time" '[ "$(starts)" = "$n0" ]'
+tick_at "$(ny "2026-01-26 11:15")"
+check "it fires at the new time, under its own name" '[ "$(starts)" = $((n0 + 1)) ] && grep -q " daily@09:30 2026-01-26 started$" "$S/schedule.log"'
+tick_at "$(ny "2026-01-27 09:30")"
+check "a start skipped for one day does not fire" '[ "$(starts)" = $((n0 + 1)) ]'
+tick_at "$(ny "2026-01-28 09:30")"
+check "the next day it is back at its own time" '[ "$(starts)" = $((n0 + 2)) ]'
+refuse "a bad one-day change" bash -c "printf 'tz America/New_York\\nslot daily 09:30\\nmove tomorrow daily@09:30 11:15\\n' | AGENT_KIT_PATH=$FB:\$PATH '$BIN/agent-kit-schedule' set"
+refuse "a skip with a bad slot" sch skip 'x;id' 2026-01-25
+refuse "a skip with a bad date" sch skip daily@09:30 tomorrow
 
 # lead-cycle with a schedule: only a fresh marker starts a normal cycle.
 head -2 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
@@ -1214,7 +1238,10 @@ shot due
 check "at its time it starts as a one-shot job" '[ ! -e "$S/oneshot-at/$JA" ] && grep -q BASALT "$S/inbox/$JA/message.md" && grep -q "^run oneshot $JA " "$S/control" && grep -q "job:$JA .* started" "$S/schedule.log"'
 shot finish > /dev/null
 tar -c -C "$T/work/j" . | shot at $((now + 3600)) $JB owner > /dev/null
-echo "$((now - 4000)) owner" > "$S/oneshot-at/$JB"
+echo "$((now - 2400)) owner" > "$S/oneshot-at/$JB"
+FAKE_ACTIVE=active shot due
+check "a job waits more than 30 minutes for a cycle that started at the same time" '[ -f "$S/oneshot-at/$JB" ] && ! grep -q "job:$JB .* missed" "$S/schedule.log"'
+echo "$((now - 15000)) owner" > "$S/oneshot-at/$JB"
 shot due
 check "a job the team was too busy for is dropped and logged" '[ ! -e "$S/oneshot-at/$JB" ] && [ ! -e "$S/inbox/$JB" ] && grep -q "job:$JB .* missed" "$S/schedule.log"'
 echo "Plan later." | shot at $((now + 600)) 20260103T110000Z-p-later owner --plan > /dev/null

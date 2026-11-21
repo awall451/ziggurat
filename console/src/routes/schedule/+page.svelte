@@ -4,6 +4,8 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import ProposalCard from '$lib/components/ProposalCard.svelte';
+  import ConflictChoice from '$lib/components/ConflictChoice.svelte';
+  import { conflictsAt, placeAfter, dateString } from '$lib/schedule.js';
   import { DAYS, plan, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
 
   let { data } = $props();
@@ -120,14 +122,29 @@
     movePick = null;
     jobOpen = null;
   }
-  async function confirmMove() {
+  // Before a move: what would the job run into on its row (not itself)?
+  let moveHit = $state(null);
+  const moveRow = $derived(moving ? rows.find((r) => r.id === moving.project) : null);
+  async function confirmMove(skip = null) {
     const m = moving;
-    const out = await jobAct(m.project, { action: 'move-at', id: m.job.id, at: Math.round(movePick / 1000) }, 'move');
+    if (!skip) {
+      const found = conflictsAt(moveRow?.planned, moveRow?.jobs, movePick, m.job.minutes, m.job.id, tl.now);
+      if (found.length) return (moveHit = found);
+    }
+    const out = await jobAct(m.project, { action: 'move-at', id: m.job.id, at: Math.round(movePick / 1000), skip }, 'move');
     if (out) {
       moving = null;
       movePick = null;
+      moveHit = null;
     }
   }
+  function moveAfter() {
+    movePick = placeAfter(moveRow?.planned, moveRow?.jobs, movePick, moving.job.minutes, moving.job.id, tl.now);
+    moveHit = null;
+  }
+  const moveTz = $derived(moving ? scheduleOf(project(moving.project))?.tz : null);
+  const canSkipMove = $derived(!!moveHit && moveHit.length === 1 && moveHit[0].kind === 'cycle' && !!moveTz);
+  const skipMove = () => confirmMove({ slot: moveHit[0].slot, date: dateString(wallClock(moveTz, moveHit[0].at)) });
   async function cancelJob() {
     const j = jobOpen;
     const out = await jobAct(j.project, { action: 'cancel-at', id: j.job.id }, 'cancel-job');
@@ -141,14 +158,44 @@
   }
   const clash = (d, slot, except) => d.slots.some((s, i) => i !== except && slotId(s) === slotId(slot));
 
-  function move(id, index, time) {
+  // Dragging one start of a repeating slot asks, like a calendar: that day only, or every day.
+  let scope = $state(null); // {id, index, time, bar}
+  function move(id, index, time, bar = null) {
+    if (bar?.date) {
+      scope = { id, index, time, bar };
+      return;
+    }
+    moveEvery(id, index, time);
+  }
+  const scopeSlot = $derived(scope ? scheduleOf(project(scope.id))?.slots[scope.index] : null);
+  function moveOnce() {
+    const { id, index, time, bar } = scope;
+    scope = null;
+    const d = draftOf(id);
+    const slot = d.slots[index];
+    const key = slotId(slot);
+    d.changes = (d.changes || []).filter((c) => !(c.date === bar.date && c.slot === key));
+    if (time !== slot.time) d.changes.push({ kind: 'move', date: bar.date, slot: key, time });
+    problem = '';
+    selected = { project: id, slot: index };
+  }
+  function moveAll() {
+    const { id, index, time } = scope;
+    scope = null;
+    moveEvery(id, index, time);
+  }
+  function moveEvery(id, index, time) {
     const d = draftOf(id);
     if (clash(d, { ...d.slots[index], time }, index)) {
       problem = 'There is already a start time then, on the same days.';
       return;
     }
     problem = '';
+    // One-day changes follow their slot to its new time.
+    const before = slotId(d.slots[index]);
     d.slots[index].time = time;
+    const after = slotId(d.slots[index]);
+    d.changes = (d.changes || []).map((c) => (c.slot === before ? { ...c, slot: after } : c));
     selected = { project: id, slot: index };
   }
   function add(id, time, day) {
@@ -216,7 +263,7 @@
       problem = `${p.name}: ${e.message}`;
       return;
     }
-    const out = await send({ action: 'set', project: p.id, tz: s.tz, slots: s.slots }, `apply-${p.id}`);
+    const out = await send({ action: 'set', project: p.id, tz: s.tz, slots: s.slots, changes: s.changes }, `apply-${p.id}`);
     if (!out) return;
     discard(p.id);
     done = `${p.name}: applied. Its cycles now start at these times only.`;
@@ -371,7 +418,10 @@
       </div>
       <p class="dim small">Per day: cycles that ran (filled) and start times still to come (outlined). Open a day or the week to change times.</p>
     {:else}
-      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => (movePick = ms)} />
+      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => ((movePick = ms), (moveHit = null))} />
+    {#if moving && moveHit}
+      <ConflictChoice conflicts={moveHit} team={project(moving.project)?.name} {clockAt} busy={!!busy} onafter={moveAfter} onskip={canSkipMove ? skipMove : null} oncancel={() => (moveHit = null)} />
+    {/if}
     {#if moving}
       <div class="actions movebar">
         {#if movePick}
@@ -380,8 +430,8 @@
           <span class="small">Click in {tl.projects.find((x) => x.id === moving.project)?.name}'s row to pick the new start (estimate {moving.job.minutes} min).</span>
         {/if}
         <span class="spacer"></span>
-        <button class="btn quiet" onclick={() => ((moving = null), (movePick = null))} disabled={!!busy}>Cancel</button>
-        <button class="btn primary" onclick={confirmMove} disabled={!movePick || !!busy}>{busy === 'move' ? 'Moving…' : 'Move it'}</button>
+        <button class="btn quiet" onclick={() => ((moving = null), (movePick = null), (moveHit = null))} disabled={!!busy}>Cancel</button>
+        <button class="btn primary" onclick={() => confirmMove()} disabled={!movePick || !!busy || !!moveHit}>{busy === 'move' ? 'Moving…' : 'Move it'}</button>
       </div>
     {/if}
       <p class="dim small">
@@ -397,7 +447,7 @@
       <p class="small">You changed start times here. A team keeps its old times until you apply the change, which sends the new times to that team's VM.</p>
       {#each changed as p (p.id)}
         <div class="actions">
-          <span><b>{p.name}</b>: {scheduleOf(p).slots.length ? scheduleOf(p).slots.map((s) => `${clockLabel(s.time, clock)} ${daysText(s)}`).join(' · ') : 'no start times left'}</span>
+          <span><b>{p.name}</b>: {scheduleOf(p).slots.length ? scheduleOf(p).slots.map((s) => `${clockLabel(s.time, clock)} ${daysText(s)}`).join(' · ') : 'no start times left'}{#each scheduleOf(p).changes || [] as c (c.date + c.slot)}{' · '}{dateText(c.date, { weekday: 'short', day: 'numeric', month: 'short' })} only: {clockLabel(c.slot.split('@')[1], clock)} {c.kind === 'move' ? `→ ${clockLabel(c.time, clock)}` : 'skipped'}{/each}</span>
           <span class="spacer"></span>
           <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Undo changes</button>
           <button class="btn primary" onclick={() => apply(p)} disabled={!!busy || !usable(scheduleOf(p))}>{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
@@ -549,6 +599,22 @@
 </div>
 
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
+
+{#if scope}
+  {@const sp = project(scope.id)}
+  {@const slot = scopeSlot}
+  <Modal title="Change a repeating start time" onclose={() => (scope = null)}>
+    <p class="small">
+      {sp?.name}'s {clockLabel(slot.time, clock)} start ({daysText(slot)}) to <b>{clockLabel(scope.time, clock)}</b>. Change it for:
+    </p>
+    <div class="actions end">
+      <button class="btn quiet" onclick={() => (scope = null)}>Cancel</button>
+      <button class="btn" onclick={moveOnce}>Only {dateText(scope.bar.date, { weekday: 'short', day: 'numeric', month: 'short' })}</button>
+      <button class="btn primary" onclick={moveAll}>{slot.days[0] === 'daily' ? 'Every day' : `Every ${daysText(slot)}`}</button>
+    </div>
+    <p class="small dim">Like any change here, it is active once you apply it.</p>
+  </Modal>
+{/if}
 
 {#if jobOpen}
   {@const j = jobOpen.job}

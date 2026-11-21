@@ -6,12 +6,19 @@
 #   agent-kit-schedule set      a new schedule on stdin (checked before it replaces the old one)
 #   agent-kit-schedule clear    no schedule: cycles follow each other again, as the daily cap allows
 #   agent-kit-schedule tick     start a cycle if a slot is due (agent-kit-tick, every minute)
+#   agent-kit-schedule skip <slot> <local date>     skip that one start (kit 0.14.1): the owner gave
+#                                                   the time to a backlog job
+#   agent-kit-schedule unskip <slot> <local date>
 #
 # The schedule, /etc/agent-kit/schedule:
 #   tz Europe/Amsterdam
 #   slot daily 01:00
 #   slot mon,wed,fri 13:30
+#   move 2026-11-21 daily@01:00 03:15     that day only: the 01:00 start is at 03:15 (kit 0.14.1)
+#   skip 2026-11-22 mon,wed,fri@13:30     that day only: no 13:30 start (kit 0.14.1)
 # Times are local to `tz`. Days: daily, or any of mon tue wed thu fri sat sun.
+# `move` and `skip` change one day of a slot, like editing one event of a
+# recurring calendar entry; the slot itself stays as it is.
 #
 # Without a schedule nothing here does anything and a team runs as before.
 # With one, lead-cycle starts a normal cycle only when this script has just
@@ -34,6 +41,7 @@ FILE=$ETC/schedule
 LEAD=agent-kit-lead
 MARK=$STATE/slot             # "<slot> <unix seconds>": written just before a slot's cycle is started
 USED=$STATE/schedule.used    # slots already decided: "<slot> <local date>" per line
+SKIP=$STATE/schedule.skip    # starts the owner skipped once: "<slot> <local date>" per line
 LOG=$STATE/schedule.log
 LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
 ZONES=${AGENT_KIT_ZONEINFO:-/usr/share/zoneinfo}
@@ -41,6 +49,9 @@ GRACE=10        # minutes a slot may be late (the VM was busy, or just booted)
 MAX_SLOTS=100
 TZ_RE='^[A-Za-z][A-Za-z0-9_+-]{0,30}(/[A-Za-z0-9_+-]{1,30}){0,2}$'
 TIME_RE='^([01][0-9]|2[0-3]):[0-5][0-9]$'
+DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+SLOT_RE='^[a-z,]{3,27}@([01][0-9]|2[0-3]):[0-5][0-9]$'
+MAX_EXCEPT=200
 DAYS=(mon tue wed thu fri sat sun)
 
 die() { echo "agent-kit-schedule: $*" >&2; exit 2; }
@@ -68,14 +79,15 @@ case "${1:-show}" in
     [ -f "$FILE" ] && tz=$(sed -n 's/^tz //p' "$FILE" | head -1)
     {
       [ -f "$FILE" ] && sed -n 's/^slot //p' "$FILE"
-    } | jq -Rnc --arg tz "$tz" --arg log "$(tail -n 60 "$LOG" 2>/dev/null)" \
+    } | jq -Rnc --arg tz "$tz" --arg log "$(tail -n 60 "$LOG" 2>/dev/null)" --arg ex "$([ -f "$FILE" ] && grep -E '^(move|skip) ' "$FILE")" \
       '{tz: ($tz | select(. != "") // null),
         slots: [inputs | split(" ") | {days: (.[0] | split(",")), time: .[1]}],
+        changes: ($ex | split("\n") | map(select(. != "") | split(" ") | {kind: .[0], date: .[1], slot: .[2], time: (.[3] // null)})),
         log: ($log | split("\n") | map(select(. != "")))}'
     ;;
 
   set)
-    tz="" slots=() n=0
+    tz="" slots=() excepts=() n=0
     while IFS= read -r line || [ -n "$line" ]; do
       n=$((n + 1))
       [ "$n" -le 400 ] || die "too many lines"
@@ -95,17 +107,27 @@ case "${1:-show}" in
           [[ " ${slots[*]:-} " == *" $d@$b "* ]] && die "line $n: the same slot twice: $d $b"
           slots+=("$d@$b")
           ;;
-        *) die "line $n: expected 'tz <zone>' or 'slot <days> <HH:MM>'" ;;
+        move)
+          [[ ${a:-} =~ $DATE_RE ]] && [[ ${b:-} =~ $SLOT_RE ]] && [[ ${extra:-} =~ $TIME_RE ]] || die "line $n: move <YYYY-MM-DD> <days@HH:MM> <HH:MM>"
+          excepts+=("move $a $b $extra")
+          ;;
+        skip)
+          [[ ${a:-} =~ $DATE_RE ]] && [[ ${b:-} =~ $SLOT_RE ]] && [ -z "${extra:-}" ] || die "line $n: skip <YYYY-MM-DD> <days@HH:MM>"
+          excepts+=("skip $a $b")
+          ;;
+        *) die "line $n: expected 'tz <zone>', 'slot <days> <HH:MM>', 'move …' or 'skip …'" ;;
       esac
     done
     [ -n "$tz" ] || die "the schedule needs a 'tz <zone>' line"
     [ ${#slots[@]} -gt 0 ] || die "the schedule has no slots (use 'clear' for none)"
     [ ${#slots[@]} -le "$MAX_SLOTS" ] || die "at most $MAX_SLOTS slots"
+    [ ${#excepts[@]} -le "$MAX_EXCEPT" ] || die "at most $MAX_EXCEPT one-day changes"
     exec 8> "$LOCK"
     flock 8
     {
       echo "tz $tz"
       for s in "${slots[@]}"; do echo "slot ${s%@*} ${s#*@}"; done
+      for e in "${excepts[@]}"; do echo "$e"; done
     } > "$FILE.tmp" || die "could not write the schedule"
     chmod 644 "$FILE.tmp"
     mv "$FILE.tmp" "$FILE"
@@ -140,13 +162,21 @@ case "${1:-show}" in
     for ((m = GRACE; m >= 0; m--)); do
       read -r dow hm day <<< "$(TZ=$tz date -d "@$((now - m * 60))" '+%a %H:%M %F')"
       dow=${dow,,}
-      while read -r _ days time; do
+      while read -r _ days time moved; do
         [ "$time" = "$hm" ] || continue
-        [ "$days" = daily ] || [[ ",$days," == *",$dow,"* ]] || continue
-        slot=$days@$time
+        if [ -n "${moved:-}" ]; then
+          # A start moved to this minute for today: it keeps the name of its slot.
+          slot=$days@$moved
+        else
+          [ "$days" = daily ] || [[ ",$days," == *",$dow,"* ]] || continue
+          slot=$days@$time
+          # Changed for that day only: skipped, or moved to another time.
+          if grep -qE "^(skip $day $slot|move $day $slot [0-9:]+)\$" "$FILE"; then continue; fi
+        fi
         grep -qxF "$slot $day" "$USED" && continue
         echo "$slot $day" >> "$USED"
         [ "$mark_only" = 1 ] && continue
+        if grep -qxF "$slot $day" "$SKIP" 2>/dev/null; then note "$slot" "$day" "skipped: the owner gave this time to a backlog job"; continue; fi
         if grep -q '^stop' "$STATE/control" 2>/dev/null; then note "$slot" "$day" "skipped: halted"; continue; fi
         if [ -e "$STATE/oneshot" ]; then note "$slot" "$day" "skipped: a one-shot job is in progress"; continue; fi
         if [ -e "$STATE/halt-after" ]; then note "$slot" "$day" "skipped: a halt is pending"; continue; fi
@@ -163,13 +193,31 @@ case "${1:-show}" in
           rm -f "$MARK"
           note "$slot" "$day" "failed: the cycle could not be started"
         fi
-      done < <(grep '^slot ' "$FILE")
+      done < <(grep '^slot ' "$FILE"; grep -E "^move $day " "$FILE" | while read -r _ _ s t; do
+        # A start moved to this time today: it runs as its own slot, at the new time.
+        [ "$t" = "$hm" ] && echo "slot ${s%@*} $hm ${s#*@}"
+      done)
     done
     if [ "$(wc -l < "$USED")" -gt 400 ]; then tail -n 200 "$USED" > "$USED.tmp" && mv "$USED.tmp" "$USED"; fi
     exit 0
     ;;
 
+  skip | unskip)
+    slot=${2:-} day=${3:-}
+    [[ $slot =~ ^[a-z,]{3,27}@[0-9]{2}:[0-9]{2}$ ]] || die "bad slot (days@HH:MM)"
+    [[ $day =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "bad date (YYYY-MM-DD)"
+    exec 8> "$LOCK"
+    flock 8
+    touch "$SKIP"
+    grep -vxF "$slot $day" "$SKIP" > "$SKIP.tmp" || true
+    [ "$1" = skip ] && echo "$slot $day" >> "$SKIP.tmp"
+    # Old entries go after a while: keep the last 200.
+    tail -n 200 "$SKIP.tmp" > "$SKIP.new" && chmod 644 "$SKIP.new" && mv "$SKIP.new" "$SKIP"
+    rm -f "$SKIP.tmp"
+    echo "$1 $slot $day"
+    ;;
+
   *)
-    die "usage: agent-kit-schedule show | set | clear | tick"
+    die "usage: agent-kit-schedule show | set | clear | tick | skip <slot> <date> | unskip <slot> <date>"
     ;;
 esac
