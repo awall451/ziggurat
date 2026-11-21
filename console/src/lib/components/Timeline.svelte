@@ -175,6 +175,10 @@
     if (t >= now + 60000) onpick(ghost.project, t);
   }
   const placedAt = $derived(placeDrag ? placeDrag.t : ghost?.at ?? null);
+  // Entering placing mode: the hover card of a job would hide the row.
+  $effect(() => {
+    if (ghost) tip = null;
+  });
 
   // ---- backlog jobs: hover card and click ----
   let tip = $state(null); // {row, job, left, top}
@@ -206,7 +210,7 @@
 </script>
 
 <div class="wrap" bind:clientWidth={width} bind:this={wrapEl}>
-  <svg bind:this={svg} {width} {height} role="group" aria-label="Cycle timeline" use:wheel>
+  <svg bind:this={svg} {width} {height} role="group" aria-label="Cycle timeline" use:wheel class:placing={!!ghost}>
     <defs>
       <pattern id="{uid}-limit" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
         <rect width="3" height="6" fill="var(--critical)" opacity="0.55" />
@@ -497,6 +501,15 @@
     cursor: crosshair;
   }
   .ghost {
+    pointer-events: none;
+  }
+  /* While a job is placed or moved, other bars let the pointer through to the
+     row: a click on a planned start, a past cycle or a job picks the time. */
+  svg.placing .past,
+  svg.placing .running,
+  svg.placing .slot,
+  svg.placing .job,
+  svg.placing .skip {
     pointer-events: none;
   }
   .ghost.hover rect {
