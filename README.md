@@ -198,7 +198,7 @@ One web app for all your teams. It runs on your workstation, reaches each VM ove
 
 <p align="center"><img src="docs/img/progress.webp" alt="Progress page: a bar chart of cycle cost and length, a rising step chart of tests on main, and the lead's summary of each cycle" width="100%"></p>
 
-**Gallery.** Screenshots the gate took of the newest build that passed, by day, so you can see the product without opening it.
+**Gallery.** Screenshots the gate took of every merged build, grouped by the cycle that made them, so you can see what each cycle changed without opening the product.
 
 <p align="center"><img src="docs/img/gallery.webp" alt="Gallery page: a grid of screenshots from the example game, title screen, rooms, dialogue and battles" width="100%"></p>
 

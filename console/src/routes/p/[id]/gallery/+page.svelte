@@ -6,15 +6,39 @@
   let { data } = $props();
   const p = $derived(data.project);
 
-  let day = $state(null);
+  let setKey = $state(null);
+  let buildIdx = $state(0);
   let other = $state('');
   let big = $state(null);
 
-  const dates = $derived(data.days.map((d) => d.date));
-  const current = $derived(data.days.find((d) => d.date === day) || data.days[0] || null);
-  const compare = $derived(data.days.find((d) => d.date === other) || null);
-  const src = (date, file) => `/p/${p.id}/media/shots/${date}/${encodeURIComponent(file)}`;
+  const cycles = $derived(data.sets.filter((x) => x.kind !== 'day'));
+  const days = $derived(data.sets.filter((x) => x.kind === 'day'));
+  const set = $derived(data.sets.find((x) => x.key === setKey) || data.sets[0] || null);
+  const current = $derived(set ? set.builds[Math.min(buildIdx, set.builds.length - 1)] : null);
+  const compareSet = $derived(data.sets.find((x) => x.key === other) || null);
+  const compare = $derived(compareSet ? compareSet.builds[0] : null);
+  const src = (folder, file) => `/p/${p.id}/media/shots/${folder}/${encodeURIComponent(file)}`;
   const title = (file) => file.replace(/\.png$/, '').replace(/^\d+-/, '').replace(/[-_]/g, ' ');
+
+  const at = (iso) =>
+    iso ? new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  const KIND = { plan: 'planning', oneshot: 'one-shot job', normal: '' };
+  const label = (x) => {
+    if (x.kind === 'day') return x.date;
+    if (x.kind === 'setup') return 'Setup (before the first cycle)';
+    const bits = [x.number != null ? `Cycle ${x.number}` : 'Cycle', at(x.start)];
+    if (KIND[x.kind]) bits.push(KIND[x.kind]);
+    if (x.live) bits.push('running');
+    bits.push(`${x.builds.length} build${x.builds.length > 1 ? 's' : ''}`);
+    return bits.join(' · ');
+  };
+  const buildLabel = (b, i) => `${i === 0 ? 'Newest · ' : ''}${at(b.at)} · ${b.topic || 'build'} · ${b.sha.slice(0, 7)}`;
+
+  function pickSet(key) {
+    setKey = key;
+    buildIdx = 0;
+    if (other === key) other = '';
+  }
 
   // Same rule as the server's screenKey(): a note belongs to the screen, not the file.
   const screen = (file) => file.replace(/\.png$/i, '').replace(/^\d+-/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -39,7 +63,7 @@
     const r = await fetch(`/p/${p.id}/gallery/issue`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ title: t, body, kind, markup, markupPng, date: current.date, file })
+      body: JSON.stringify({ title: t, body, kind, markup, markupPng, date: current.folder, file })
     });
     const res = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(res.message || 'Could not raise the issue');
@@ -61,24 +85,47 @@
 {#if !current}
   <div class="panel empty">
     <h2>No screenshots yet</h2>
-    <p class="dim">Screenshots taken by the gate for the newest passing build are pulled here each day.</p>
+    <p class="dim">The gate's screenshots of every merged build appear here, grouped by the cycle that made them.</p>
   </div>
 {:else}
   <div class="bar">
     <label>
-      <span class="dim small">Day</span>
-      <select class="field" value={current.date} onchange={(e) => (day = e.currentTarget.value)}>
-        {#each dates as d (d)}<option value={d}>{d}</option>{/each}
+      <span class="dim small">Cycle</span>
+      <select class="field" value={set.key} onchange={(e) => pickSet(e.currentTarget.value)}>
+        {#if cycles.length}
+          <optgroup label="Cycles">
+            {#each cycles as x (x.key)}<option value={x.key}>{label(x)}</option>{/each}
+          </optgroup>
+        {/if}
+        {#if days.length}
+          <optgroup label="Older, by day">
+            {#each days as x (x.key)}<option value={x.key}>{label(x)}</option>{/each}
+          </optgroup>
+        {/if}
       </select>
     </label>
+    {#if set.builds.length > 1}
+      <label>
+        <span class="dim small">Build</span>
+        <select class="field" value={buildIdx} onchange={(e) => (buildIdx = Number(e.currentTarget.value))}>
+          {#each set.builds as b, i (b.folder)}<option value={i}>{buildLabel(b, i)}</option>{/each}
+        </select>
+      </label>
+    {/if}
     <label>
       <span class="dim small">Compare with</span>
       <select class="field" bind:value={other}>
         <option value="">Nothing</option>
-        {#each dates.filter((d) => d !== current.date) as d (d)}<option value={d}>{d}</option>{/each}
+        {#each data.sets.filter((x) => x.key !== set.key) as x (x.key)}<option value={x.key}>{label(x)}</option>{/each}
       </select>
     </label>
-    <span class="dim small">{current.files.length} screenshots from the newest passing build on {current.date}</span>
+    <span class="dim small">
+      {#if current.sha}
+        {current.files.length} screenshots of {current.topic || 'a build'} ({current.sha.slice(0, 7)}), merged {at(current.at)}
+      {:else}
+        {current.files.length} screenshots from the newest passing build on {current.folder}
+      {/if}
+    </span>
     {#if flash}<span class="small s-done">{flash} <a href="/p/{p.id}/issues">Open Issues</a></span>{/if}
   </div>
 
@@ -88,15 +135,15 @@
         <div class="pair" class:two={compare}>
           {#if compare}
             {#if compare.files.includes(f)}
-              <button onclick={() => (big = src(compare.date, f))} aria-label="Enlarge {title(f)} from {compare.date}">
-                <img src={src(compare.date, f)} alt="{title(f)}, {compare.date}" loading="lazy" />
+              <button onclick={() => (big = src(compare.folder, f))} aria-label="Enlarge {title(f)} from {label(compareSet)}">
+                <img src={src(compare.folder, f)} alt="{title(f)}, {label(compareSet)}" loading="lazy" />
               </button>
             {:else}
-              <div class="none small dim">not in {compare.date}</div>
+              <div class="none small dim">not in {label(compareSet)}</div>
             {/if}
           {/if}
-          <button onclick={() => (big = src(current.date, f))} aria-label="Enlarge {title(f)}">
-            <img src={src(current.date, f)} alt={title(f)} loading="lazy" />
+          <button onclick={() => (big = src(current.folder, f))} aria-label="Enlarge {title(f)}">
+            <img src={src(current.folder, f)} alt={title(f)} loading="lazy" />
           </button>
         </div>
         <figcaption class="small">
@@ -106,7 +153,7 @@
               <div class="menu panel lit" role="menu">
                 <button role="menuitem" onclick={() => { menu = null; noting = f; }}>Leave a note…</button>
                 {#if dot(f)}<a role="menuitem" href="/p/{p.id}/issues">View issues ({dot(f).text})</a>{/if}
-                <button role="menuitem" onclick={() => { menu = null; big = src(current.date, f); }}>Open full size</button>
+                <button role="menuitem" onclick={() => { menu = null; big = src(current.folder, f); }}>Open full size</button>
               </div>
             {/if}
           </span>
@@ -119,7 +166,7 @@
 {/if}
 
 {#if noting}
-  <MarkupEditor src={src(current.date, noting)} name={title(noting)} onsave={(d) => raise(noting, d)} oncancel={() => (noting = null)} />
+  <MarkupEditor src={src(current.folder, noting)} name={title(noting)} onsave={(d) => raise(noting, d)} oncancel={() => (noting = null)} />
 {/if}
 
 {#if big}

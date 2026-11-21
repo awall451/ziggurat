@@ -225,6 +225,69 @@ export function gallery(project) {
     .map((date) => ({ date, files: days[date] }));
 }
 
+const SHA40_RE = /^[0-9a-f]{40}$/;
+const SHOT_FILE_RE = /^[A-Za-z0-9._-]{1,100}\.png$/;
+const TOPIC_RE = /^[A-Za-z0-9._/-]{1,120}$/;
+const ms = (iso) => Date.parse(iso || '');
+
+/**
+ * Screenshots of every merged build (kit 0.13: the gate keeps them by sha and
+ * writes shots/index, "<iso> <sha> <topic>"), grouped by the cycle that made
+ * them. A merge belongs to the newest cycle that started at or before it: the
+ * gate judges a branch minutes after the cycle that submitted it. Merges before
+ * the first cycle (the gate proof, the seed) are "setup". Chat turns are not
+ * cycles. `live` is the cycle in progress ({session, start}), which has no
+ * ledger line yet. Only cycles with at least one build are returned, newest
+ * first, each with its builds newest first.
+ */
+export function galleryCycles(project, live = null) {
+  const fleet = project.paths.fleet;
+  const dir = path.join(fleet, 'shots');
+  const builds = [];
+  const seen = new Set();
+  for (const line of readText(path.join(dir, 'index'), 500_000).split('\n')) {
+    const [at, sha, topic] = line.trim().split(/\s+/);
+    if (!SHA40_RE.test(sha || '') || seen.has(sha) || !Number.isFinite(ms(at))) continue;
+    const files = listDir(path.join(dir, sha))
+      .filter((f) => f.isFile() && SHOT_FILE_RE.test(f.name))
+      .map((f) => f.name)
+      .sort();
+    if (!files.length) continue;
+    seen.add(sha);
+    builds.push({ sha, topic: TOPIC_RE.test(topic || '') ? topic : '', at, files });
+  }
+
+  // Numbered like the Topology and Briefs pickers: counted ledger lines, in order.
+  let n = 0;
+  const cycles = [];
+  for (const c of readCycles(fleet)) {
+    const number = c.counted && c.session ? ++n : null;
+    if (c.kind === 'chat' || !Number.isFinite(ms(c.start))) continue;
+    cycles.push({ key: c.session || c.start, session: c.session, start: c.start, end: c.end, kind: c.kind, number, live: false });
+  }
+  if (live?.session && Number.isFinite(ms(live.start)) && !cycles.some((c) => c.session === live.session)) {
+    cycles.push({ key: live.session, session: live.session, start: live.start, end: null, kind: live.kind || 'normal', number: n + 1, live: true });
+  }
+  cycles.sort((a, b) => ms(a.start) - ms(b.start));
+
+  const groups = new Map();
+  for (const b of builds) {
+    let owner = null;
+    for (const c of cycles) {
+      if (ms(c.start) <= ms(b.at)) owner = c;
+      else break;
+    }
+    const key = owner ? owner.key : 'setup';
+    if (!groups.has(key)) groups.set(key, { ...(owner || { key: 'setup', session: null, start: null, end: null, kind: 'setup', number: null, live: false }), builds: [] });
+    groups.get(key).builds.push(b);
+  }
+  const out = [...groups.values()];
+  for (const g of out) g.builds.sort((a, b) => ms(b.at) - ms(a.at));
+  // Newest first; setup (before any cycle) last.
+  out.sort((a, b) => (a.start == null ? 1 : b.start == null ? -1 : ms(b.start) - ms(a.start)));
+  return out;
+}
+
 const SID_NAME_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(md|mp3)$/;
 
 /**

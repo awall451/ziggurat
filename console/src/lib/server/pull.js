@@ -2,7 +2,8 @@
 // gets credentials for this machine and never starts a transfer.
 //
 //   slow pass  every 15 min, every project: ledger, gate history, control,
-//              notes, screenshots of the newest passing build, all transcripts
+//              notes, screenshots of every merged build (kit 0.13; older kits:
+//              the newest passing build, by day), all transcripts
 //   fast pass  every ~15 s while someone is looking at a running project:
 //              just the files of the cycle in progress
 //   end pass   a slow pass as soon as a cycle is seen to have ended, so its
@@ -17,12 +18,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pull, sshArgs, q } from './ssh.js';
-import { getStatus, peekStatus, UUID_RE } from './live.js';
+import { getStatus, peekStatus, kitAtLeast, UUID_RE } from './live.js';
 import { listProjects } from './config.js';
 import { syncOutbox } from './feedback.js';
 import { syncRequest, maybePublish } from './publish.js';
 
 const SLOW_EVERY = 15 * 60_000;
+export const SHOTS_KIT = '0.13.0'; // screenshots of every merged build, by sha
 const FAST_EVERY = 15_000;
 const VIEW_WINDOW = 45_000; // a project counts as "being looked at" this long after a request
 
@@ -94,7 +96,17 @@ async function slowPass(project) {
   if (errText(f)) errors.push(`state: ${errText(f)}`);
   else s.ledgerAt = ledgerStart;
 
-  if (status.shotsDir) {
+  if (kitAtLeast(status.kitVersion, SHOTS_KIT)) {
+    // Kit 0.13: the gate keeps every merged build's shots under gate/shots/<sha>/
+    // with an index; the gallery groups them by cycle.
+    const shots = path.join(fleet, 'shots');
+    fs.mkdirSync(shots, { recursive: true });
+    const r = await pull(project, [`${k.state}/gate/shots/`], shots, {
+      filters: ['--include=/index', '--include=/*/', '--include=/*/*.png', '--exclude=*'],
+      maxSize: '10m'
+    });
+    if (errText(r)) errors.push(`shots: ${errText(r)}`);
+  } else if (status.shotsDir) {
     const day = new Date().toISOString().slice(0, 10);
     const shots = path.join(fleet, 'shots', day);
     fs.mkdirSync(shots, { recursive: true });

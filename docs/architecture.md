@@ -54,6 +54,13 @@ minutes (and the cycle in progress every 15 seconds while someone is watching it
 following symlinks. Agent-owned folders are read as the `agent` user, so a path an agent swapped for a link
 cannot make a root process read something else.
 
+Screenshots (kit 0.13): on every merge the gate copies the build's `shots/*.png` to
+`/var/lib/agent-kit/gate/shots/<sha>/` and adds `<time> <sha> <topic>` to `gate/shots/index`; only plain
+files under 10 MB with safe names, never through a link, newest 200 builds kept. The console pulls that folder
+and the Gallery groups the builds by cycle: a merge belongs to the newest cycle that started before it, and
+merges before the first cycle (the gate proof) are "setup". An issue's `--shot` names one of these files as
+`shots/<sha>/<file>.png`.
+
 ## Publishing to a remote repository
 
 A project can have a remote git repository (GitHub, Gitea, GitLab: anything that takes a per-repository deploy

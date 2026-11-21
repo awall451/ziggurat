@@ -83,6 +83,27 @@ result() { # name sha status detail
   echo "$(date -Is) $1 $2 $3 $4" >> "$STATE/gate/history.log"
 }
 
+# Screenshots of every merged build, kept by sha for the owner's gallery (kit 0.13):
+# $STATE/gate/shots/<sha>/*.png and one index line "<iso> <sha> <topic>" per build.
+# The shots folder is written by gaterun (agent code), so only plain .png files
+# under 10 MB with safe names are copied, never through a link. The newest 200
+# builds are kept.
+SHOTS=$STATE/gate/shots
+keep_shots() { # sha topic
+  local src="$LOGS/$1-out/shots" dst="$SHOTS/$1" f n kept=0
+  [ -d "$src" ] && [ ! -L "$src" ] || return 0
+  mkdir -p "$dst"
+  while IFS= read -r -d '' f; do
+    n=${f##*/}
+    [[ $n =~ ^[A-Za-z0-9._-]{1,100}\.png$ ]] || continue
+    cp -P -- "$f" "$dst/$n" && [ -f "$dst/$n" ] && [ ! -L "$dst/$n" ] && kept=$((kept + 1)) || rm -f -- "$dst/$n"
+  done < <(find "$src" -maxdepth 1 -type f -name '*.png' -size -10M -print0 2>/dev/null)
+  if [ "$kept" -eq 0 ]; then rmdir -- "$dst" 2>/dev/null; return 0; fi
+  chmod 755 "$SHOTS" "$dst"; chmod 644 "$dst"/*.png
+  echo "$(date -Is) $1 $2" >> "$SHOTS/index"; chmod 644 "$SHOTS/index"
+  ls -1dt "$SHOTS"/*/ 2>/dev/null | tail -n +201 | xargs -r rm -rf --
+}
+
 for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' "$REFS"); do
   topic=${ref#refs/candidates/}
   sha=$($GK -C "$BARE" rev-parse "$ref")
@@ -121,6 +142,7 @@ for ref in $($GK -C "$BARE" for-each-ref --format='%(refname)' "$REFS"); do
   elif $GK -C "$BARE" update-ref refs/heads/main "$sha" "$main"; then
     echo "$tests" > "$BASELINE"
     result "$topic" "$sha" merged "all checks passed; main -> ${sha:0:9} ($tests tests)"
+    keep_shots "$sha" "$topic"
   else
     result "$topic" "$sha" rejected "main moved during the run; rebase and resubmit"
   fi
