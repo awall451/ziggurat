@@ -540,6 +540,60 @@ describe('the gate proof', () => {
   });
 });
 
+describe('a planning cycle when it is ready', () => {
+  const ready = async (over) => {
+    fs.writeFileSync(tokenFile, TOKEN + '\n');
+    await planned(over);
+    await deploy.startCreate(user, 'demo');
+    await settled();
+  };
+  const until = async (fn) => {
+    for (let i = 0; i < 200; i++) {
+      const d = record();
+      if (fn(d)) return d;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error('did not happen');
+  };
+  const planCalls = () => vm.calls.filter((c) => c.script === 'agent-kit-oneshot');
+
+  it('starts one after the gate proof passes, with the focus and the cap', async () => {
+    vm.calls = [];
+    vm.auth = { ...vm.auth, loggedIn: true };
+    await ready({ plan: { on: true, focus: 'Read docs/ and propose the first jobs.', maxProposals: 3 } });
+    const d = await until((x) => x.planStartedAt || x.planError);
+    expect(d.planError).toBeUndefined();
+    expect(d.planId).toMatch(/^[0-9]{8}T[0-9]{6}Z-p-[a-f0-9]+$/);
+    const calls = planCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].argv).toEqual(['start', d.planId, 'tester', '--plan']);
+    expect(calls[0].input).toContain('Read docs/ and propose the first jobs.');
+    // Nothing in the flow resumes the team.
+    expect(vm.calls.some((c) => /resume/.test(c.script))).toBe(false);
+  });
+
+  it('starts none when the form said no', async () => {
+    vm.calls = [];
+    vm.auth = { ...vm.auth, loggedIn: true };
+    await ready();
+    await until((x) => x.proof?.state === 'done');
+    await new Promise((r) => setTimeout(r, 60));
+    expect(planCalls()).toEqual([]);
+  });
+
+  it('starts none when the gate is not proven', async () => {
+    vm.calls = [];
+    vm.auth = { ...vm.auth, loggedIn: true };
+    vm.proof = { ...PROOF_OK, ok: false, drop: { status: 'merged', detail: 'all checks passed', sha: 'c'.repeat(40) } };
+    await ready({ plan: { on: true, focus: '', maxProposals: 5 } });
+    await until((x) => x.proof?.state === 'done');
+    await new Promise((r) => setTimeout(r, 60));
+    expect(planCalls()).toEqual([]);
+    expect(record().planStartedAt).toBeUndefined();
+    vm.proof = PROOF_OK;
+  });
+});
+
 describe('the runner', () => {
   it('runs one deploy at a time and stops a run that goes over its time limit', async () => {
     await deploy.putDeploy(user, form());

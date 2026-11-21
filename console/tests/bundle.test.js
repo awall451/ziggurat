@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-bun-'));
 process.env.CONSOLE_PROJECTS_DIR = path.join(root, 'projects');
@@ -82,7 +83,11 @@ describe('checkBundle', () => {
 
   it('lists project folders that have a team', () => {
     fs.mkdirSync(path.join(root, 'projects', 'empty'), { recursive: true });
-    expect(b.listSources().filter((s) => s.kind === 'folder')).toEqual([{ kind: 'folder', id: 'plan', seed: true, files: false }]);
+    expect(b.listSources().filter((s) => s.kind === 'folder')).toEqual([{ kind: 'folder', id: 'plan', name: 'plan', seed: true, files: false }]);
+  });
+
+  it('does not offer a registered project as a starting point', () => {
+    expect(b.listSources(['plan']).filter((s) => s.kind === 'folder')).toEqual([]);
   });
 });
 
@@ -158,7 +163,8 @@ describe('the python-starter example', () => {
     expect(c.extras).toEqual([['BASELINE_TESTS', '2'], ['GATE_PROOF_DELETE', 'tests/test_placeholder.py']]);
     expect(c.provision).toContain('python3-venv');
     expect(c.charter).toContain('REPLACE THIS');
-    expect(b.listSources().filter((s) => s.kind === 'example').map((s) => s.id)).toEqual(['python-starter']);
+    // Examples stay in the repository but are no longer offered: templates replace them.
+    expect(b.listSources().filter((s) => s.kind === 'example')).toEqual([]);
   });
 
   it('keeps its seed and its own notes out of the team', async () => {
@@ -182,5 +188,91 @@ describe('reading a run\'s events', () => {
     expect(readFrom(f, first.events[0].at).events.map((e) => e.event.type)).toEqual(['b', 'c', 'd']);
     expect(readAll(f)).toHaveLength(4);
     expect(readFrom(path.join(root, 'missing'), 0)).toEqual({ events: [], next: 0 });
+  });
+});
+
+describe('team templates (kit 0.15)', () => {
+  const tpl = (id) => ({ kind: 'template', id });
+  const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
+
+  it('lists the templates first, Standard first, with how each team works', () => {
+    const t = b.listSources().filter((s) => s.kind === 'template');
+    expect(t.map((x) => x.id)).toEqual(['standard', 'device', 'small']);
+    expect(t[0]).toMatchObject({ name: 'Standard', seed: true });
+    expect(t[0].about.length).toBeGreaterThan(20);
+    expect(t[2].agents).toEqual(['area-lead-core', 'builder', 'reviewer', 'scout']);
+  });
+
+  it.each(['standard', 'small', 'device'])('%s passes the check, needs a goal and holds tools/check for the owner', (id) => {
+    const c = b.checkBundle(tpl(id));
+    expect(c.problems).toEqual([]);
+    expect(c.warnings).toEqual([]);
+    expect(c.needsGoal).toBe(true);
+    expect(c.seed).toBe(true);
+    expect(c.provision).toBeNull();
+    expect(Object.fromEntries(c.extras)).toEqual({ BASELINE_TESTS: '1', GATE_PROOF_DELETE: 'tests/seed.sh', GATE_OWNER_PATHS: 'tools/check,tools/check.d' });
+  });
+
+  it('ships the kit\'s neutral gate-checks, and the templates share their common files', () => {
+    const kitGate = fs.readFileSync(path.join(REPO, 'kit', 'vm', 'gate', 'neutral-gate-checks'), 'utf8');
+    for (const id of ['standard', 'small', 'device']) {
+      expect(fs.readFileSync(path.join(REPO, 'templates', id, 'gate-checks'), 'utf8')).toBe(kitGate);
+      expect(fs.readFileSync(path.join(REPO, 'templates', id, 'GATE-CONTRACT.md'), 'utf8')).toBe(fs.readFileSync(path.join(REPO, 'templates', 'standard', 'GATE-CONTRACT.md'), 'utf8'));
+    }
+    for (const a of ['builder', 'scout', 'reviewer']) {
+      const std = fs.readFileSync(path.join(REPO, 'templates', 'standard', 'agents', `${a}.md`), 'utf8');
+      expect(fs.readFileSync(path.join(REPO, 'templates', 'small', 'agents', `${a}.md`), 'utf8')).toBe(std);
+      expect(fs.readFileSync(path.join(REPO, 'templates', 'device', 'agents', `${a}.md`), 'utf8')).toBe(std);
+    }
+  });
+
+  it('the seed folder and hidden names are not templates', () => {
+    expect(() => b.resolveSource(tpl('_seed'))).toThrow();
+    expect(() => b.resolveSource(tpl('nope'))).toThrow();
+  });
+
+  it('puts the goal into the charter as written, never rendered', async () => {
+    const dir = path.join(root, 'data', 'stage-tpl');
+    const goal = 'Build a car dashboard display. The {{qa}} text stays as typed; so does {{unknown}}.';
+    const env = b.projectEnv({ id: 'demo', leadModel: 'fable', fallbackModel: 'opus', budgetUsd: 40, cyclesPerDay: 6, proxyUrl: 'http://10.66.0.1:3128', extras: b.checkBundle(tpl('device')).extras });
+    const st = await b.stageBundle(dir, tpl('device'), { theme: 'plain', charter: null, env, goal });
+    expect(st.charter).toContain(goal);
+    expect(st.charter).toContain('## The device');
+    expect(st.charter).not.toContain('{{goal}}');
+    expect(st.charter).toContain('The QA uses the result');
+    expect(fs.readFileSync(path.join(dir, 'bundle', 'project.env'), 'utf8')).toContain('GATE_OWNER_PATHS=tools/check,tools/check.d');
+    await expect(b.stageBundle(path.join(root, 'data', 'stage-nogoal'), tpl('standard'), { theme: 'plain', charter: null, env })).rejects.toThrow(/goal/);
+  });
+
+  it('builds the seed: the neutral checks, the owner\'s documents and a README with the goal', async () => {
+    const dir = path.join(root, 'data', 'stage-tpl');
+    const { archive } = await b.buildPayload(dir, tpl('device'), {
+      name: 'Revview',
+      goal: 'A glanceable dashboard display for Claude Code while driving.',
+      docs: [{ name: 'DESIGN.md', text: '# Design\n' }, { name: 'BENCH-TEST.md', text: '# Bench' }]
+    });
+    const out = path.join(root, 'data', 'unpacked');
+    fs.mkdirSync(out, { recursive: true });
+    execFileSync('tar', ['-xzf', archive, '-C', out]);
+    const seed = path.join(out, 'seed');
+    expect(fs.readFileSync(path.join(seed, 'docs', 'DESIGN.md'), 'utf8')).toBe('# Design\n');
+    expect(fs.readFileSync(path.join(seed, 'docs', 'BENCH-TEST.md'), 'utf8')).toBe('# Bench\n');
+    const readme = fs.readFileSync(path.join(seed, 'README.md'), 'utf8');
+    expect(readme).toMatch(/^# Revview\n\nA glanceable dashboard/);
+    expect(readme).toContain('[docs/DESIGN.md](docs/DESIGN.md)');
+    expect(fs.statSync(path.join(seed, 'tools', 'check')).mode & 0o111).toBeTruthy();
+    expect(fs.existsSync(path.join(seed, 'tests', 'seed.sh'))).toBe(true);
+    const r = spawnSync('bash', [path.join(seed, 'tools', 'check'), path.join(root, 'data', 'check-out')], { encoding: 'utf8' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain('TESTS_PASSED=1');
+  });
+
+  it('refuses documents with odd names, too many, or too large', () => {
+    expect(() => b.checkDocs([{ name: '../x.md', text: '' }])).toThrow();
+    expect(() => b.checkDocs([{ name: 'a.txt', text: '' }])).toThrow();
+    expect(() => b.checkDocs([{ name: 'a.md', text: '' }, { name: 'A.md', text: '' }])).toThrow();
+    expect(() => b.checkDocs(Array.from({ length: 11 }, (_, i) => ({ name: `d${i}.md`, text: '' })))).toThrow();
+    expect(() => b.checkDocs([{ name: 'big.md', text: 'x'.repeat(2 * 1024 * 1024 + 1) }])).toThrow();
+    expect(b.checkDocs([{ name: 'PLAN.md', text: 'ok' }])).toHaveLength(1);
   });
 });

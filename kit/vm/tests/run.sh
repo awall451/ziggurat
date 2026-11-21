@@ -960,7 +960,7 @@ echo "== changes to what done means wait for the owner (kit 0.14)"
 og() { "$BIN/owner-gate" "$@"; }
 kg() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-gate" "$@"; }
 check "no owner paths: no prompt section" '[ -z "$(og prompt)" ]'
-echo 'GATE_OWNER_PATHS="tools/check tools/check.d ../etc *"' >> "$T/etc/project.env"
+echo 'GATE_OWNER_PATHS=tools/check,tools/check.d,../etc,*' >> "$T/etc/project.env"
 G fetch -q gate; G checkout -q -B hold-a gate/main; mkdir -p "$T/ws/tools"; echo 'echo TESTS_PASSED=9' > "$T/ws/tools/check"; G add -A; G commit -q -m "new checks"
 G branch -f ready/hold-a hold-a > /dev/null
 hsha=$(G rev-parse hold-a); mainh=$(git -C "$T/bare" rev-parse main)
@@ -1247,6 +1247,19 @@ check "a job the team was too busy for is dropped and logged" '[ ! -e "$S/onesho
 echo "Plan later." | shot at $((now + 600)) 20260103T110000Z-p-later owner --plan > /dev/null
 shot unat 20260103T110000Z-p-later > /dev/null
 check "a timed job can be cancelled" '[ ! -e "$S/oneshot-at/20260103T110000Z-p-later" ]'
+
+echo "== the owner's cap on proposals (kit 0.15)"
+PL3=20260104T100000Z-p-capped
+printf 'Max-proposals: 2\nRead docs/ and propose the first jobs.\n' | akb plan $PL3 owner > /dev/null
+check "the cap is a header, not part of the focus" 'grep -qx "Max-proposals: 2" <<< "$(sed -n "1,/^---$/p" "$S/backlog/plans/$PL3/request.md")" && [ "$(sed "1,/^---$/d" "$S/backlog/plans/$PL3/request.md")" = "Read docs/ and propose the first jobs." ]'
+check "the planning rules name the cap" 'grep -q "At most 2 proposals" <<< "$(ob plan $PL3)" && grep -q "Read docs/" <<< "$(ob plan $PL3)"'
+echo "Why: a. Steps: 1." | prop > /dev/null; echo "Why: b. Steps: 1." | prop > /dev/null
+refuse "a proposal over the owner's cap" sh -c "echo 'Why: c.' | $BIN/owner-backlog propose --title C --minutes 30 --cost 1 --confidence low"
+check "without a cap the usual range" 'grep -q "Three to eight proposals" <<< "$(ob plan $PL)"'
+printf 'Max-proposals: 9\nNine is too many.\n' | akb plan 20260104T110000Z-p-nine owner > /dev/null
+check "a cap out of range stays in the focus text and caps nothing" '! grep -q "^Max-proposals" <<< "$(sed -n "1,/^---$/p" "$S/backlog/plans/20260104T110000Z-p-nine/request.md")"'
+printf 'Max-proposals: 3' | akb plan 20260104T120000Z-p-only owner > /dev/null
+check "a cap with no focus leaves the focus empty" 'grep -qx "Max-proposals: 3" "$S/backlog/plans/20260104T120000Z-p-only/request.md" && [ -z "$(sed "1,/^---$/d" "$S/backlog/plans/20260104T120000Z-p-only/request.md")" ]'
 
 check "lead-settings.json is a JSON object" 'jq -e "type == \"object\"" "$HERE/../lead-settings.json" > /dev/null'
 

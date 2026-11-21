@@ -107,6 +107,13 @@ case "${1:-list}" in
   propose)
     shift
     plan=$(current_plan) || die "there is no planning request to propose against"
+    # The owner's cap for this plan (kit 0.15).
+    max=$(header "$BL/plans/$plan/request.md" Max-proposals)
+    if [[ $max =~ ^[1-8]$ ]]; then
+      n=0
+      for f in "$OUT"/*.md; do [ "$(header "$f" Plan)" = "$plan" ] && n=$((n + 1)); done
+      [ "$n" -lt "$max" ] || die "the owner asked for at most $max proposals in this plan: revise one instead (owner-backlog revise <pid>)"
+    fi
     title="" minutes="" cost="" confidence="" areas="" depends="" order="" risk=""
     parse_flags "$@"
     read_body
@@ -203,6 +210,9 @@ EOF
     fi
     [ -z "${3:-}" ] || die "usage: owner-backlog plan <plan-id> [--head]"
     focus=$(body "$BL/plans/$id/request.md")
+    max=$(header "$BL/plans/$id/request.md" Max-proposals)
+    if [[ $max =~ ^[1-8]$ ]]; then howmany="At most $max proposals (the owner's limit for this plan), most valuable first."
+    else howmany="Three to eight proposals, most valuable first."; fi
     cat <<EOF
 ## Planning cycle: this cycle only
 
@@ -232,7 +242,7 @@ EOF
   touches (not single files) and the main risk.
 - **Estimate honestly.** Minutes of wall clock and US dollars for the job as a one-shot cycle, and how
   sure you are. Base it on the recent numbers below and on your own judgement.
-- **A handful, not a list of everything.** Three to eight proposals, most valuable first.
+- **A handful, not a list of everything.** $howmany
 
 Write each with:
 

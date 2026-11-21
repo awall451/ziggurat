@@ -235,7 +235,9 @@ export function validateProject(input, roots = {}) {
 
 const MODEL_RE = /^[a-z][a-z0-9.-]{1,39}$/;
 const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const DEPLOY_KEYS = ['id', 'name', 'description', 'remote', 'target', 'source', 'charter', 'theme', 'accent', 'cores', 'memoryMb', 'diskGb', 'vmid', 'leadModel', 'fallbackModel', 'budgetUsd', 'cyclesPerDay'];
+const DEPLOY_KEYS = ['id', 'name', 'description', 'remote', 'target', 'source', 'charter', 'goal', 'docs', 'plan', 'theme', 'accent', 'cores', 'memoryMb', 'diskGb', 'vmid', 'leadModel', 'fallbackModel', 'budgetUsd', 'cyclesPerDay'];
+const DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}\.md$/;
+const SOURCE_KINDS = ['template', 'folder', 'example'];
 
 /** What the "New project" form sends. `target` (validated) gives the id range. */
 export function validateDeployRequest(input, target = null) {
@@ -257,7 +259,12 @@ export function validateDeployRequest(input, target = null) {
     cyclesPerDay: c.int('cyclesPerDay', 0, 200, { fallback: 6 }),
     vmid: null,
     charter: null,
-    remote: null
+    remote: null,
+    // A new project (kit 0.15 templates): what the team should build, the owner's
+    // plan and design documents, and whether to plan as soon as the VM is ready.
+    goal: null,
+    docs: [],
+    plan: { on: false, focus: '', maxProposals: 5 }
   };
   const remote = c.get('remote');
   if (remote != null && remote !== '') {
@@ -265,9 +272,44 @@ export function validateDeployRequest(input, target = null) {
     else r.remote = remote;
   }
   const src = c.get('source');
-  if (!src || typeof src !== 'object' || !['folder', 'example'].includes(src.kind) || typeof src.id !== 'string' || !SOURCE_RE.test(src.id)) {
-    c.bad('source', 'pick a project folder or an example');
+  if (!src || typeof src !== 'object' || !SOURCE_KINDS.includes(src.kind) || typeof src.id !== 'string' || !SOURCE_RE.test(src.id)) {
+    c.bad('source', 'pick a team');
   } else r.source = { kind: src.kind, id: src.id };
+  const goal = c.get('goal');
+  if (goal != null && goal !== '') {
+    if (typeof goal !== 'string' || /\u0000/.test(goal) || goal.trim().length < 20 || goal.length > 20000) c.bad('goal', 'say what the team should build: 20 to 20000 characters');
+    else r.goal = goal.trim();
+  }
+  if (r.source?.kind === 'template' && !r.goal) c.bad('goal', 'say what the team should build: 20 to 20000 characters');
+  const docs = c.get('docs');
+  if (docs != null) {
+    let bytes = 0;
+    const seen = new Set();
+    const ok =
+      Array.isArray(docs) &&
+      docs.length <= 10 &&
+      docs.every((d) => {
+        if (!d || typeof d !== 'object' || !DOC_NAME_RE.test(d.name || '') || typeof d.text !== 'string' || /\u0000/.test(d.text)) return false;
+        if (seen.has(d.name.toLowerCase())) return false;
+        seen.add(d.name.toLowerCase());
+        bytes += Buffer.byteLength(d.text);
+        return true;
+      });
+    if (!ok) c.bad('docs', 'at most 10 Markdown documents, each a .md name (letters, digits, . _ -) and text, no two with the same name');
+    else if (bytes > 2 * 1024 * 1024) c.bad('docs', 'the documents are larger than 2 MB together');
+    else r.docs = docs.map((d) => ({ name: d.name, text: d.text }));
+  }
+  const plan = c.get('plan');
+  if (plan != null) {
+    if (typeof plan !== 'object' || Array.isArray(plan)) c.bad('plan', 'must be {on, focus, maxProposals}');
+    else {
+      const max = plan.maxProposals == null || plan.maxProposals === '' ? 5 : Number(plan.maxProposals);
+      const focus = plan.focus == null ? '' : plan.focus;
+      if (typeof focus !== 'string' || focus.length > 8000 || /\u0000/.test(focus)) c.bad('plan', 'the focus is text of at most 8000 characters');
+      else if (!Number.isInteger(max) || max < 1 || max > 8) c.bad('plan', 'at most 1 to 8 proposals');
+      else r.plan = { on: plan.on === true, focus: focus.trim(), maxProposals: max };
+    }
+  }
   const charter = c.get('charter');
   if (charter != null && charter !== '') {
     if (typeof charter !== 'string' || charter.length > 40000 || /\u0000/.test(charter)) c.bad('charter', 'must be text, at most 40000 characters');

@@ -1,0 +1,26 @@
+#!/bin/bash
+# tools/check <outdir>: this project's checks. The gate runs exactly this script
+# on every submitted branch (see /opt/agent-kit/GATE-CONTRACT.md).
+#
+# A starting point only: it runs every tests/*.sh and counts those that pass.
+# Replace it with the project's real checks once its stack is chosen. A change
+# to this file waits for the owner's approval (explain it with `owner-gate
+# explain <topic>`).
+set -uo pipefail
+out=${1:-/tmp/check-out}
+mkdir -p "$out"
+cd "$(dirname "$0")/.." || exit 2
+passed=0 failed=0 t0=$SECONDS
+for t in tests/*.sh; do
+  [ -f "$t" ] || continue
+  log="$out/$(basename "$t").log"
+  if bash "$t" > "$log" 2>&1; then
+    passed=$((passed + 1))
+  else
+    failed=$((failed + 1))
+    echo "failed: $t"; tail -20 "$log"
+  fi
+done
+if [ "$failed" -eq 0 ]; then echo "STEP tests ok $((SECONDS - t0))s"; else echo "STEP tests FAIL $((SECONDS - t0))s"; fi
+echo "TESTS_PASSED=$passed"
+[ "$failed" -eq 0 ]

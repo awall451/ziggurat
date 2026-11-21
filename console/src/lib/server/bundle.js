@@ -25,6 +25,12 @@ const TEAM_DIRS = ['agents', 'checks'];
 const RESERVED_ENV = ['PROJECT', 'WORKSPACE', 'BARE', 'STATE', 'LEAD_MODEL', 'FALLBACK_MODEL', 'CYCLE_BUDGET_USD', 'MAX_CYCLES_PER_DAY', 'AGENT_PROXY_URL'];
 
 const EXAMPLES_DIR = path.join(REPO_DIR, 'examples');
+// Team templates (how a team works, not the language) and the neutral seed they share.
+const TEMPLATES_DIR = path.join(REPO_DIR, 'templates');
+const TEMPLATE_SEED = path.join(TEMPLATES_DIR, '_seed');
+// The owner's plan and design documents, put into the seed's docs/ folder.
+export const DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}\.md$/;
+export const DOC_LIMITS = { files: 10, bytes: 2 * 1024 * 1024 };
 
 function isDir(p) {
   try {
@@ -43,6 +49,11 @@ export function resolveSource(source) {
     if (!isDir(path.join(base, 'team'))) throw new Error(`No team folder in ${source.id}`);
     return { kind: 'folder', id: source.id, team: path.join(base, 'team'), seed: isDir(path.join(base, 'seed')) ? path.join(base, 'seed') : null, files: isDir(path.join(base, 'files')) ? path.join(base, 'files') : null, flat: false };
   }
+  if (source.kind === 'template') {
+    const base = path.join(TEMPLATES_DIR, source.id);
+    if (source.id.startsWith('_') || !isDir(base) || !fs.existsSync(path.join(base, 'template.json'))) throw new Error(`No team template named ${source.id}`);
+    return { kind: 'template', id: source.id, team: base, seed: isDir(TEMPLATE_SEED) ? TEMPLATE_SEED : null, files: null, flat: false };
+  }
   if (source.kind === 'example') {
     const base = path.join(EXAMPLES_DIR, source.id);
     if (!isDir(base)) throw new Error(`No example named ${source.id}`);
@@ -59,19 +70,38 @@ function names(dir) {
   }
 }
 
-/** Project folders with a team, and examples that can start from nothing (they ship a seed). */
-export function listSources() {
+/** A template's name and one line on how its team works (template.json), or null. */
+function templateInfo(id) {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, id, 'template.json'), 'utf8'));
+    const clean = (v, n) => String(v || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
+    return { name: clean(j.name, 40) || id, about: clean(j.about, 300) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a new project can start from: the team templates, and prepared team
+ * folders under the projects folder that are not registered projects (a
+ * registered project's folder is its running team, not a template).
+ * `registered`: ids of the projects that exist.
+ */
+export function listSources(registered = []) {
   const out = [];
+  for (const n of names(TEMPLATES_DIR)) {
+    if (!NAME_RE.test(n) || n.startsWith('_') || !fs.existsSync(path.join(TEMPLATES_DIR, n, 'CHARTER.md'))) continue;
+    const info = templateInfo(n);
+    if (info) out.push({ kind: 'template', id: n, name: info.name, about: info.about, agents: readAgents(path.join(TEMPLATES_DIR, n)).map((a) => a.id), seed: true, files: false });
+  }
+  // Standard first, then the rest by name.
+  out.sort((a, b) => (a.id === 'standard' ? -1 : b.id === 'standard' ? 1 : a.name.localeCompare(b.name)));
   if (PROJECTS_DIR) {
     for (const n of names(PROJECTS_DIR)) {
+      if (registered.includes(n)) continue;
       if (NAME_RE.test(n) && fs.existsSync(path.join(PROJECTS_DIR, n, 'team', 'CHARTER.md'))) {
-        out.push({ kind: 'folder', id: n, seed: isDir(path.join(PROJECTS_DIR, n, 'seed')), files: isDir(path.join(PROJECTS_DIR, n, 'files')) });
+        out.push({ kind: 'folder', id: n, name: n, seed: isDir(path.join(PROJECTS_DIR, n, 'seed')), files: isDir(path.join(PROJECTS_DIR, n, 'files')) });
       }
-    }
-  }
-  for (const n of names(EXAMPLES_DIR)) {
-    if (NAME_RE.test(n) && fs.existsSync(path.join(EXAMPLES_DIR, n, 'CHARTER.md')) && isDir(path.join(EXAMPLES_DIR, n, 'seed'))) {
-      out.push({ kind: 'example', id: n, seed: true, files: isDir(path.join(EXAMPLES_DIR, n, 'files')) });
     }
   }
   return out;
@@ -176,6 +206,7 @@ export function checkBundle(source) {
   for (const n of names(src.team)) {
     if (skip.includes(n)) continue;
     const dir = isDir(path.join(src.team, n));
+    if (src.kind === 'template' && n === 'template.json') continue;
     if (dir ? !TEAM_DIRS.includes(n) : !TEAM_FILES.includes(n)) warnings.push(`team/${n}: not part of a bundle; it is left out`);
   }
   const gate = read(path.join(src.team, 'gate-checks'));
@@ -230,7 +261,9 @@ export function checkBundle(source) {
     domains,
     seed: !!src.seed,
     files: !!src.files,
-    sizes
+    sizes,
+    // A template's charter has a {{goal}} slot: the owner's goal goes there.
+    needsGoal: /\{\{\s*goal\s*\}\}/.test(read(path.join(src.team, 'CHARTER.md')) || '')
   };
 }
 
@@ -266,9 +299,10 @@ function copyTree(from, to, skip = []) {
   }
 }
 
-function render(src, theme, out) {
+function render(src, theme, out, goalFile = null) {
+  const args = [path.join(REPO_DIR, 'tools', 'render-team.py'), src, '--theme', theme, '--out', out, ...(goalFile ? ['--goal-file', goalFile] : [])];
   return new Promise((resolve, reject) => {
-    execFile('python3', [path.join(REPO_DIR, 'tools', 'render-team.py'), src, '--theme', theme, '--out', out], { timeout: 30000 }, (err, stdout, stderr) => {
+    execFile('python3', args, { timeout: 30000 }, (err, stdout, stderr) => {
       if (err) reject(new Error(`Could not render the team for theme ${theme}: ${(stderr || err.message).trim().slice(-300)}`));
       else resolve();
     });
@@ -284,10 +318,36 @@ function minimalSeed(dir, { name, description }) {
   fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n.venv/\n__pycache__/\n');
 }
 
+const oneLine = (v) => String(v || '').replace(/[\u0000-\u001f]/g, ' ').trim();
+
+/** The owner's documents, checked again here: names, count and size. */
+export function checkDocs(docs) {
+  const list = Array.isArray(docs) ? docs : [];
+  if (list.length > DOC_LIMITS.files) throw new Error(`At most ${DOC_LIMITS.files} documents`);
+  let bytes = 0;
+  const seen = new Set();
+  for (const d of list) {
+    if (!d || !DOC_NAME_RE.test(d.name || '') || typeof d.text !== 'string' || /\u0000/.test(d.text)) throw new Error('A document must be a .md name and text');
+    if (seen.has(d.name.toLowerCase())) throw new Error(`Two documents are called ${d.name}`);
+    seen.add(d.name.toLowerCase());
+    bytes += Buffer.byteLength(d.text);
+  }
+  if (bytes > DOC_LIMITS.bytes) throw new Error(`The documents are larger than ${DOC_LIMITS.bytes / 1048576} MB together`);
+  return list;
+}
+
+/** A template project's README: its name, the owner's goal, where the plan is. */
+function templateReadme({ name, goal, docs }) {
+  const list = docs.length ? docs.map((d) => `- [docs/${d.name}](docs/${d.name})`).join('\n') : '- (none yet)';
+  return `# ${oneLine(name) || 'New project'}\n\n${String(goal || '').trim()}\n\n## Plan and design\n\n${list}\n\n## Checks\n\n\`\`\`bash\nbash tools/check /tmp/check-out\n\`\`\`\n\nThe gate runs the same script on every submitted branch.\n`;
+}
+
 /**
  * Pack what goes into the new VM into `<dir>/payload.tar.gz`: the kit from
  * this repository, the staged team (`<dir>/bundle`) and the seed. Returns the
  * archive path and the project's extra files folder, if it has one.
+ * `about`: name, description, and for a new project the owner's goal and
+ * documents (docs/ in the seed; a template's seed also gets a README).
  */
 export async function buildPayload(dir, source, about = {}) {
   const src = resolveSource(source);
@@ -301,6 +361,12 @@ export async function buildPayload(dir, source, about = {}) {
   if (src.seed) copyTree(src.seed, path.join(pay, 'seed'), ['.git']);
   else minimalSeed(path.join(pay, 'seed'), about);
   if (!names(path.join(pay, 'seed')).length) minimalSeed(path.join(pay, 'seed'), about);
+  const docs = checkDocs(about.docs);
+  if (docs.length) {
+    fs.mkdirSync(path.join(pay, 'seed', 'docs'), { recursive: true });
+    for (const d of docs) fs.writeFileSync(path.join(pay, 'seed', 'docs', d.name), d.text.endsWith('\n') ? d.text : d.text + '\n');
+  }
+  if (src.kind === 'template') fs.writeFileSync(path.join(pay, 'seed', 'README.md'), templateReadme({ name: about.name, goal: about.goal, docs }));
   await new Promise((resolve, reject) => {
     const tar = spawn('tar', ['-czf', archive, '--owner=0', '--group=0', '-C', pay, 'kit', 'bundle', 'seed'], { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
@@ -317,7 +383,7 @@ export async function buildPayload(dir, source, about = {}) {
  * the charter text and the generated project.env, and render the role names
  * for the theme. Returns the rendered folder and the rendered charter.
  */
-export async function stageBundle(dir, source, { theme, charter, env }) {
+export async function stageBundle(dir, source, { theme, charter, env, goal = null }) {
   if (!listThemes().includes(theme)) throw new Error(`No theme named ${theme}`);
   const src = resolveSource(source);
   const raw = path.join(dir, 'bundle-src');
@@ -336,6 +402,12 @@ export async function stageBundle(dir, source, { theme, charter, env }) {
   }
   if (charter) fs.writeFileSync(path.join(raw, 'CHARTER.md'), charter.endsWith('\n') ? charter : charter + '\n');
   fs.writeFileSync(path.join(raw, 'project.env'), env);
-  await render(raw, theme, out);
+  // The owner's goal fills a template charter's {{goal}} slot, inserted as written.
+  let goalFile = null;
+  if (goal != null && String(goal).trim()) {
+    goalFile = path.join(dir, 'goal.txt');
+    fs.writeFileSync(goalFile, String(goal).trim() + '\n');
+  }
+  await render(raw, theme, out, goalFile);
   return { dir: out, charter: read(path.join(out, 'CHARTER.md')) || '', agents: readAgents(out) };
 }

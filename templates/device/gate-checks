@@ -1,0 +1,33 @@
+#!/bin/bash
+# gate-checks <workdir> <outdir>   language-neutral (kit 0.14; the team templates ship this file)
+#
+# The repository owns its checks: `tools/check <outdir>` runs them, in any
+# language. It prints one line per step ("STEP <name> ok|FAIL <secs>s"), prints
+# TESTS_PASSED=<n> (passed tests; a skipped test does not count), may write
+# screenshots to <outdir>/shots/*.png for the owner's gallery, and exits
+# non-zero when anything fails.
+#
+# Runs as the unprivileged `gaterun` user in a fresh checkout of the candidate.
+# What keeps the team honest is outside the repository: the gate refuses a
+# drop in TESTS_PASSED, and a change to tools/check waits for the owner
+# (GATE_OWNER_PATHS in project.env, see gate-run).
+set -uo pipefail
+work=$1 out=$2
+cd "$work" || exit 2
+mkdir -p "$out"
+if [ ! -f tools/check ] || [ -L tools/check ]; then
+  echo "STEP check FAIL 0s"
+  echo "this repository has no tools/check: the script that runs its checks (see GATE-CONTRACT.md)"
+  exit 1
+fi
+t0=$SECONDS
+timeout 1500 bash tools/check "$out" > "$out/check.log" 2>&1
+rc=$?
+cat "$out/check.log"
+if [ $rc -ne 0 ]; then
+  grep -q '^STEP .* FAIL' "$out/check.log" || echo "STEP check FAIL $((SECONDS - t0))s"
+  [ $rc -eq 124 ] && echo "tools/check ran longer than 25 minutes"
+  exit 1
+fi
+grep -q '^TESTS_PASSED=[0-9]' "$out/check.log" || { echo "STEP check FAIL $((SECONDS - t0))s"; echo "tools/check printed no TESTS_PASSED=<n> line"; exit 1; }
+echo "ALL CHECKS PASSED"

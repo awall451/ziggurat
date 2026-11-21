@@ -1,0 +1,4 @@
+{
+  "name": "Device",
+  "about": "Standard, for software that runs on hardware this VM does not have: it is built and proven in an emulator, and the owner tries it on the device from a bench-test list."
+}
