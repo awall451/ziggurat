@@ -64,12 +64,14 @@ safe_add gaterun "$BARE"
 safe_add agent "$BARE"
 
 echo "== /opt/agent-kit (root-owned, read-only to agents)"
-install -d -m 755 /opt/agent-kit/bin /opt/agent-kit/gate/bin /opt/agent-kit/gate/checks
+install -d -m 755 /opt/agent-kit/bin /opt/agent-kit/gate/bin /opt/agent-kit/gate/checks /opt/agent-kit/recipes
 if [ -n "$PDIR" ]; then
   [ -f "$PDIR/gate-checks" ] || { echo "project dir needs a gate-checks script (see examples/)"; exit 1; }
 fi
 install -m 755 "$KIT"/bin/* /opt/agent-kit/bin/
 install -m 755 "$KIT"/gate/bin/* /opt/agent-kit/gate/bin/
+# Install recipes for package requests (kit 0.16): root-owned, run only by agent-kit-packages.
+install -m 755 "$KIT"/recipes/*.sh /opt/agent-kit/recipes/
 install -m 644 "$KIT/VERSION" /opt/agent-kit/VERSION
 # Hook settings for the lead's session. A file that is not a JSON object would
 # stop the lead from starting, so check it first.
@@ -85,7 +87,7 @@ for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-re
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
          owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule \
-         agent-kit-backlog owner-backlog agent-kit-chat owner-gate; do
+         agent-kit-backlog owner-backlog agent-kit-chat owner-gate owner-packages agent-kit-packages; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 
@@ -110,6 +112,10 @@ install -d -m 755 -o agent -g agent "$STATE/backlog-out" "$STATE/ledger/plans"
 # the lead's explanations go to gate-out.
 install -d -m 755 "$STATE/gate/approved"
 install -d -m 755 -o agent -g agent "$STATE/gate-out"
+# Package requests (kit 0.16): the owner's decisions, results and logs are
+# root-owned; the lead's requests go to packages-out.
+install -d -m 755 "$STATE/packages" "$STATE/packages/.owner" "$STATE/packages/results" "$STATE/packages/logs"
+install -d -m 755 -o agent -g agent "$STATE/packages-out"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"
 

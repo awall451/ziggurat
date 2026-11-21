@@ -1,0 +1,8 @@
+[Unit]
+Description=Agent kit: install one package the owner approved, between cycles (started by the tick)
+
+[Service]
+Type=oneshot
+# Its own unit, so a long install never holds up the tick's stop checks.
+ExecStart=/usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin /opt/agent-kit/bin/agent-kit-packages due
+TimeoutStartSec=2h

@@ -11,3 +11,5 @@ ExecStart=/opt/agent-kit/bin/agent-kit-halt --if-due
 ExecStart=-/opt/agent-kit/bin/agent-kit-schedule tick
 # A one-shot job set for a time (kit 0.10): after the slots, so a slot due this same minute goes first.
 ExecStart=-/opt/agent-kit/bin/agent-kit-oneshot due
+# An approved package (kit 0.16): in its own unit, started without waiting; it checks for a cycle itself.
+ExecStart=-/bin/systemctl start --no-block agent-kit-packages.service

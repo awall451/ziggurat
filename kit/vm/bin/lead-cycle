@@ -107,6 +107,10 @@ fi
 if [ -x "$KIT/bin/owner-gate" ]; then
   gateown=$("$KIT/bin/owner-gate" prompt 2>/dev/null) && [ -n "$gateown" ] && prompt+=$'\n\n'"$gateown"
 fi
+# System packages and domains: the lead asks, the owner approves (kit 0.16).
+if [ -x "$KIT/bin/owner-packages" ]; then
+  pkgs=$("$KIT/bin/owner-packages" prompt 2>/dev/null) && [ -n "$pkgs" ] && prompt+=$'\n\n'"$pkgs"
+fi
 budget=$CYCLE_BUDGET_USD
 tools=()
 if [ -n "$plan" ]; then

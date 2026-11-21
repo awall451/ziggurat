@@ -432,6 +432,20 @@ A planning request can start with the line `Max-proposals: N` (1 to 8): `agent-k
 header, the planning rules say "at most N", and `owner-backlog propose` refuses more. The console's "When it's
 ready" option starts one such planning cycle after the gate proof passes; the team halts again when it ends.
 
+### Packages and domains after the VM exists (kit 0.16)
+
+The lead is not root and the proxy is closed, so it asks: `owner-packages request apt:<package>`,
+`recipe:<name>[@<version>]` (root-owned install scripts in `kit/vm/recipes/`, each naming the domains it needs) or
+`domain:<domain>`, with the reason on stdin, to `packages-out/<rid>.md`. The console's Inbox shows each request
+with the reason and which of its domains the gateway still lacks. **Approve** first adds the missing domains on
+the gateway (`/usr/local/sbin/agent-allow add`, which appends to `/etc/squid/agent-allow-extra.txt` and reloads
+squid; the gateway playbook never rewrites that file), then runs `agent-kit-packages approve <rid>`, which copies
+the checked request into the root-owned `packages/.owner/<rid>`. The tick starts `agent-kit-packages.service`
+every minute: when no cycle, chat turn or one-shot job is running it installs one approved request, in approval
+order, through the proxy (`packages/results/<rid>`, `packages/logs/<rid>.log`). The lead's prompt lists its
+requests and the end of a failed install's log. New VMs also get `python3-venv` and `python3-pip` from
+cloud-init.
+
 ### Ledger kinds
 
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,
