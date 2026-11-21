@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { goto, invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
   import { when } from '$lib/format.js';
 
@@ -105,14 +105,60 @@
   }
 
   // /new?edit=<id>: change the inputs of a deploy that has no VM yet.
+  // /new?draft=<id>: open a draft (written by hand, or by Claude after a planning talk).
+  let draftId = $state('');
+  let importer = $state();
   onMount(async () => {
     const edit = page.url.searchParams.get('edit');
     if (edit) {
       const res = await fetch(`/api/deploys/${edit}`);
       if (res.ok) return fill((await res.json()).request);
     }
+    const draft = page.url.searchParams.get('draft');
+    if (draft && (await openDraft(draft))) return;
     if (templates.length) await pick(key(templates[0]));
   });
+
+  async function openDraft(id) {
+    problem = '';
+    const res = await fetch(`/api/drafts/${encodeURIComponent(id)}`);
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      problem = `draft: ${out.message || 'could not be opened'}`;
+      return false;
+    }
+    draftId = out.id;
+    await fill(out.request);
+    return true;
+  }
+
+  // A draft file from disk: stored like any draft (the server checks it), then opened.
+  async function importFile(file) {
+    problem = '';
+    let json;
+    try {
+      json = JSON.parse(await file.text());
+    } catch {
+      problem = `draft: ${file.name} is not JSON`;
+      return;
+    }
+    const res = await fetch('/api/drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(json) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      problem = out.message || 'The draft was not accepted';
+      return;
+    }
+    await goto(out.url, { invalidateAll: true });
+    await openDraft(out.id);
+    if (out.warnings?.length) problem = out.warnings.join('; ');
+  }
+
+  async function dropDraft(id) {
+    if (!confirm('Delete this draft?')) return;
+    await fetch(`/api/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (id === draftId) draftId = '';
+    await invalidateAll();
+  }
 
   // ---- documents ----
   const docName = (n) => {
@@ -187,6 +233,8 @@
       const res = await fetch('/api/deploys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.message || 'The request failed');
+      // The draft has become a deploy: it is not needed any more.
+      if (draftId) await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' }).catch(() => {});
       await goto(`/new/${out.id}`);
     } catch (e) {
       problem = e.message;
@@ -210,6 +258,27 @@
           <span>{d.name}</span><span class="mono small dim">{d.id}{d.vmid ? ` · VM ${d.vmid}` : ''}</span>
           <span class="grow"></span><span class="small dim">{STATE[d.state] || d.state} · {when(d.updatedAt)}</span>
         </a>
+      {/each}
+    </section>
+  {/if}
+
+  <div class="importbar">
+    {#if draftId}<span class="small">Opened from a draft. Read it, change what you like, then press Check.</span>{/if}
+    <span class="grow"></span>
+    <button class="btn quiet sm" onclick={() => importer.click()}>Import JSON…</button>
+    <input bind:this={importer} type="file" accept=".json,application/json" hidden onchange={(e) => (importFile(e.currentTarget.files[0]), (e.currentTarget.value = ''))} />
+  </div>
+
+  {#if data.drafts?.length}
+    <section class="panel block">
+      <h2>Drafts</h2>
+      {#each data.drafts as dr (dr.id)}
+        <div class="line">
+          <a href="/new?draft={dr.id}" data-sveltekit-reload>{dr.name || dr.projectId}</a>
+          <span class="mono small dim">{dr.projectId}</span>
+          <span class="grow"></span><span class="small dim">{when(dr.createdAt)}</span>
+          <button class="btn quiet sm" onclick={() => dropDraft(dr.id)}>Delete</button>
+        </div>
       {/each}
     </section>
   {/if}
@@ -254,7 +323,7 @@
       <textarea
         class="field goal"
         bind:value={f.goal}
-        rows="6"
+        rows={Math.min(22, Math.max(6, f.goal.split('\n').length + 1))}
         maxlength="20000"
         placeholder="A few honest paragraphs: what it is, who it is for, and how you will know it is good. Example: a command-line tool that turns a folder of bank CSV exports into one tidy ledger; done when last year's totals match my spreadsheet."
       ></textarea>
@@ -550,6 +619,12 @@
   }
   .grow {
     flex: 1;
+  }
+  .importbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: -6px;
   }
   .actions {
     display: flex;

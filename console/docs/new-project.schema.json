@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ziggurat-console/new-project.schema.json",
+  "title": "Ziggurat New project draft",
+  "description": "Everything the console's New project page holds. POST it to /api/drafts; the console checks it with the same rules as the form, keeps it as a draft and answers with {id, url, warnings}. Open the url (/new?draft=<id>) to read, change and send it. A draft never deploys anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "source"],
+  "properties": {
+    "name": { "type": "string", "maxLength": 80, "description": "The project's name, shown on its card." },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,39}$", "description": "Also the VM's name and the repository folder. Left out: made from the name." },
+    "description": { "type": "string", "maxLength": 200, "description": "One line on the project card." },
+    "remote": { "type": ["string", "null"], "description": "Optional ssh address of an empty repository to publish main to: git@host:owner/repo.git." },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["template", "folder"], "description": "A team template (templates/<id>) or a prepared team folder in the projects folder." },
+        "id": { "type": "string", "description": "Templates: standard, small, device." }
+      }
+    },
+    "goal": { "type": "string", "minLength": 20, "maxLength": 20000, "description": "What the team should build, for whom, and how to tell it is good. Goes into the charter's {{goal}} slot as written. Needed for a template." },
+    "docs": {
+      "type": "array",
+      "maxItems": 10,
+      "description": "The owner's plan and design documents, put into the new repository's docs/ folder. At most 2 MB together.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "text"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,95}\\.md$" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "When it's ready: one planning cycle after the gate proof passes. The lead writes no code; proposals appear on the Backlog tab; the team stays halted.",
+      "properties": {
+        "on": { "type": "boolean", "default": false },
+        "focus": { "type": "string", "maxLength": 8000 },
+        "maxProposals": { "type": "integer", "minimum": 1, "maximum": 8, "default": 5 }
+      }
+    },
+    "charter": { "type": ["string", "null"], "maxLength": 40000, "description": "Advanced: the whole charter, replacing the team's. Keep {{goal}} in it to have the goal filled in." },
+    "target": { "type": "string", "description": "Advanced: the deploy target id. Left out: the first target." },
+    "theme": { "type": "string", "default": "plain" },
+    "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+    "cores": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "memoryMb": { "type": "integer", "minimum": 2048, "maximum": 65536 },
+    "diskGb": { "type": "integer", "minimum": 20, "maximum": 200 },
+    "vmid": { "type": ["integer", "null"] },
+    "leadModel": { "type": "string" },
+    "fallbackModel": { "type": "string" },
+    "budgetUsd": { "type": "integer", "minimum": 1, "maximum": 500 },
+    "cyclesPerDay": { "type": "integer", "minimum": 0, "maximum": 200 }
+  }
+}

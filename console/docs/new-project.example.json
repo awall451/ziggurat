@@ -1,0 +1,24 @@
+{
+  "name": "Example tool",
+  "description": "Turns bank CSV exports into one ledger",
+  "source": {
+    "kind": "template",
+    "id": "small"
+  },
+  "goal": "A command-line tool that turns a folder of bank CSV exports into one tidy ledger, with tests for every bank format in docs/FORMATS.md. Done when last year's files give the same totals as the spreadsheet described in docs/PLAN.md.",
+  "docs": [
+    {
+      "name": "PLAN.md",
+      "text": "# Plan\n\n1. Read the three formats.\n2. One ledger format.\n3. Totals per month.\n"
+    },
+    {
+      "name": "FORMATS.md",
+      "text": "# Bank formats\n\nOne section per bank: columns, date format, sign of amounts.\n"
+    }
+  ],
+  "plan": {
+    "on": true,
+    "focus": "Read docs/ and propose the first jobs: the stack and tools/check first.",
+    "maxProposals": 5
+  }
+}
