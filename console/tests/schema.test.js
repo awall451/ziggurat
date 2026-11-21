@@ -138,3 +138,36 @@ describe('isIPv4', () => {
     for (const v of ['10.66.0', '10.66.0.256', '10.66.0.1 ', 'a.b.c.d', null]) expect(isIPv4(v)).toBe(false);
   });
 });
+
+describe('the New project request (goal, documents, planning)', async () => {
+  const { validateDeployRequest } = await import('../src/lib/server/schema.js');
+  const base = { id: 'revview', target: 'homelab' };
+  const goal = 'A glanceable dashboard display for Claude Code while driving.';
+
+  it('a template needs a goal; a folder does not', () => {
+    expect(() => validateDeployRequest({ ...base, source: { kind: 'template', id: 'device' } })).toThrow(/goal/);
+    expect(() => validateDeployRequest({ ...base, source: { kind: 'template', id: 'device' }, goal: 'too short' })).toThrow(/goal/);
+    expect(validateDeployRequest({ ...base, source: { kind: 'folder', id: 'plan' } }).goal).toBeNull();
+    const r = validateDeployRequest({ ...base, source: { kind: 'template', id: 'device' }, goal: `  ${goal}  ` });
+    expect(r.goal).toBe(goal);
+    expect(r.docs).toEqual([]);
+    expect(r.plan).toEqual({ on: false, focus: '', maxProposals: 5 });
+  });
+
+  it('takes Markdown documents with plain names only', () => {
+    const ok = validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, docs: [{ name: 'DESIGN.md', text: '# d' }] });
+    expect(ok.docs).toEqual([{ name: 'DESIGN.md', text: '# d' }]);
+    for (const docs of [[{ name: '../x.md', text: '' }], [{ name: 'x.txt', text: '' }], [{ name: 'a.md', text: '' }, { name: 'A.md', text: '' }], 'nope', [{ name: 'x.md' }]]) {
+      expect(() => validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, docs })).toThrow(/docs/);
+    }
+    expect(() => validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, docs: [{ name: 'big.md', text: 'x'.repeat(2 * 1024 * 1024 + 1) }] })).toThrow(/2 MB/);
+  });
+
+  it('plans when ready only when asked, with 1 to 8 proposals', () => {
+    const r = validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, plan: { on: true, focus: ' Phase 1 ', maxProposals: 3 } });
+    expect(r.plan).toEqual({ on: true, focus: 'Phase 1', maxProposals: 3 });
+    expect(validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, plan: { on: 'yes' } }).plan.on).toBe(false);
+    expect(() => validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, plan: { on: true, maxProposals: 9 } })).toThrow(/plan/);
+    expect(() => validateDeployRequest({ ...base, source: { kind: 'template', id: 'standard' }, goal, plan: { on: true, focus: 'x'.repeat(8001) } })).toThrow(/plan/);
+  });
+});

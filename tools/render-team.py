@@ -8,6 +8,9 @@ theme only changes the display names used in prose ({{lead}}, {{area_lead}},
 
 Usage: tools/render-team.py examples/ps1-cpp --theme tolkien --out build/my-project
        (theme = a name in themes/ or a path to a .yml file)
+       A team template (templates/) has a {{goal}} slot in its charter: pass the
+       owner's goal with --goal-file <path>. It is inserted as written, never
+       rendered itself.
 """
 import argparse, pathlib, re, shutil, sys
 
@@ -33,8 +36,12 @@ def load_theme(arg):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src"); ap.add_argument("--theme", default="plain"); ap.add_argument("--out", required=True)
+    ap.add_argument("--goal-file")
     a = ap.parse_args()
     names = load_theme(a.theme)
+    names.pop("goal", None)  # a theme never sets the goal
+    if a.goal_file:
+        names["goal"] = pathlib.Path(a.goal_file).read_text().strip()
     src, out = pathlib.Path(a.src), pathlib.Path(a.out)
     if out.exists():
         sys.exit(f"{out} exists; choose a new --out")

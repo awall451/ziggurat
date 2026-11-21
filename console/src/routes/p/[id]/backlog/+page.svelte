@@ -23,6 +23,7 @@
   let busy = $state('');
   let flash = $state(null); // {ok, text}
   let focus = $state('');
+  let maxProposals = $state('');
   let planAt = $state('');
   let planLater = $state(false); // the "Later…" pop-over of the planning form
   let chatText = $state('');
@@ -86,7 +87,7 @@
       at = epochOf(planAt);
       if (!at) return (flash = { ok: false, text: 'Pick a date and time that exists in your time zone' });
     }
-    post({ action: 'plan', focus, at }, 'plan').then((out) => {
+    post({ action: 'plan', focus, at, maxProposals }, 'plan').then((out) => {
       if (out) {
         focus = '';
         planAt = '';
@@ -116,7 +117,7 @@
   }
   function placed(epoch, skip = null) {
     if (placing?.pid) return runAt(placing.pid, epoch, skip);
-    post({ action: 'plan', focus, at: epoch, skip }, 'plan').then((out) => {
+    post({ action: 'plan', focus, at: epoch, skip, maxProposals }, 'plan').then((out) => {
       if (out) {
         focus = '';
         placing = null;
@@ -164,6 +165,14 @@
     </p>
     <textarea class="field" rows="3" placeholder="Optional: what to focus on (a feature, a part of the game, a problem)" bind:value={focus}></textarea>
     <div class="actions">
+      <label class="small dim cap">
+        At most
+        <select class="field" bind:value={maxProposals}>
+          <option value="">3–8</option>
+          {#each [1, 2, 3, 4, 5, 6, 7, 8] as n (n)}<option value={n}>{n}</option>{/each}
+        </select>
+        proposals
+      </label>
       {#if busyTeam}<span class="small dim">The team is busy: {data.busy.oneshot?.plan ? 'a planning cycle is running' : 'a cycle is running'}.</span>{/if}
       <span class="spacer"></span>
       <Popover open={planLater} onclose={() => (planLater = false)}>
@@ -320,6 +329,11 @@
 {/if}
 
 <style>
+  .cap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
   .block {
     padding: 18px;
     margin-bottom: 14px;

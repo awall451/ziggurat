@@ -4,7 +4,8 @@
 # which is what lets the lead trust what it finds there.
 #
 #   agent-kit-backlog plan <plan-id> <from>      store a planning request (focus text on stdin, may be
-#                                                empty). Used by `agent-kit-oneshot start|at`.
+#                                                empty). Used by `agent-kit-oneshot start|at`. A first
+#                                                line `Max-proposals: N` (1-8, kit 0.15) caps the plan.
 #   agent-kit-backlog set <pid> approved|rejected|new <rev>
 #                                                the owner decided on revision <rev> of a proposal
 #   agent-kit-backlog list                       plan ids, newest last
@@ -38,11 +39,18 @@ case "${1:-}" in
     tmp=$BL/plans/.tmp-$id
     rm -rf -- "$tmp"
     install -d -m 755 "$tmp"
-    text=$(head -c $((MAX_TEXT + 1)))
+    text=$(head -c $((MAX_TEXT + 101)))
+    # The owner's cap on the number of proposals (kit 0.15): an optional first line.
+    max=""
+    if [[ $text =~ ^Max-proposals:\ ([1-8])($'\n'|$) ]]; then
+      max=${BASH_REMATCH[1]}
+      text=${text#*$'\n'}; [[ $text == Max-proposals:* ]] && text=""
+    fi
     [ ${#text} -le $MAX_TEXT ] || { rm -rf -- "$tmp"; die "focus text is longer than $MAX_TEXT bytes"; }
     {
-      printf 'Ziggurat-Owner-Plan: 1\nId: %s\nFrom: %s\nAsked: %s\n---\n' "$id" "$from" "$(date -u +%FT%TZ)"
-      printf '%s\n' "$text"
+      printf 'Ziggurat-Owner-Plan: 1\nId: %s\nFrom: %s\nAsked: %s\n' "$id" "$from" "$(date -u +%FT%TZ)"
+      [ -n "$max" ] && printf 'Max-proposals: %s\n' "$max"
+      printf -- '---\n%s\n' "$text"
     } > "$tmp/request.md"
     chmod 644 "$tmp/request.md"
     mv "$tmp" "$BL/plans/$id"

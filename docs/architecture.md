@@ -416,6 +416,22 @@ owner chooses "Place it after", "Skip that cycle" (one cycle only) or another ti
 running cycle waits up to 4 hours (was 30 minutes); a job dropped after that shows as missed on the timeline
 and on its backlog card.
 
+### New projects from a team template (kit 0.15)
+
+`templates/` holds team templates: how a team works, not which language it uses. Standard (lead, two tech
+leads, builders, scouts, reviewer, QA), Small (one tech lead on cheaper models, no QA) and Device (Standard plus
+the rules for software that runs on hardware the VM does not have: an emulator first, `docs/BENCH-TEST.md` for
+what only the owner can try). Each charter has a `{{goal}}` slot for the owner's goal, inserted as written by
+`tools/render-team.py --goal-file`. All three ship `kit/vm/gate/neutral-gate-checks` and set
+`GATE_OWNER_PATHS=tools/check,tools/check.d`; they share the neutral seed in `templates/_seed/` (a placeholder
+`tools/check` that runs `tests/*.sh`, and `tests/seed.sh` for the gate proof). The console adds the owner's
+documents to the seed's `docs/` and writes its README from the name and the goal. The team's first jobs are
+choosing the stack and writing the real `tools/check`, which waits for the owner's approval.
+
+A planning request can start with the line `Max-proposals: N` (1 to 8): `agent-kit-backlog plan` keeps it as a
+header, the planning rules say "at most N", and `owner-backlog propose` refuses more. The console's "When it's
+ready" option starts one such planning cycle after the gate proof passes; the team halts again when it ends.
+
 ### Ledger kinds
 
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,

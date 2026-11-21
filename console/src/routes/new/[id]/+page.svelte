@@ -109,10 +109,19 @@
   <section class="panel block">
     <div class="bar">
       <h2>The team</h2>
-      <span class="small dim">{r.source.kind === 'example' ? 'example' : 'folder'} {r.source.id} · theme {r.theme}</span>
+      <span class="small dim">{r.source.kind === 'template' ? 'team template' : r.source.kind === 'example' ? 'example' : 'folder'} {r.source.id} · theme {r.theme}</span>
       <span class="grow"></span>
       {#if d.can.edit}<a class="btn quiet" href="/new?edit={d.id}">Change inputs</a>{/if}
     </div>
+    {#if r.goal}
+      <div class="well small goal"><span class="dim">Goal:</span> {r.goal}</div>
+    {/if}
+    {#if r.docs?.length}
+      <p class="small dim">Documents for <span class="mono">docs/</span>: {#each r.docs as doc, i (doc.name)}<span class="mono">{doc.name}</span>{i < r.docs.length - 1 ? ', ' : ''}{/each}</p>
+    {/if}
+    <p class="small dim">
+      {#if r.plan?.on}When it is ready: one planning cycle, at most {r.plan.maxProposals} proposals. Focus: {r.plan.focus || 'the whole project'}{:else}When it is ready: the team stays halted, no planning cycle.{/if}
+    </p>
     {#if d.bundle.problems.length}
       <div class="panel note bad">
         <b>Fix these before a dry run:</b>
@@ -292,6 +301,18 @@
         {d.install?.baselineTests} test{d.install?.baselineTests === 1 ? '' : 's'}.
       </p>
       <p><b>The team is halted</b> and its timer is off. Nothing spends tokens until you resume it on the project's Controls tab.</p>
+      {#if r.plan?.on}
+        <h3>Planning cycle</h3>
+        {#if d.planError}
+          <p class="s-interrupted">It did not start: {d.planError} <a href="/p/{d.id}/backlog">Start it from the Backlog tab</a>.</p>
+        {:else if d.planStartedAt}
+          <p><span class="pill done">Started</span> {when(d.planStartedAt)}. The lead reads your goal and documents and proposes at most {r.plan.maxProposals} jobs. <a href="/p/{d.id}/backlog">Open the Backlog</a></p>
+        {:else if d.proof?.ok === false}
+          <p class="dim">Not started: the gate is not proven.</p>
+        {:else}
+          <p class="dim">Starts when the gate proof passes.</p>
+        {/if}
+      {/if}
 
       <h3>Gate proof</h3>
       {#if d.proof?.state === 'running'}
@@ -380,6 +401,11 @@
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
 
 <style>
+  .goal {
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow: auto;
+  }
   .page {
     padding: 32px 24px;
     max-width: 1100px;

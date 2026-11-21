@@ -11,7 +11,7 @@
 #   - candidate must be a descendant of current main (agents rebase first)
 #   - all gate-checks steps pass (install, typecheck, unit, build, boot-fuzz, smoke)
 #   - passed unit-test count must not drop below main's
-#   - a change to a path in GATE_OWNER_PATHS (project.env, e.g. "tools/check")
+#   - a change to a path in GATE_OWNER_PATHS (project.env, e.g. tools/check,tools/check.d)
 #     changes what "done" means: it is `held` until the owner approves that
 #     commit (agent-kit-gate approve <sha>), then judged again and merged
 #
@@ -54,7 +54,8 @@ BASELINE=$STATE/gate/baseline-tests
 APPROVED=$STATE/gate/approved
 # Paths whose change waits for the owner (kit 0.14). Only plain relative paths count.
 OWNER_PATHS=() owner_raw=()
-read -ra owner_raw <<< "${GATE_OWNER_PATHS:-}"
+owner_list=${GATE_OWNER_PATHS:-}
+read -ra owner_raw <<< "${owner_list//,/ }"  # space- or comma-separated
 for p in "${owner_raw[@]}"; do
   [[ $p =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$ && $p != *..* ]] && OWNER_PATHS+=("$p")
 done

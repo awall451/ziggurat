@@ -100,15 +100,28 @@ async function skipStart(user, project, skip) {
   if (!ok) throw new Error(`The job is set, but that cycle could not be skipped: ${(res.stderr || `exit ${res.code}`).trim().slice(-200)}`);
 }
 
-export async function startPlan(user, project, { focus = '', at = null, skip = null } = {}) {
+export const CAP_KIT = '0.15.0'; // the owner's cap on proposals per plan
+
+export async function startPlan(user, project, { focus = '', at = null, skip = null, maxProposals = null, kitVersion = null } = {}) {
   const text = String(focus || '').trim();
   if (text.length > MAX_FOCUS) throw new Error('The focus text is too long');
+  let max = null;
+  if (maxProposals != null && maxProposals !== '') {
+    max = Number(maxProposals);
+    if (!Number.isInteger(max) || max < 1 || max > 8) throw new Error('At most 1 to 8 proposals');
+  }
+  // Kit 0.15 reads the cap from the request's first line; older kits would show it as focus text.
+  let input = text;
+  if (max) {
+    const kv = kitVersion || peekStatus(project.id)?.kitVersion || (await getStatus(project).catch(() => null))?.kitVersion;
+    if (atLeast(kv, CAP_KIT)) input = `Max-proposals: ${max}\n${text}`;
+  }
   const id = `${stamp()}-p-${hex()}`;
   const from = senderName(user);
   let epoch = null;
   if (at != null) epoch = checkTime(at);
   const argv = epoch ? ['at', String(epoch), id, from, '--plan'] : ['start', id, from, '--plan'];
-  const res = await kit(project, 'agent-kit-oneshot', argv, { input: text, timeout: 120000 });
+  const res = await kit(project, 'agent-kit-oneshot', argv, { input, timeout: 120000 });
   let started = res.code === 0;
   const error = started ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-300);
   if (!started && vmSaidNo(res.code)) {
@@ -123,6 +136,7 @@ export async function startPlan(user, project, { focus = '', at = null, skip = n
   const plan = {
     id,
     focus: text,
+    maxProposals: max,
     by: from,
     askedAt: new Date().toISOString(),
     scheduledFor: epoch && started ? epoch : null,

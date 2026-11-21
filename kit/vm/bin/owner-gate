@@ -59,7 +59,7 @@ case "${1:-list}" in
     cat <<PROMPT
 ## What "done" means: changes wait for the owner
 
-These paths define what the gate checks: ${GATE_OWNER_PATHS}
+These paths define what the gate checks: ${GATE_OWNER_PATHS//,/ }
 A ready branch that changes any of them is not merged by the gate: its verdict is \`held\` until the owner
 approves that exact commit. Before you submit such a change, explain it for the owner in plain words, what
 the checks will do differently and why, with \`owner-gate explain <topic>\` (text on stdin). The owner sees

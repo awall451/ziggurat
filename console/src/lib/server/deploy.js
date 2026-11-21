@@ -170,7 +170,8 @@ export async function putDeploy(user, input) {
   if (check.ok) {
     try {
       d.bundle.env = projectEnv({ ...request, proxyUrl: targetNet(target).proxyUrl, extras: check.extras });
-      const staged = await stageBundle(path.join(DIR, d.id), request.source, { theme: request.theme, charter: request.charter, env: d.bundle.env });
+      if (check.needsGoal && !request.goal) throw new Error('goal: say what the team should build');
+      const staged = await stageBundle(path.join(DIR, d.id), request.source, { theme: request.theme, charter: request.charter, env: d.bundle.env, goal: request.goal });
       d.bundle.charter = staged.charter;
       // As rendered for the theme, so the page shows the names the team will see.
       d.bundle.agents = staged.agents;
@@ -392,9 +393,9 @@ export async function startInstall(user, id) {
   let payload;
   try {
     d.bundle.env = projectEnv({ ...d.request, proxyUrl: targetNet(t).proxyUrl, extras: check.extras });
-    const staged = await stageBundle(dir, d.request.source, { theme: d.request.theme, charter: d.request.charter, env: d.bundle.env });
+    const staged = await stageBundle(dir, d.request.source, { theme: d.request.theme, charter: d.request.charter, env: d.bundle.env, goal: d.request.goal });
     Object.assign(d.bundle, { charter: staged.charter, agents: staged.agents, provision: check.provision, files: check.files, seed: check.seed });
-    payload = await buildPayload(dir, d.request.source, { name: d.request.name, description: d.request.description });
+    payload = await buildPayload(dir, d.request.source, { name: d.request.name, description: d.request.description, goal: d.request.goal, docs: d.request.docs || [] });
   } catch (e) {
     throw fail(500, e.message);
   }
@@ -473,6 +474,7 @@ function startProof(user, d, t) {
     now.proof = { state: 'done', startedAt, ...proof };
     save(now);
     audit({ name: now.by }, now.id, 'deploy-gate-proof-end', { good: proof.good?.status || null, drop: proof.drop?.status || null }, { ok: proof.ok === true, detail: proof.error || proof.note || null });
+    if (proof.ok === true) return planWhenReady(now);
   };
   // The gate's checks can take a while (two full runs).
   kit({ id: d.id, target: t.id, ssh: vmSsh(d, t) }, 'agent-kit-gate-proof', ['run'], { timeout: 75 * 60_000 })
@@ -487,6 +489,35 @@ function startProof(user, d, t) {
       done({ ok: r.ok, at: r.at || null, good: short(r.good), drop: short(r.drop), deleted: r.deleted ? String(r.deleted).slice(0, 200) : null, note: r.note ? String(r.note).slice(0, 300) : null, error: r.error ? String(r.error).slice(0, 300) : null, main: r.main ? String(r.main).slice(0, 12) : null, tests: Number.isInteger(r.tests) ? r.tests : null });
     })
     .catch((e) => done({ ok: false, error: e.message }));
+}
+
+/**
+ * "Start a planning cycle when it is ready": once the gate is proven, the
+ * owner's choice on the form starts one planning cycle with the focus and the
+ * cap on proposals. Only once per deploy. The lead writes no code in it and the
+ * team halts again when it ends; the console still never resumes a team.
+ */
+export async function planWhenReady(d) {
+  if (!d.request?.plan?.on || d.planStartedAt || d.planError) return;
+  const project = config.getProject(d.id);
+  if (!project) return;
+  // Loaded here: backlog.js pulls in the audit log, issues and feedback.
+  const { startPlan } = await import('./backlog.js');
+  const focus = d.request.plan.focus || 'Read the owner\'s plan and design in docs/ and the charter, and propose the first jobs. Choosing the stack and writing the real tools/check comes first.';
+  try {
+    const out = await startPlan({ name: d.by }, project, { focus, maxProposals: d.request.plan.maxProposals || 5, kitVersion: d.install?.kitVersion || null });
+    const now = load(d.id);
+    if (!now) return;
+    now.planStartedAt = new Date().toISOString();
+    now.planId = out.id;
+    if (!out.started) now.planError = out.detail;
+    save(now);
+  } catch (e) {
+    const now = load(d.id);
+    if (!now) return;
+    now.planError = e.message;
+    save(now);
+  }
 }
 
 /** Run the gate proof (again) for a finished project. */

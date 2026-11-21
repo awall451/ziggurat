@@ -6,12 +6,17 @@
 
   let { data } = $props();
 
+  const PLAN_FOCUS = "Read the owner's plan and design in docs/ and the charter, and propose the first jobs. Choosing the stack and writing the real tools/check comes first.";
+  const DOC_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}\.md$/;
+  const DOC_MAX = { files: 10, bytes: 2 * 1024 * 1024 };
+
   let f = $state({
     name: '',
     id: '',
     description: '',
     remote: '',
     source: '',
+    goal: '',
     charter: '',
     target: data.targets[0]?.id || '',
     theme: 'plain',
@@ -25,11 +30,16 @@
     budgetUsd: 40,
     cyclesPerDay: 6
   });
+  let docs = $state([]); // {name, text}
+  let plan = $state({ on: true, focus: PLAN_FOCUS, maxProposals: 5 });
   let idTouched = $state(false);
-  let check = $state(null); // read-only look at the chosen bundle
-  let charterFrom = $state(''); // the bundle's own charter, to tell whether it was edited
+  let check = $state(null); // read-only look at the chosen team
+  let charterFrom = $state(''); // the team's own charter, to tell whether it was edited
   let busy = $state(false);
   let problem = $state('');
+  let dragging = $state(false);
+  let pasting = $state(null); // {name, text} while a document is being pasted
+  let picker = $state();
 
   const slug = (s) =>
     s
@@ -38,16 +48,20 @@
       .replace(/^-+|-+$/g, '')
       .slice(0, 40);
   const key = (s) => `${s.kind}:${s.id}`;
+  const templates = $derived(data.sources.filter((s) => s.kind === 'template'));
   const folders = $derived(data.sources.filter((s) => s.kind === 'folder'));
-  const examples = $derived(data.sources.filter((s) => s.kind === 'example'));
   const open = $derived(data.deploys.filter((d) => d.state !== 'abandoned' && d.state !== 'ready'));
+  const isTemplate = $derived(f.source.startsWith('template:'));
+  const goalNeeded = $derived(isTemplate || !!check?.needsGoal);
+  const docBytes = $derived(docs.reduce((t, d) => t + new Blob([d.text]).size, 0));
+  const kb = (n) => (n < 1024 ? `${n} B` : `${Math.round(n / 1024)} KB`);
 
   function setName(v) {
     f.name = v;
     if (!idTouched) f.id = slug(v);
   }
 
-  async function pick(value, keepCharter = false) {
+  async function pick(value, keep = false) {
     f.source = value;
     check = null;
     if (!value) return;
@@ -56,37 +70,92 @@
       const res = await fetch(`/api/deploy-sources?kind=${kind}&id=${encodeURIComponent(id)}`);
       check = await res.json();
       charterFrom = check.charter || '';
-      if (!keepCharter) f.charter = charterFrom;
-      if (kind === 'folder' && !f.name && !keepCharter) setName(id);
-      // Settings the bundle suggests.
-      if (!keepCharter) {
+      if (!keep) f.charter = charterFrom;
+      if (kind === 'folder' && !f.name && !keep) setName(id);
+      // Settings the team suggests.
+      if (!keep) {
         if (check.env?.LEAD_MODEL) f.leadModel = check.env.LEAD_MODEL;
         if (check.env?.FALLBACK_MODEL) f.fallbackModel = check.env.FALLBACK_MODEL;
         if (/^[0-9]+$/.test(check.env?.CYCLE_BUDGET_USD || '')) f.budgetUsd = Number(check.env.CYCLE_BUDGET_USD);
         if (/^[0-9]+$/.test(check.env?.MAX_CYCLES_PER_DAY || '')) f.cyclesPerDay = Number(check.env.MAX_CYCLES_PER_DAY);
       }
     } catch {
-      problem = 'Could not read that bundle.';
+      problem = 'Could not read that team.';
     }
+  }
+
+  /** Put a saved request (an edit, or a draft) into the form. */
+  async function fill(r) {
+    Object.assign(f, {
+      ...f,
+      ...r,
+      source: r.source ? key(r.source) : f.source,
+      memoryGb: r.memoryMb ? r.memoryMb / 1024 : f.memoryGb,
+      vmid: r.vmid ?? '',
+      charter: r.charter || '',
+      goal: r.goal || '',
+      remote: r.remote || '',
+      description: r.description || ''
+    });
+    docs = Array.isArray(r.docs) ? r.docs.map((d) => ({ name: d.name, text: d.text })) : [];
+    if (r.plan) plan = { on: r.plan.on === true, focus: r.plan.focus || '', maxProposals: r.plan.maxProposals || 5 };
+    idTouched = true;
+    await pick(f.source, true);
+    if (!r.charter) f.charter = charterFrom;
   }
 
   // /new?edit=<id>: change the inputs of a deploy that has no VM yet.
   onMount(async () => {
     const edit = page.url.searchParams.get('edit');
-    if (!edit) return;
-    const res = await fetch(`/api/deploys/${edit}`);
-    if (!res.ok) return;
-    const r = (await res.json()).request;
-    Object.assign(f, { ...r, source: key(r.source), memoryGb: r.memoryMb / 1024, vmid: r.vmid ?? '', charter: r.charter || '' });
-    idTouched = true;
-    await pick(f.source, true);
-    if (!r.charter) f.charter = charterFrom;
+    if (edit) {
+      const res = await fetch(`/api/deploys/${edit}`);
+      if (res.ok) return fill((await res.json()).request);
+    }
+    if (templates.length) await pick(key(templates[0]));
   });
+
+  // ---- documents ----
+  const docName = (n) => {
+    let base = String(n || 'plan.md')
+      .split(/[\\/]/)
+      .pop()
+      .replace(/\.(markdown|txt)$/i, '.md')
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/^[^A-Za-z0-9]+/, '');
+    if (!/\.md$/i.test(base)) base += '.md';
+    return base.replace(/\.md$/i, '.md').slice(-99);
+  };
+  function addDoc(name, text) {
+    problem = '';
+    const n = docName(name);
+    if (!DOC_RE.test(n)) return (problem = `docs: "${name}" cannot be used as a file name`);
+    if (docs.length >= DOC_MAX.files && !docs.some((d) => d.name === n)) return (problem = `docs: at most ${DOC_MAX.files} documents`);
+    if (docBytes + new Blob([text]).size > DOC_MAX.bytes) return (problem = 'docs: at most 2 MB of documents together');
+    docs = [...docs.filter((d) => d.name !== n), { name: n, text }];
+  }
+  async function readFiles(list) {
+    for (const file of list) {
+      if (!/\.(md|markdown|txt)$/i.test(file.name)) {
+        problem = `docs: ${file.name} is not a Markdown or text file`;
+        continue;
+      }
+      addDoc(file.name, await file.text());
+    }
+  }
+  function drop(e) {
+    e.preventDefault();
+    dragging = false;
+    readFiles([...(e.dataTransfer?.files || [])]);
+  }
 
   async function submit() {
     problem = '';
     if (!f.source) {
-      problem = 'source: pick what the team starts from';
+      problem = 'team: pick a team';
+      return;
+    }
+    if (goalNeeded && f.goal.trim().length < 20) {
+      problem = 'goal: say what the team should build (a few sentences)';
       return;
     }
     busy = true;
@@ -98,6 +167,9 @@
       remote: f.remote.trim() || null,
       target: f.target,
       source: { kind, id },
+      goal: f.goal.trim() || null,
+      docs,
+      plan: { on: !!plan.on, focus: plan.focus, maxProposals: Number(plan.maxProposals) },
       // Only sent when it was changed, so a folder's own charter stays the source of truth.
       charter: f.charter.trim() && f.charter !== charterFrom ? f.charter : null,
       theme: f.theme,
@@ -128,7 +200,7 @@
 
 <div class="page">
   <h1>New project</h1>
-  <p class="dim lead">A new sandbox VM with a team in it. Nothing is created until you have seen a dry run and clicked "Create project".</p>
+  <p class="dim lead">Say what to build and drop in your plan. The console builds a sandbox VM with a team in it; nothing is created until you have seen a dry run and clicked "Create project".</p>
 
   {#if open.length}
     <section class="panel block">
@@ -177,28 +249,74 @@
   </section>
 
   <section class="panel block">
-    <h2>What the team starts from</h2>
+    <h2>What should the team build?</h2>
     <label class="stack">
-      <span>Team</span>
-      <select class="field" value={f.source} onchange={(e) => pick(e.currentTarget.value)}>
-        <option value="">Pick one…</option>
-        {#if folders.length}
-          <optgroup label="Your project folders">
-            {#each folders as s (s.id)}<option value={key(s)}>{s.id}{s.seed ? '' : ' (no seed)'}</option>{/each}
-          </optgroup>
-        {/if}
-        {#if examples.length}
-          <optgroup label="Examples">
-            {#each examples as s (s.id)}<option value={key(s)}>{s.id}</option>{/each}
-          </optgroup>
-        {/if}
-      </select>
-      <span class="small dim">A project folder holds <span class="mono">team/</span> and usually <span class="mono">seed/</span> (the starting repo). An example brings its own.</span>
+      <textarea
+        class="field goal"
+        bind:value={f.goal}
+        rows="6"
+        maxlength="20000"
+        placeholder="A few honest paragraphs: what it is, who it is for, and how you will know it is good. Example: a command-line tool that turns a folder of bank CSV exports into one tidy ledger; done when last year's totals match my spreadsheet."
+      ></textarea>
+      <span class="small dim">
+        Goes into the charter as the team's goal. {goalNeeded ? 'Needed.' : 'Optional for this team folder: its charter already has a goal.'} The rules (autonomy, boundaries,
+        quality bar) come from the team.
+      </span>
     </label>
-    {#if !data.sources.length}
-      <p class="dim small">Nothing to pick yet: no project folder with a <span class="mono">team/CHARTER.md</span> was found, and no example ships a seed.</p>
-    {/if}
+  </section>
 
+  <section class="panel block">
+    <h2>Plan and design documents</h2>
+    <div
+      class="drop"
+      class:over={dragging}
+      role="region"
+      aria-label="Drop Markdown files here"
+      ondragover={(e) => (e.preventDefault(), (dragging = true))}
+      ondragleave={() => (dragging = false)}
+      ondrop={drop}
+    >
+      <span class="small dim">Drop <span class="mono">.md</span> files here, or</span>
+      <button class="btn sm" onclick={() => picker.click()}>Choose files…</button>
+      <button class="btn quiet sm" onclick={() => (pasting = { name: 'DESIGN.md', text: '' })}>Paste one…</button>
+      <input bind:this={picker} type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden onchange={(e) => (readFiles([...e.currentTarget.files]), (e.currentTarget.value = ''))} />
+    </div>
+    {#if pasting}
+      <div class="paste">
+        <label class="stack"><span class="small">File name</span><input class="field mono" bind:value={pasting.name} maxlength="99" /></label>
+        <textarea class="field mono" rows="10" bind:value={pasting.text} placeholder="Paste Markdown here"></textarea>
+        <div class="actions">
+          <button class="btn quiet sm" onclick={() => (pasting = null)}>Cancel</button>
+          <button class="btn primary sm" disabled={!pasting.text.trim()} onclick={() => (addDoc(pasting.name, pasting.text), (pasting = null))}>Add</button>
+        </div>
+      </div>
+    {/if}
+    {#each docs as d (d.name)}
+      <details class="doc">
+        <summary>
+          <span class="mono">docs/{d.name}</span><span class="small dim">{kb(new Blob([d.text]).size)}</span><span class="grow"></span>
+          <button class="btn quiet sm" onclick={(e) => (e.preventDefault(), (docs = docs.filter((x) => x.name !== d.name)))}>Remove</button>
+        </summary>
+        <pre class="mono small">{d.text.slice(0, 6000)}{d.text.length > 6000 ? '\n…' : ''}</pre>
+      </details>
+    {:else}
+      <p class="small dim">Optional. They go into the new repository's <span class="mono">docs/</span> folder, and the lead reads them before it plans.</p>
+    {/each}
+  </section>
+
+  <section class="panel block">
+    <h2>Team</h2>
+    <div class="teams" role="radiogroup" aria-label="Team">
+      {#each templates as t (t.id)}
+        <button class="team" class:on={f.source === key(t)} role="radio" aria-checked={f.source === key(t)} onclick={() => pick(key(t))}>
+          <b>{t.name}</b>
+          <span class="small dim">{t.about}</span>
+          <span class="small mono dim">{t.agents.length} agents</span>
+        </button>
+      {/each}
+    </div>
+    {#if !isTemplate && f.source}<p class="small">Using the prepared team folder <span class="mono">{f.source.split(':')[1]}</span> (see Advanced).</p>{/if}
+    <p class="small dim">How the team works, not the language: the team chooses the stack in its first planning cycle, and its checks wait for your approval.</p>
     {#if check}
       {#if check.problems.length}
         <div class="panel note bad">
@@ -207,15 +325,34 @@
         </div>
       {/if}
       {#each check.warnings as w}<div class="small s-interrupted">{w}</div>{/each}
-      <p class="small dim">
-        {check.agents.length} agents: {check.agents.map((a) => a.id).join(', ') || 'none'}
-        {#if check.provision}· has a provisioning script (shown in full before the dry run){/if}
-      </p>
+      {#if check.provision}<p class="small dim">Has a provisioning script (shown in full before the dry run).</p>{/if}
+    {/if}
+  </section>
+
+  <section class="panel block">
+    <h2>When it's ready</h2>
+    <label class="check">
+      <input type="checkbox" bind:checked={plan.on} />
+      <span>Start a planning cycle as soon as the VM is ready</span>
+    </label>
+    {#if plan.on}
       <label class="stack">
-        <span>Goal and rules (the charter)</span>
-        <textarea class="field mono charter" bind:value={f.charter} spellcheck="false"></textarea>
-        <span class="small dim">What the team builds, how free it is, what it must never do. Role names in double braces are filled in from the theme.</span>
+        <span class="small">What to plan</span>
+        <textarea class="field" rows="2" maxlength="8000" bind:value={plan.focus}></textarea>
       </label>
+      <label class="check small">
+        At most
+        <select class="field" bind:value={plan.maxProposals}>
+          {#each [1, 2, 3, 4, 5, 6, 7, 8] as n (n)}<option value={n}>{n}</option>{/each}
+        </select>
+        proposals
+      </label>
+      <p class="small dim">
+        One planning cycle after the gate is proven: the lead reads your goal and documents, writes no code, and proposes jobs on the Backlog tab, where you can
+        talk them over. The team stays halted; nothing runs until you approve.
+      </p>
+    {:else}
+      <p class="small dim">The project is registered and halted. Start it from its Backlog or Controls tab when you like.</p>
     {/if}
   </section>
 
@@ -256,12 +393,32 @@
         <input class="field mono" type="number" min="0" max="200" bind:value={f.cyclesPerDay} />
         <span class="small dim">Counted per UTC day. A cap on cycles, not on hours.</span>
       </label>
+      <label class="stack wide">
+        <span>Use a prepared team folder</span>
+        <select class="field" value={isTemplate ? '' : f.source} onchange={(e) => pick(e.currentTarget.value || (templates[0] ? key(templates[0]) : ''))}>
+          <option value="">No: use the team above</option>
+          {#each folders as s (s.id)}<option value={key(s)}>{s.id}{s.seed ? '' : ' (no seed)'}</option>{/each}
+        </select>
+        <span class="small dim">
+          A folder under the projects folder with <span class="mono">team/</span> and usually <span class="mono">seed/</span>, written by hand. Registered projects are not
+          listed.
+        </span>
+      </label>
+      {#if check}
+        <label class="stack wide">
+          <span>The full charter</span>
+          <textarea class="field mono charter" bind:value={f.charter} spellcheck="false"></textarea>
+          <span class="small dim">
+            The team's rules. <span class="mono">{'{{goal}}'}</span> is replaced by your goal above; role names in double braces come from the theme.
+          </span>
+        </label>
+      {/if}
     </div>
   </details>
 
   <div class="actions">
     <a class="btn quiet" href="/">Cancel</a>
-    <button class="btn primary" onclick={submit} disabled={busy || !data.targets.length}>{busy ? 'Checking…' : 'Check the team'}</button>
+    <button class="btn primary" onclick={submit} disabled={busy || !data.targets.length}>{busy ? 'Checking…' : 'Check'}</button>
   </div>
 </div>
 
@@ -302,6 +459,70 @@
     flex-direction: column;
     gap: 4px;
     min-width: 0;
+  }
+  .goal {
+    min-height: 120px;
+    resize: vertical;
+    line-height: 1.5;
+  }
+  .drop {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 14px;
+    border: 1px dashed var(--line-strong, var(--line));
+    border-radius: 8px;
+  }
+  .drop.over {
+    border-color: var(--accent);
+    background: rgba(var(--glow), 0.08);
+  }
+  .paste {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .doc summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .doc pre {
+    max-height: 260px;
+    overflow: auto;
+    white-space: pre-wrap;
+    margin: 8px 0 0;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  .teams {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .team {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    text-align: left;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+  }
+  .team.on {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .charter {
     min-height: 300px;
