@@ -209,6 +209,24 @@ you turn it on, the console only ever talks to the sandbox VMs.
 | `storage`, `snippetsStorage`, `snippetsDir` | Disk storage, and where cloud-init snippets go |
 | `poolWarnPct`, `poolBlockPct` | Storage fill levels for a warning (80) and for refusing a deploy (90) |
 
+### Plan with Claude, then import
+
+A planning talk with Claude can end in a draft instead of a form to fill in by hand. The draft is one JSON
+document with everything the New project page holds: name, goal, the plan and design documents, the team
+template, "when it's ready" and the advanced settings. The schema is
+[`docs/new-project.schema.json`](docs/new-project.schema.json), and there is an example in
+[`docs/new-project.example.json`](docs/new-project.example.json).
+
+```bash
+curl -X POST -H 'Content-Type: application/json' --data-binary @draft.json http://<console>/api/drafts
+# {"id":"…","url":"/new?draft=…","warnings":[]}
+```
+
+The console checks the draft with the same rules as the form and keeps it. Opening the url fills the page.
+Read it, change what you like, then press Check. A draft never deploys anything, and it is deleted once it
+has become a deploy. "Import JSON…" on the page does the same with a file. `GET /api/drafts` lists the
+drafts; `GET` and `DELETE /api/drafts/<id>` read or delete one.
+
 ### Creating a project (with `CONSOLE_DEPLOY=1`)
 
 "New project" on the start page makes a new sandbox VM for a team:
