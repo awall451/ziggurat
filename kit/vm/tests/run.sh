@@ -932,6 +932,70 @@ bsha=$(G rev-parse shots-b)
 check "a failed build keeps no screenshots" '[ "$(jq -r .status "$S/gate/results/shots-b.json")" = failed ] && [ ! -e "$S/gate/shots/$bsha" ] && ! grep -q "$bsha" "$S/gate/shots/index"'
 G branch -q -D ready/shots-a ready/shots-b; G checkout -q -B main gate/main
 
+echo "== changes to what done means wait for the owner (kit 0.14)"
+og() { "$BIN/owner-gate" "$@"; }
+kg() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-gate" "$@"; }
+check "no owner paths: no prompt section" '[ -z "$(og prompt)" ]'
+echo 'GATE_OWNER_PATHS="tools/check tools/check.d ../etc *"' >> "$T/etc/project.env"
+G fetch -q gate; G checkout -q -B hold-a gate/main; mkdir -p "$T/ws/tools"; echo 'echo TESTS_PASSED=9' > "$T/ws/tools/check"; G add -A; G commit -q -m "new checks"
+G branch -f ready/hold-a hold-a > /dev/null
+hsha=$(G rev-parse hold-a); mainh=$(git -C "$T/bare" rev-parse main)
+"$T/opt/gate/bin/gate-run"
+check "a change to tools/check is held, not merged" '[ "$(jq -r .status "$S/gate/results/hold-a.json")" = held ] && [ "$(git -C "$T/bare" rev-parse main)" = "$mainh" ] && grep -q "tools/check" <<< "$(jq -r .detail "$S/gate/results/hold-a.json")"'
+check "a held build keeps no screenshots yet" '[ ! -e "$S/gate/shots/$hsha" ]'
+check "the lead sees it is held and not explained" 'grep -q "NOT EXPLAINED" <<< "$(og list)" && grep -q "Held for the owner now" <<< "$(og prompt)" && grep -q "tools/check tools/check.d" <<< "$(og prompt)"'
+refuse "an empty explanation" bash -c ": | '$BIN/owner-gate' explain hold-a"
+refuse "an explanation for a branch that does not exist" bash -c "echo why | '$BIN/owner-gate' explain nope"
+refuse "an explanation that is too long" bash -c "head -c 9000 /dev/zero | tr '\\0' x | '$BIN/owner-gate' explain hold-a"
+printf 'Runs the new unit tests.\nNothing is removed.\n' | og explain ready/hold-a > /dev/null
+check "the explanation names the topic and the commit" '[ "$(sed -n "s/^Sha: //p" "$S/gate-out/hold-a.md")" = "$hsha" ] && grep -q "^Topic: hold-a$" "$S/gate-out/hold-a.md" && grep -q "Nothing is removed" "$S/gate-out/hold-a.md"'
+check "listed as explained" 'grep -q "hold-a  ${hsha:0:9}  explained" <<< "$(og list)"'
+n0=$(grep -c " hold-a " "$S/gate/history.log")
+"$T/opt/gate/bin/gate-run"
+check "a held change is not judged again before the owner decides" '[ "$(grep -c " hold-a " "$S/gate/history.log")" = "$n0" ]'
+check "agent-kit-gate held lists it" '[ "$(kg held | jq -r .sha)" = "$hsha" ]'
+refuse "approve needs a full sha" kg approve "${hsha:0:9}"
+refuse "approve needs a held change" kg approve "$(printf 'a%.0s' {1..40})"
+kg approve "$hsha" > /dev/null
+check "the approval is root-side state" '[ -f "$S/gate/approved/$hsha" ]'
+"$T/opt/gate/bin/gate-run"
+check "after approval the gate judges it again and merges it" '[ "$(jq -r .status "$S/gate/results/hold-a.json")" = merged ] && [ "$(git -C "$T/bare" rev-parse main)" = "$hsha" ]'
+check "nothing is held any more" '[ -z "$(kg held)" ] && [ -z "$(og prompt | grep "Held for the owner now")" ]'
+G fetch -q gate; G checkout -q -B hold-b gate/main; echo 'echo TESTS_PASSED=1' > "$T/ws/tools/check"; G add -A; G commit -q -m "weaker checks"
+G branch -f ready/hold-b hold-b > /dev/null
+bsha=$(G rev-parse hold-b)
+"$T/opt/gate/bin/gate-run"
+check "the next change to the checks is held again" '[ "$(jq -r .status "$S/gate/results/hold-b.json")" = held ]'
+kg deny "$bsha" > /dev/null
+"$T/opt/gate/bin/gate-run"
+check "a declined change fails and stays out of main" '[ "$(jq -r .status "$S/gate/results/hold-b.json")" = failed ] && grep -q "declined" <<< "$(jq -r .detail "$S/gate/results/hold-b.json")" && [ "$(git -C "$T/bare" rev-parse main)" = "$hsha" ] && tail -1 "$S/gate/history.log" | grep -q " hold-b $bsha failed "'
+refuse "deny of something no longer held" kg deny "$bsha"
+G fetch -q gate; G checkout -q -B hold-c gate/main; echo c > "$T/ws/c.txt"; G add -A; G commit -q -m "product work"
+G branch -f ready/hold-c hold-c > /dev/null
+"$T/opt/gate/bin/gate-run"
+check "work that does not touch the checks merges as before" '[ "$(jq -r .status "$S/gate/results/hold-c.json")" = merged ]'
+sed -i '/GATE_OWNER_PATHS/d' "$T/etc/project.env"
+G branch -q -D ready/hold-a ready/hold-b ready/hold-c; G checkout -q -B main gate/main
+
+echo "== neutral gate-checks"
+NG=$HERE/../gate/neutral-gate-checks
+mkdir -p "$T/ng/w" "$T/ng/o"
+out=$("$NG" "$T/ng/w" "$T/ng/o"); rc=$?
+check "no tools/check: a failed step that says why" '[ $rc = 1 ] && grep -q "^STEP check FAIL" <<< "$out" && grep -q "no tools/check" <<< "$out"'
+mkdir -p "$T/ng/w/tools"
+printf 'echo "STEP unit ok 0s"\nmkdir -p "$1/shots"; printf p > "$1/shots/a.png"\necho TESTS_PASSED=3\n' > "$T/ng/w/tools/check"
+out=$("$NG" "$T/ng/w" "$T/ng/o"); rc=$?
+check "a passing tools/check: its lines, the count, screenshots in the out folder" '[ $rc = 0 ] && grep -q "^STEP unit ok" <<< "$out" && grep -q "^TESTS_PASSED=3$" <<< "$out" && grep -q "ALL CHECKS PASSED" <<< "$out" && [ -f "$T/ng/o/shots/a.png" ]'
+printf 'echo hello; exit 4\n' > "$T/ng/w/tools/check"
+out=$("$NG" "$T/ng/w" "$T/ng/o"); rc=$?
+check "a failing tools/check without a STEP line still names a failed step" '[ $rc = 1 ] && grep -q "^STEP check FAIL" <<< "$out"'
+printf 'echo "STEP unit ok 0s"\n' > "$T/ng/w/tools/check"
+out=$("$NG" "$T/ng/w" "$T/ng/o"); rc=$?
+check "no TESTS_PASSED line fails" '[ $rc = 1 ] && grep -q "no TESTS_PASSED" <<< "$out"'
+rm "$T/ng/w/tools/check"; ln -s /bin/true "$T/ng/w/tools/check"
+out=$("$NG" "$T/ng/w" "$T/ng/o"); rc=$?
+check "a tools/check that is a link is refused" '[ $rc = 1 ]'
+
 echo "== agent-kit-publish, owner-publish"
 # Same repository as above: $T/ws is the agents' workspace, $T/bare the gate's.
 pub() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-publish" "$@"; }

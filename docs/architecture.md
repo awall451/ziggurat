@@ -387,6 +387,22 @@ latest notes and the last update always follow. `owner-issues update … done --
 On the console, **Fix now** on an open issue starts a one-shot job whose text names the issue (the
 same rules as any one-shot job: on a halted or idle team, not while a cycle runs).
 
+### What "done" means: owner-held check changes
+
+From kit 0.14 a project can name the paths that define its checks in `GATE_OWNER_PATHS` (project.env, for
+example `tools/check tools/check.d`). A ready branch that changes any of them passes the checks as usual but is
+**held**: the gate records `held` and does not merge. The lead explains the change with
+`owner-gate explain <topic>` (plain words on stdin, to the agent-owned `gate-out/<topic>.md`). The console's
+Inbox shows each held change with that explanation and the diff of the owner paths. **Approve** runs
+`agent-kit-gate approve <sha>` (root writes `gate/approved/<sha>`); the gate then judges that commit again and
+merges it if it still passes. **Decline** runs `agent-kit-gate deny <sha>` and the verdict becomes `failed`. A new
+commit on the branch needs a new approval. Projects without `GATE_OWNER_PATHS` behave as before.
+
+`kit/vm/gate/neutral-gate-checks` is a language-neutral `gate-checks`: it runs the repository's own
+`tools/check <outdir>`, which prints the `STEP` lines and `TESTS_PASSED=<n>` and may write screenshots. With
+`GATE_OWNER_PATHS` covering `tools/check`, the team can set up checks for any language while the owner keeps the
+last word on what they test, and the gate's own rules (no drop in passed tests, rebased on main) still apply.
+
 ### Ledger kinds
 
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,
