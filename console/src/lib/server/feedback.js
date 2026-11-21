@@ -150,6 +150,27 @@ export async function scheduleOneshot(project, user, { text, epoch }) {
   return { id, scheduled, error };
 }
 
+/**
+ * Move a job that waits for its time (kit 0.10): the VM forgets the old time
+ * and gets the stored job again for the new one. {ok, error}.
+ */
+export async function rescheduleOneshot(project, id, epoch) {
+  if (!OWNER_ID.test(id)) throw new Error('Bad job id');
+  const dir = path.join(sentDir(project), id);
+  const file = path.join(dir, 'meta.json');
+  const meta = readJson(file);
+  if (!meta || meta.tier !== ONESHOT) throw new Error('No such job');
+  if (meta.delivered) throw new Error('That job has already started');
+  const un = await kit(project, 'agent-kit-oneshot', ['unat', id]);
+  if (un.code !== 0) return { ok: false, error: (un.stderr || 'could not move it on the VM').trim().slice(-200) };
+  const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, senderOf(meta)], { inputStream: tarStream(dir), timeout: 300000 });
+  const ok = res.code === 0;
+  meta.scheduledFor = ok ? epoch : null;
+  meta.error = ok ? null : `the old time is cancelled, but the new one was not set: ${(res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-200)}`;
+  fs.writeFileSync(file, JSON.stringify(meta, null, 2));
+  return { ok, error: meta.error };
+}
+
 /** The VM started a job that was set for a time: show it as started. */
 export function noteScheduledStart(project, status) {
   const id = status?.oneshot?.id;

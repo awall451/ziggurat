@@ -3,6 +3,13 @@ import { getProject } from '$lib/server/config.js';
 import { body, reply } from '$lib/server/api.js';
 import * as schedule from '$lib/server/schedule.js';
 
+/** The timeline as JSON (for the Backlog's "place on the timeline" pop-up): ?view=day&date=YYYY-MM-DD. */
+export async function GET({ url }) {
+  const view = ['day', 'week'].includes(url.searchParams.get('view')) ? url.searchParams.get('view') : 'day';
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('date') || '') ? url.searchParams.get('date') : null;
+  return new Response(JSON.stringify(await schedule.timeline({ view, date })), { headers: { 'content-type': 'application/json' } });
+}
+
 /**
  * Cycle schedules: {action: 'set', project, tz, slots} replaces a project's
  * schedule on its VM, {action: 'clear', project} removes it, and

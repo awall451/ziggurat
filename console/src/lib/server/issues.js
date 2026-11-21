@@ -14,7 +14,13 @@ import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
 import { parseHeaderFile } from './headerfile.js';
 
+// The kinds the owner raises. `planned` (kit 0.11) is made by the console when
+// the owner approves a backlog proposal: see createPlanned.
 export const KINDS = ['bug', 'polish', 'idea'];
+export const PLANNED = 'planned';
+export const PLANNED_KIT = '0.11.0';
+const PID_RE = /^[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}$/;
+const PLAN_RE = /^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$/;
 export const STATUSES = ['new', 'in_progress', 'done', 'wontfix'];
 export const OPEN = ['new', 'in_progress'];
 const ID_RE = /^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$/;
@@ -167,6 +173,57 @@ export async function create(
   return deliverNow ? deliver(project, id) : issue;
 }
 
+/**
+ * The issue for an approved backlog proposal: kind `planned`, its text is the
+ * job the proposal describes. Normal cycles leave it alone (kit 0.11); the
+ * one-shot job that names it sets it in progress and done.
+ */
+export async function createPlanned(project, user, { title, body, proposal }, { deliverNow = true } = {}) {
+  const t = String(title || '').trim().slice(0, 200);
+  if (!t) throw new Error('A planned issue needs a title');
+  const text = String(body || '').trim().slice(0, MAX_TEXT);
+  if (!PID_RE.test(proposal?.pid || '') || !PLAN_RE.test(proposal?.plan || '') || !Number.isInteger(proposal?.rev)) throw new Error('Bad proposal');
+  const id = `${stamp()}-i-${crypto.randomBytes(3).toString('hex')}`;
+  const dir = dirFor(project, id);
+  fs.mkdirSync(dir, { recursive: true });
+  const now = new Date().toISOString();
+  const who = user?.name || 'owner';
+  const issue = {
+    id,
+    title: t,
+    body: text,
+    kind: PLANNED,
+    status: 'new',
+    origin: null,
+    markup: [],
+    attachments: [],
+    proposal: { pid: proposal.pid, rev: proposal.rev, plan: proposal.plan },
+    job: null,
+    by: who,
+    createdAt: now,
+    updatedAt: now,
+    history: [{ at: now, to: 'new', who, note: `approved backlog item ${proposal.pid} (revision ${proposal.rev})` }],
+    resolution: null,
+    delivered: false,
+    error: null
+  };
+  writeJson(path.join(dir, 'issue.json'), issue);
+  return deliverNow ? deliver(project, id) : issue;
+}
+
+/** The job that does a planned issue: its id and when it was set for or started (console-side only). */
+export function noteJob(project, id, job) {
+  const issue = get(project, id);
+  if (!issue || issue.kind !== PLANNED) return null;
+  issue.job = {
+    id: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(job?.id || '') ? job.id : null,
+    scheduledFor: Number.isInteger(job?.scheduledFor) ? job.scheduledFor : null,
+    startedAt: typeof job?.startedAt === 'string' ? job.startedAt : null
+  };
+  writeJson(path.join(dirFor(project, id), 'issue.json'), issue);
+  return issue;
+}
+
 export function get(project, id) {
   if (!ID_RE.test(id)) return null;
   return readJson(path.join(dirFor(project, id), 'issue.json'));
@@ -184,6 +241,7 @@ export function issueText(issue) {
   if (issue.origin?.type === 'upload') lines.push(`Picture: shot.png (attached by the owner as ${issue.origin.name})`);
   if (issue.markup?.length) lines.push(`Markup: ${issue.markup.length} shape(s) drawn by the owner, see markup.png`);
   if (issue.attachments?.length) lines.push(`Attachments (in att/): ${issue.attachments.map((a) => a.name).join(', ')}`);
+  if (issue.kind === PLANNED && issue.proposal) lines.push(`Backlog item: ${issue.proposal.pid} (revision ${issue.proposal.rev}). Done by the one-shot job that names this issue.`);
   lines.push('', issue.body || '(no description)');
   return lines.join('\n') + '\n';
 }
@@ -258,7 +316,8 @@ export function screenIndex(project) {
 
 export function openCount(project) {
   try {
-    return list(project).filter((i) => OPEN.includes(i.status)).length;
+    // Planned issues wait for their job: they are not something to look at.
+    return list(project).filter((i) => OPEN.includes(i.status) && i.kind !== PLANNED).length;
   } catch {
     return 0;
   }

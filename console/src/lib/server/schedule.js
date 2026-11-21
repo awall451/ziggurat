@@ -12,6 +12,7 @@ import { audit } from './audit.js';
 import { invalidateStatus, kitAtLeast } from './live.js';
 import { readCycles } from './aggregate.js';
 import { statusSoon } from './view.js';
+import { jobsFor } from './backlog.js';
 import { parseScheduleText, formatScheduleText, validateSchedule, validateSettings, validTimeZone, rangeFor, windowRange, cleanWindow } from '../schedule.js';
 
 export const SCHEDULE_KIT = '0.9.0';
@@ -99,16 +100,24 @@ export async function timeline({ view = 'week', date = null, from = null, to = n
       .map(async (p) => {
         const status = await statusSoon(p, 2500);
         const cycles = readCycles(p.paths.fleet);
+        // Backlog jobs are drawn as jobs, with their estimate: not again as plain cycles.
+        let jobs = [];
+        try {
+          jobs = jobsFor(p, status).filter((j) => (j.end ?? Math.max(j.estEnd, Date.now())) > dataFrom && j.start < dataTo);
+        } catch {
+          /* no backlog yet */
+        }
+        const jobIds = new Set(jobs.map((j) => j.id));
         const past = [];
         for (const c of cycles) {
           // Chat turns with the lead are not drawn: they are seconds long and not cycles.
-          if (c.kind === 'chat') continue;
+          if (c.kind === 'chat' || (c.oneshot && jobIds.has(c.oneshot))) continue;
           const start = Date.parse(c.start);
           const end = Date.parse(c.end);
           if (!Number.isFinite(start) || !Number.isFinite(end) || end <= dataFrom || start >= dataTo) continue;
           past.push({ start, end, limited: c.limited, halted: c.halted, costUsd: c.costUsd });
         }
-        const since = status.leadActive && status.leadSince ? Date.parse(status.leadSince) : NaN;
+        const since = status.leadActive && status.leadSince && !jobs.some((j) => j.state === 'running' && j.id === status.oneshot?.id) ? Date.parse(status.leadSince) : NaN;
         return {
           id: p.id,
           name: p.name,
@@ -123,8 +132,9 @@ export async function timeline({ view = 'week', date = null, from = null, to = n
           past,
           running: Number.isFinite(since) ? { start: since } : null,
           log: readSlotLog(p.paths.fleet, dataFrom, dataTo),
-          // One-shot jobs and planning cycles set for a time (kit 0.10). Bars on the timeline are for later.
-          atJobs: status.atJobs || []
+          atJobs: status.atJobs || [],
+          // Backlog jobs (approved items, planning cycles set for a time), drawn with their estimate.
+          jobs
         };
       })
   );

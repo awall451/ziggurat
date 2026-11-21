@@ -2,6 +2,8 @@
   import { goto, invalidateAll } from '$app/navigation';
   import Timeline from '$lib/components/Timeline.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import Modal from '$lib/components/Modal.svelte';
+  import ProposalCard from '$lib/components/ProposalCard.svelte';
   import { DAYS, plan, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
 
   let { data } = $props();
@@ -80,9 +82,57 @@
       past: p.past,
       running: p.running,
       planned: planning.planned[p.id] || [],
+      jobs: p.jobs || [],
       log: p.log
     }))
   );
+
+  // ---- backlog jobs: the pop-up, cancel, move ----
+  let jobOpen = $state(null); // {project, job}
+  let moving = $state(null); // {project, job}: the timeline carries the job's estimate
+  let movePick = $state(null); // ms picked for the move
+  const JOB_STATE = { set: 'Set for', running: 'Running since', done: 'Ran' };
+  function whenAt(ms) {
+    const c = wallClock(settings.timezone, ms);
+    const day = new Date(Date.UTC(c.y, c.m - 1, c.d, 12)).toLocaleDateString([], { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' });
+    return `${day}, ${clockAt(ms)}`;
+  }
+  async function jobAct(projectId, body, key) {
+    busy = key;
+    problem = '';
+    done = '';
+    try {
+      const r = await fetch(`/p/${projectId}/backlog/act`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(out.message || 'That did not work');
+      done = out.detail || 'Done.';
+      await invalidateAll();
+      return out;
+    } catch (e) {
+      problem = e.message;
+      return null;
+    } finally {
+      busy = '';
+    }
+  }
+  function startMove() {
+    moving = jobOpen;
+    movePick = null;
+    jobOpen = null;
+  }
+  async function confirmMove() {
+    const m = moving;
+    const out = await jobAct(m.project, { action: 'move-at', id: m.job.id, at: Math.round(movePick / 1000) }, 'move');
+    if (out) {
+      moving = null;
+      movePick = null;
+    }
+  }
+  async function cancelJob() {
+    const j = jobOpen;
+    const out = await jobAct(j.project, { action: 'cancel-at', id: j.job.id }, 'cancel-job');
+    if (out) jobOpen = null;
+  }
 
   const project = (id) => tl.projects.find((p) => p.id === id);
   function draftOf(id) {
@@ -295,7 +345,7 @@
       <span class="grow"></span>
       <span class="legend small dim">
         <span class="key past"></span> ran <span class="key plan"></span> planned (typical length) <span class="key quiet"></span> quiet hours
-        <span class="key over"></span> likely overlap
+        <span class="key over"></span> likely overlap <span class="key job"></span> backlog job (estimate dashed)
       </span>
     </div>
 
@@ -321,7 +371,19 @@
       </div>
       <p class="dim small">Per day: cycles that ran (filled) and start times still to come (outlined). Open a day or the week to change times.</p>
     {:else}
-      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} />
+      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} ghost={moving ? { project: moving.project, minutes: moving.job.minutes } : null} onpick={(_, ms) => (movePick = ms)} />
+    {#if moving}
+      <div class="actions movebar">
+        {#if movePick}
+          <span>Move <b>{moving.job.kind === 'plan' ? 'the planning cycle' : moving.job.title}</b> to <b>{whenAt(movePick)}</b>, until about {clockAt(movePick + moving.job.minutes * 60000)}.</span>
+        {:else}
+          <span class="small">Click in {tl.projects.find((x) => x.id === moving.project)?.name}'s row to pick the new start (estimate {moving.job.minutes} min).</span>
+        {/if}
+        <span class="spacer"></span>
+        <button class="btn quiet" onclick={() => ((moving = null), (movePick = null))} disabled={!!busy}>Cancel</button>
+        <button class="btn primary" onclick={confirmMove} disabled={!movePick || !!busy}>{busy === 'move' ? 'Moving…' : 'Move it'}</button>
+      </div>
+    {/if}
       <p class="dim small">
         <b>Move through time:</b> the arrows, or scroll sideways (Shift + wheel). <b>Zoom in:</b> drag across empty space. <b>Change times:</b> drag a planned start, or
         click an empty place in a row to add one. Changes are not active until you apply them.
@@ -484,26 +546,32 @@
     {/if}
   </section>
 
-  {#if tl.projects.some((x) => x.atJobs?.length)}
-    <section class="panel block">
-      <h2>Set for a time</h2>
-      <p class="small dim">One-time starts from the Backlog: a planning cycle or an approved item. Cancel them on the project's Backlog tab.</p>
-      <ul class="small">
-        {#each tl.projects as x (x.id)}
-          {#each x.atJobs || [] as j (j.id)}
-            <li>
-              <a href="/p/{x.id}/backlog">{x.name}</a>: {j.plan ? 'planning cycle' : 'job'},
-              {new Date(j.at * 1000).toLocaleDateString([], { timeZone: tl.settings.timezone, weekday: 'short', day: 'numeric', month: 'short' })}
-              {clockAt(j.at * 1000)}
-            </li>
-          {/each}
-        {/each}
-      </ul>
-    </section>
-  {/if}
 </div>
 
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
+
+{#if jobOpen}
+  {@const j = jobOpen.job}
+  {@const team = tl.projects.find((x) => x.id === jobOpen.project)}
+  <Modal title={j.kind === 'plan' ? `${team?.name}: planning cycle` : `${team?.name}: backlog job`} onclose={() => (jobOpen = null)}>
+    <p class="small">
+      {JOB_STATE[j.state]} <b>{whenAt(j.start)}</b>{j.state === 'done' ? `, until ${clockAt(j.end)}` : ''}. Estimate {j.minutes} min{j.state === 'done' ? `, took ${lengthText((j.end - j.start) / 1000)}` : ''}.
+    </p>
+    {#if j.prop}
+      <ProposalCard prop={j.prop} bare />
+    {:else if j.kind === 'plan'}
+      <p class="small dim">The lead looks for what to do next and writes proposals, no code.</p>
+    {/if}
+    <div class="actions">
+      {#if j.state === 'set'}
+        <button class="btn danger" onclick={cancelJob} disabled={!!busy}>{busy === 'cancel-job' ? 'Cancelling…' : 'Cancel it'}</button>
+      {/if}
+      <a class="btn quiet" href="/p/{jobOpen.project}/backlog">Open in Backlog</a>
+      <span class="spacer"></span>
+      {#if j.state === 'set'}<button class="btn primary" onclick={startMove} disabled={!!busy}>Move…</button>{/if}
+    </div>
+  </Modal>
+{/if}
 
 <style>
   .page {
@@ -525,6 +593,13 @@
   }
   .grow {
     flex: 1;
+  }
+  .movebar {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    background: rgba(var(--glow), 0.08);
   }
   .block {
     padding: 18px;
@@ -609,6 +684,10 @@
   .key.quiet {
     background: var(--warn);
     opacity: 0.25;
+  }
+  .key.job {
+    background: repeating-linear-gradient(-45deg, var(--accent) 0 3px, rgba(var(--glow), 0.3) 3px 7px);
+    border: 1px dashed var(--accent);
   }
   .key.over {
     border: 2px solid var(--warn);

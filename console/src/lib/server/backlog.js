@@ -14,9 +14,10 @@ import crypto from 'node:crypto';
 import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
 import { parseHeaderFile } from './headerfile.js';
-import { vmSaidNo, sendOneshot, scheduleOneshot } from './feedback.js';
+import { vmSaidNo, sendOneshot, scheduleOneshot, rescheduleOneshot } from './feedback.js';
 import { audit } from './audit.js';
-import { invalidateStatus, getStatus } from './live.js';
+import { invalidateStatus, getStatus, peekStatus } from './live.js';
+import { createPlanned, noteJob, setStatus as setIssueStatus, get as getIssue, PLANNED_KIT, OPEN as OPEN_ISSUE } from './issues.js';
 
 export const BACKLOG_KIT = '0.10.0';
 export const PLAN_RE = /^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$/;
@@ -144,10 +145,51 @@ export async function cancelAt(user, project, id) {
   for (const pid of names(runsDir(project), PID_RE)) {
     const file = path.join(runsDir(project), `${pid}.json`);
     const r = readJson(file);
-    if (r?.jobId === id) writeJson(file, { ...r, scheduledFor: null, cancelled: true });
+    if (r?.jobId === id) {
+      writeJson(file, { ...r, scheduledFor: null, cancelled: true });
+      const d = readJson(path.join(decisionsDir(project), `${pid}.json`));
+      if (d?.issueId) noteJob(project, d.issueId, null);
+    }
   }
   invalidateStatus(project.id);
   return { ok: true };
+}
+
+/**
+ * Move a job or a planning cycle that waits for its time: the VM forgets the
+ * old time (unat) and gets the stored job again for the new one (at).
+ */
+export async function moveAt(user, project, id, at) {
+  const epoch = checkTime(at);
+  if (PLAN_RE.test(id)) {
+    const file = path.join(plansDir(project), `${id}.json`);
+    const plan = readJson(file);
+    if (!plan) throw new Error('No such planning cycle');
+    const un = await kit(project, 'agent-kit-oneshot', ['unat', id]);
+    if (un.code !== 0) throw new Error((un.stderr || 'could not move it on the VM').trim().slice(-200));
+    const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, senderName(user), '--plan'], { input: plan.focus || '', timeout: 120000 });
+    const ok = res.code === 0;
+    audit(user, project.id, 'job-at-move', { id, at: new Date(epoch * 1000).toISOString() }, { ok, detail: ok ? null : (res.stderr || '').trim().slice(-200) });
+    if (!ok) {
+      writeJson(file, { ...plan, scheduledFor: null, error: (res.stderr || 'not set again').trim().slice(-300) });
+      throw new Error(`The old time is cancelled, but the new one was not set: ${(res.stderr || '').trim().slice(-200)}`);
+    }
+    writeJson(file, { ...plan, scheduledFor: epoch });
+  } else {
+    const out = await rescheduleOneshot(project, id, epoch);
+    audit(user, project.id, 'job-at-move', { id, at: new Date(epoch * 1000).toISOString() }, { ok: out.ok, detail: out.error });
+    if (!out.ok) throw new Error(out.error);
+    for (const pid of names(runsDir(project), PID_RE)) {
+      const f = path.join(runsDir(project), `${pid}.json`);
+      const r = readJson(f);
+      if (r?.jobId !== id) continue;
+      writeJson(f, { ...r, scheduledFor: epoch });
+      const d = readJson(path.join(decisionsDir(project), `${pid}.json`));
+      if (d?.issueId) noteJob(project, d.issueId, { id, scheduledFor: epoch });
+    }
+  }
+  invalidateStatus(project.id);
+  return { ok: true, detail: 'Moved.' };
 }
 
 function checkTime(at) {
@@ -194,7 +236,24 @@ export function parseProposal(file, pid, knownPlans) {
   };
 }
 
-/** The owner's decision, kept here and sent to the VM. */
+const atLeast = (version, want) => {
+  const v = String(version || '').split('.').map(Number);
+  const w = want.split('.').map(Number);
+  if (v.length !== 3 || v.some((n) => !Number.isInteger(n))) return false;
+  for (let i = 0; i < 3; i++) if (v[i] !== w[i]) return v[i] > w[i];
+  return true;
+};
+
+/** Close the planned issue of an earlier decision, if it is still open. */
+async function closeIssue(user, project, issueId, note) {
+  const issue = issueId ? getIssue(project, issueId) : null;
+  if (issue && OPEN_ISSUE.includes(issue.status)) await setIssueStatus(project, user, issueId, 'wontfix', note).catch(() => {});
+}
+
+/**
+ * The owner's decision, kept here and sent to the VM. Approving also makes
+ * the proposal a planned issue (kit 0.11): one per approved revision.
+ */
 export async function decide(user, project, pid, status) {
   if (!PID_RE.test(pid)) throw new Error('Bad proposal id');
   if (!['approved', 'rejected', 'new'].includes(status)) throw new Error('Bad decision');
@@ -205,12 +264,37 @@ export async function decide(user, project, pid, status) {
   const detail = ok ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-200);
   audit(user, project.id, 'backlog-decide', { pid, status, rev: prop.rev }, { ok, detail });
   if (!ok) throw new Error(detail);
-  writeJson(path.join(decisionsDir(project), `${pid}.json`), { status, rev: prop.rev, by: senderName(user), at: new Date().toISOString() });
-  return { ok: true };
+  const file = path.join(decisionsDir(project), `${pid}.json`);
+  const before = readJson(file);
+  let issueId = before?.issueId || null;
+  let issueRev = before?.issueRev ?? null;
+  if (status === 'approved') {
+    if (issueId && issueRev !== prop.rev) {
+      await closeIssue(user, project, issueId, `replaced by revision ${prop.rev} of the proposal`);
+      issueId = null;
+    }
+    if (!issueId && atLeast(peekStatus(project.id)?.kitVersion, PLANNED_KIT)) {
+      const issue = await createPlanned(project, user, {
+        title: `${prop.order != null ? `${prop.order}. ` : ''}${prop.title}`,
+        body: jobText(prop),
+        proposal: { pid, rev: prop.rev, plan: prop.plan }
+      }).catch(() => null);
+      if (issue) {
+        issueId = issue.id;
+        issueRev = prop.rev;
+      }
+    }
+  } else if (issueId) {
+    await closeIssue(user, project, issueId, status === 'rejected' ? 'the proposal was rejected' : 'the approval was taken back');
+    issueId = null;
+    issueRev = null;
+  }
+  writeJson(file, { status, rev: prop.rev, by: senderName(user), at: new Date().toISOString(), issueId, issueRev });
+  return { ok: true, issueId };
 }
 
-/** The text of the one-shot job for an approved proposal. */
-export function jobText(prop) {
+/** The text of the one-shot job for an approved proposal (and its planned issue, if any). */
+export function jobText(prop, issueId = null) {
   return [
     `Backlog item ${prop.pid} (revision ${prop.rev}), approved by the owner: ${prop.title}`,
     '',
@@ -221,6 +305,8 @@ export function jobText(prop) {
     '',
     prop.text,
     '',
+    issueId ? `Owner issue ${issueId} tracks this item: set it in_progress when you start and done when it has merged (owner-issues update).` : null,
+    issueId ? '' : null,
     'Do this item as proposed. If it turns out much larger than the estimate, land what is safe, reply `planned` and say what is left.'
   ]
     .filter((l) => l !== null)
@@ -233,24 +319,28 @@ function approvedProposal(project, pid) {
   if (!prop) throw new Error('No such proposal');
   const d = readJson(path.join(decisionsDir(project), `${pid}.json`));
   if (d?.status !== 'approved' || d.rev !== prop.rev) throw new Error('Approve this revision first');
-  return prop;
+  const issueId = d.issueId && d.issueRev === prop.rev && getIssue(project, d.issueId) ? d.issueId : null;
+  return { prop, issueId };
 }
 
 /** Run an approved item now: a one-shot job whose text is the proposal. */
 export async function runNow(user, project, pid, oneshot) {
-  const prop = approvedProposal(project, pid);
-  const out = await oneshot(user, project, { text: jobText(prop), attachments: [] });
-  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at: new Date().toISOString(), scheduledFor: null });
+  const { prop, issueId } = approvedProposal(project, pid);
+  const out = await oneshot(user, project, { text: jobText(prop, issueId), attachments: [] });
+  const at = new Date().toISOString();
+  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at, scheduledFor: null, minutes: prop.minutes });
+  if (issueId) noteJob(project, issueId, { id: out.id, startedAt: at });
   return out;
 }
 
 /** Set an approved item for a time: the VM starts the job then (agent-kit-oneshot at). */
 export async function runAt(user, project, pid, at) {
-  const prop = approvedProposal(project, pid);
+  const { prop, issueId } = approvedProposal(project, pid);
   const epoch = checkTime(at);
-  const out = await scheduleOneshot(project, user, { text: jobText(prop), epoch });
+  const out = await scheduleOneshot(project, user, { text: jobText(prop, issueId), epoch });
+  if (issueId && out.scheduled) noteJob(project, issueId, { id: out.id, scheduledFor: epoch });
   audit(user, project.id, 'job-at', { pid, id: out.id, at: new Date(epoch * 1000).toISOString() }, { ok: out.scheduled, detail: out.error });
-  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at: new Date().toISOString(), scheduledFor: out.scheduled ? epoch : null });
+  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at: new Date().toISOString(), scheduledFor: out.scheduled ? epoch : null, minutes: prop.minutes });
   invalidateStatus(project.id);
   return { ok: true, id: out.id, scheduled: out.scheduled, detail: out.scheduled ? 'Job set for that time.' : `No clear answer from the VM (${out.error}).` };
 }
@@ -384,6 +474,67 @@ export function list(project, status = null) {
     };
   });
   return { plans: out, chatBusy: !!status?.chat };
+}
+
+/**
+ * Backlog jobs for the Schedule timeline: approved items that run or are set
+ * for a time, and planning cycles set for a time. Built from this console's
+ * own run records (agent-written data is only read for titles and estimates),
+ * the VM's status (jobs set for a time, the job running) and the ledger.
+ *   [{id, kind:'job'|'plan', pid, order, title, minutes, cost, start, estEnd, end, state:'set'|'running'|'done'}]
+ * Times are ms. `estEnd` is the start plus the estimate; `end` the real end.
+ */
+export function jobsFor(project, status = null, now = Date.now()) {
+  const plans = knownPlans(project);
+  const lines = ledger(project);
+  const atJobs = Array.isArray(status?.atJobs) ? status.atJobs : [];
+  const atById = new Map(atJobs.map((j) => [j.id, j]));
+  const running = status?.oneshot?.id || null;
+  const runningSince = Date.parse(status?.oneshot?.since || '');
+  const out = [];
+  const add = (job) => {
+    if (!Number.isFinite(job.start)) return;
+    job.estEnd = job.start + job.minutes * 60000;
+    out.push(job);
+  };
+  for (const pid of names(runsDir(project), PID_RE)) {
+    const run = readJson(path.join(runsDir(project), `${pid}.json`));
+    if (!run || typeof run.jobId !== 'string' || !/^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(run.jobId) || run.cancelled) continue;
+    const prop = parseProposal(path.join(outDir(project), `${pid}.md`), pid, plans);
+    const minutes = prop?.minutes || (Number.isInteger(run.minutes) && run.minutes > 0 && run.minutes <= 90 ? run.minutes : 60);
+    const base = {
+      id: run.jobId,
+      kind: 'job',
+      pid,
+      order: prop?.order ?? null,
+      title: prop?.title || 'Backlog item',
+      minutes,
+      cost: prop?.cost ?? null,
+      end: null,
+      // For the job's pop-up on the Schedule page: the proposal as checked here.
+      prop: prop ? { order: prop.order, title: prop.title, minutes: prop.minutes, cost: prop.cost, confidence: prop.confidence, areas: prop.areas, risk: prop.risk, rev: prop.rev, text: prop.text } : null
+    };
+    const line = lines.findLast((l) => l.oneshot === run.jobId);
+    if (line) {
+      add({ ...base, state: 'done', start: Date.parse(line.start), end: Date.parse(line.end) });
+    } else if (running === run.jobId) {
+      add({ ...base, state: 'running', start: Number.isFinite(runningSince) ? runningSince : Date.parse(run.at) });
+    } else if (atById.has(run.jobId)) {
+      add({ ...base, state: 'set', start: atById.get(run.jobId).at * 1000 });
+    } else if (!run.scheduledFor && Date.parse(run.at) > now - 15 * 60000) {
+      // Just sent with Run now: the VM's status may not show it yet.
+      add({ ...base, state: 'running', start: Date.parse(run.at) });
+    }
+  }
+  // Planning cycles set for a time, or running now.
+  const planSecs = lines.filter((l) => l.kind === 'plan' && num(l.secs) != null).map((l) => l.secs).sort((x, y) => x - y);
+  const planMinutes = planSecs.length ? Math.max(1, Math.round(planSecs[Math.floor(planSecs.length / 2)] / 60)) : 5;
+  for (const id of plans) {
+    const base = { id, kind: 'plan', pid: null, order: null, title: 'Planning cycle', minutes: planMinutes, cost: null, end: null };
+    if (running === id) add({ ...base, state: 'running', start: Number.isFinite(runningSince) ? runningSince : now });
+    else if (atById.has(id)) add({ ...base, state: 'set', start: atById.get(id).at * 1000 });
+  }
+  return out.sort((x, y) => x.start - y.start);
 }
 
 const syncState = new Map();
