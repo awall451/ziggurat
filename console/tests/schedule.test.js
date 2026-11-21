@@ -109,6 +109,38 @@ describe('times in a time zone', () => {
   });
 });
 
+describe('how times and zones are shown', () => {
+  it('a 12 or a 24 hour clock', () => {
+    expect([lib.clockLabel('00:05'), lib.clockLabel('00:05', '12'), lib.clockLabel('12:00', '12'), lib.clockLabel('13:30', '12'), lib.clockLabel('23:45', '12')]).toEqual(['00:05', '12:05 AM', '12:00 PM', '1:30 PM', '11:45 PM']);
+    expect([lib.hourLabel(0), lib.hourLabel(0, '12'), lib.hourLabel(12, '12'), lib.hourLabel(14, '12'), lib.hourLabel(14)]).toEqual(['00', '12a', '12p', '2p', '14']);
+  });
+
+  it('zones by the names people use, with the offset of the day', () => {
+    const winter = Date.parse('2026-01-15T12:00:00Z');
+    const summer = Date.parse('2026-07-15T12:00:00Z');
+    expect(lib.zoneLabel(NY, winter)).toBe('EST · UTC-05:00 · Eastern Time (New York)');
+    expect(lib.zoneLabel(NY, summer)).toBe('EDT · UTC-04:00 · Eastern Time (New York)');
+    expect(lib.zoneLabel('UTC', winter)).toBe('UTC · Coordinated Universal Time');
+    expect(lib.zoneLabel('Asia/Kolkata', winter)).toBe('UTC+05:30 · India Time (Kolkata)');
+    const choices = lib.zoneChoices(['America/Creston', NY, 'not a zone'], winter);
+    // West to east, the familiar ones, and a zone already in use is kept even if it is not on the list.
+    expect(choices.map((c) => c.tz).indexOf('America/Los_Angeles')).toBeLessThan(choices.map((c) => c.tz).indexOf(NY));
+    expect(choices.filter((c) => c.tz === NY)).toHaveLength(1);
+    expect(choices.find((c) => c.tz === 'America/Creston').label).toBe('MST · UTC-07:00 · America/Creston');
+    expect(choices.some((c) => c.tz === 'not a zone')).toBe(false);
+    expect(choices.length).toBeLessThan(45);
+  });
+
+  it('any stretch of time can be shown', () => {
+    const w = lib.windowRange(Date.parse('2026-01-07T17:00:00Z'), Date.parse('2026-01-08T17:00:00Z'), NY);
+    expect(w.days.map((d) => `${d.date} ${d.name}`)).toEqual(['2026-01-07 wed', '2026-01-08 thu']);
+    expect(w.date).toBe('2026-01-07');
+    expect(lib.cleanWindow(1000, 2000)).toEqual({ from: 1000, to: 1000 + lib.MIN_WINDOW });
+    expect(lib.cleanWindow(0, 400 * 86_400_000).to).toBe(lib.MAX_WINDOW);
+    expect(lib.cleanWindow(NaN, 5)).toBeNull();
+  });
+});
+
 describe('what the owner is told', () => {
   const settings = { timezone: NY, quiet: [{ days: ['mon', 'tue', 'wed', 'thu', 'fri'], from: '09:00', to: '17:00' }] };
   const r = lib.rangeFor('week', '2026-01-07', NY);
@@ -120,8 +152,12 @@ describe('what the owner is told', () => {
     expect(planned.a).toHaveLength(21);
     expect(warnings.map((w) => w.kind).sort()).toEqual(['cap', 'overlap', 'quiet']);
     expect(warnings.find((w) => w.kind === 'overlap').text).toMatch(/Alpha \(daily 01:00\) and Beta \(daily 02:00\)/);
-    expect(warnings.find((w) => w.kind === 'quiet').text).toMatch(/Alpha: the slot daily 13:00/);
-    expect(warnings.find((w) => w.kind === 'cap').text).toMatch(/3 slots on one day, but the daily cap is 2/);
+    expect(warnings.find((w) => w.kind === 'quiet').text).toMatch(/Alpha: the start time daily 13:00 is inside your quiet hours/);
+    expect(warnings.find((w) => w.kind === 'cap').text).toMatch(/3 start times on one day, but the daily cap is 2/);
+    // The owner's clock is used in what is said.
+    const said = lib.plan([a, b], { ...settings, clock: '12' }, r.from, r.to).warnings.map((w) => w.text).join(' ');
+    expect(said).toMatch(/Alpha \(daily 1:00 AM\) and Beta \(daily 2:00 AM\)/);
+    expect(said).toMatch(/daily 1:00 PM is inside/);
     // A weekend 13:00 is not in the quiet hours; a weekday one is.
     const flags = (iso0) => planned.a.find((x) => iso(x.at) === iso0).flags;
     expect(flags('2026-01-07T18:00')).toContain('quiet');
@@ -144,6 +180,9 @@ describe('what the owner is told', () => {
     ]);
     expect(() => lib.validateSettings({ timezone: NY, quiet: [{ days: ['daily'], from: '09:00', to: '09:00' }] })).toThrow(/two different times/);
     expect(() => lib.validateSettings({ timezone: 'Nowhere', quiet: [] })).toThrow(/timezone/);
+    expect(lib.validateSettings({ timezone: NY, quiet: [] }).clock).toBe('24');
+    expect(lib.validateSettings({ timezone: NY, quiet: [], clock: '12' }).clock).toBe('12');
+    expect(() => lib.validateSettings({ timezone: NY, quiet: [], clock: 'am' })).toThrow(/clock/);
   });
 });
 
@@ -208,6 +247,13 @@ describe('the server side', () => {
     expect(p.log.map((l) => l.what)).toEqual(['started', 'skipped: daily cap (4/4)']);
     status = { ...status, kitVersion: '0.8.0' };
     expect((await server.timeline({ view: 'nonsense' })).view).toBe('week');
+    // A window the owner moved or zoomed to; data is given for a wider stretch than is shown.
+    const from = Date.parse('2026-01-07T08:00:00Z');
+    const zoomed = await server.timeline({ view: 'day', from: String(from), to: String(from + 4 * 3_600_000) });
+    expect(zoomed).toMatchObject({ view: 'day', custom: true, range: { from, to: from + 4 * 3_600_000 } });
+    expect(zoomed.projects[0].past).toHaveLength(1); // the 06:00 cycle, just before the window
+    expect((await server.timeline({ view: 'day', from: 'x', to: '5' })).custom).toBe(false);
+    expect((await server.timeline({ view: 'month', from: String(from), to: String(from + 1000) })).custom).toBe(false);
     expect((await server.timeline({})).projects[0].canSchedule).toBe(false);
     status = { ...status, kitVersion: '0.9.0' };
   });

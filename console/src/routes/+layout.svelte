@@ -12,6 +12,8 @@
   import Icon from '$lib/components/Icon.svelte';
 
   let { children } = $props();
+  // Which tab of the header is the current one. Settings is neither.
+  const section = $derived(page.url.pathname.startsWith('/schedule') ? 'schedule' : page.url.pathname.startsWith('/settings') ? null : 'projects');
 
   // Keep every page current while its tab is visible.
   onMount(() => {
@@ -37,22 +39,22 @@
       <span class="word">Ziggurat</span>
     </a>
     <span class="sep"></span>
-    <nav class="crumbs">
+    <!-- The sections of the console. More can be added here. -->
+    <nav class="tabs" aria-label="Sections">
+      <a class:on={section === 'projects'} aria-current={section === 'projects' ? 'page' : undefined} href="/">Projects</a>
+      <a class:on={section === 'schedule'} aria-current={section === 'schedule' ? 'page' : undefined} href="/schedule">Schedule</a>
+    </nav>
+    <span class="crumbs">
       {#if project}
-        <a href="/">Projects</a><span class="dim">/</span><span class="here">{project.name}</span>
+        <span class="dim">/</span><span class="here">{project.name}</span>
         <span class="chip mono">{project.theme}</span>
       {:else if page.url.pathname.startsWith('/new')}
-        <a href="/">Projects</a><span class="dim">/</span><span class="here">New project</span>
-      {:else if page.url.pathname.startsWith('/schedule')}
-        <a href="/">Projects</a><span class="dim">/</span><span class="here">Schedule</span>
+        <span class="dim">/</span><span class="here">New project</span>
       {:else if page.url.pathname.startsWith('/settings')}
-        <a href="/">Projects</a><span class="dim">/</span><span class="here">Settings</span>
-      {:else}
-        <span class="here">Projects</span>
+        <span class="dim">/</span><span class="here">Settings</span>
       {/if}
-    </nav>
+    </span>
     <span class="grow"></span>
-    <a class="small" href="/schedule">Schedule</a>
     <a class="small" href="/settings">Settings</a>
   </header>
   <main>
@@ -100,6 +102,27 @@
     width: 1px;
     height: 24px;
     background: var(--line);
+  }
+  .tabs {
+    display: flex;
+    align-self: stretch;
+    gap: 4px;
+  }
+  .tabs a {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    color: var(--ink-2);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    font-weight: 500;
+  }
+  .tabs a:hover {
+    color: var(--ink-strong);
+  }
+  .tabs a.on {
+    color: var(--ink-strong);
+    border-bottom-color: var(--cyan);
   }
   .crumbs {
     display: flex;
