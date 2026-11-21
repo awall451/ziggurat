@@ -18,9 +18,13 @@
   const brief = $derived(node.brief || '');
   const longBrief = $derived(brief.length > 700);
 
-  // Collapse the brief again when another agent is picked.
+  // Collapse the brief again when another agent is picked. Every data refresh
+  // hands in a new `node` object for the same agent, which reruns this effect:
+  // compare the id itself, so a refresh leaves an opened brief open (issue 13).
+  let shownId = node.id;
   $effect(() => {
-    node.id;
+    if (node.id === shownId) return;
+    shownId = node.id;
     fullBrief = false;
   });
 </script>
