@@ -149,7 +149,8 @@ export function todayIn(tz, now = Date.now()) {
 }
 
 /**
- * The range a view shows, in `tz`. view: 'day' | 'week' (Monday first) | 'month'.
+ * The range a view shows, in `tz`. view: 'day' | 'week' | 'month'. A week is
+ * the seven days from `date` on (today by default): the schedule looks ahead.
  * Returns {from, to, date, prev, next, days: [{date, from, to, name}]}.
  */
 export function rangeFor(view, date, tz, now = Date.now()) {
@@ -157,7 +158,6 @@ export function rangeFor(view, date, tz, now = Date.now()) {
   let count = 1;
   let step = 1;
   if (view === 'week') {
-    d = addDays(d, -DAYS.indexOf(dayName(d)));
     count = 7;
     step = 7;
   } else if (view === 'month') {

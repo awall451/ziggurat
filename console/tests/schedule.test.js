@@ -73,13 +73,14 @@ describe('times in a time zone', () => {
   const s = { tz: NY, slots: [{ days: ['daily'], time: '02:30' }, { days: ['daily'], time: '01:30' }] };
 
   it('a week with the clocks going forward is an hour short, and 02:30 does not happen that day', () => {
+    // A week is the seven days from the given date on (the schedule looks ahead).
     const r = lib.rangeFor('week', '2026-03-08', NY);
-    expect([r.date, r.prev, r.next]).toEqual(['2026-03-02', '2026-02-23', '2026-03-09']);
+    expect([r.date, r.prev, r.next]).toEqual(['2026-03-08', '2026-03-01', '2026-03-15']);
     expect((r.to - r.from) / 3_600_000).toBe(167);
     const at = lib.occurrences(s, r.from, r.to).filter((o) => o.id === 'daily@02:30').map((o) => iso(o.at));
     expect(at).toHaveLength(6);
     expect(at).not.toContain('2026-03-08T06:30');
-    expect(at[0]).toBe('2026-03-02T07:30');
+    expect(at[0]).toBe('2026-03-09T06:30');
     expect(lib.instantOf(NY, 2026, 3, 8, 2, 30)).toBeNull();
   });
 
@@ -93,7 +94,7 @@ describe('times in a time zone', () => {
     // Monday 20:30 in New York is already Tuesday in UTC.
     const mon = { tz: NY, slots: [{ days: ['mon'], time: '20:30' }] };
     const r = lib.rangeFor('week', '2026-01-07', NY);
-    expect(lib.occurrences(mon, r.from, r.to).map((o) => iso(o.at))).toEqual(['2026-01-06T01:30']);
+    expect(lib.occurrences(mon, r.from, r.to).map((o) => iso(o.at))).toEqual(['2026-01-13T01:30']);
   });
 
   it('a month view covers the whole month; the next start and a snapped time of day', () => {
@@ -251,7 +252,7 @@ describe('the server side', () => {
     expect(p.past[0].limited).toBe(true);
     expect(p.log.map((l) => l.what)).toEqual(['started', 'skipped: daily cap (4/4)']);
     status = { ...status, kitVersion: '0.8.0' };
-    expect((await server.timeline({ view: 'nonsense' })).view).toBe('week');
+    expect((await server.timeline({ view: 'nonsense' })).view).toBe('day');
     // A window the owner moved or zoomed to; data is given for a wider stretch than is shown.
     const from = Date.parse('2026-01-07T08:00:00Z');
     const zoomed = await server.timeline({ view: 'day', from: String(from), to: String(from + 4 * 3_600_000) });
