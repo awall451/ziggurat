@@ -6,7 +6,10 @@
   import Icon from './Icon.svelte';
   import MarkupCanvas from './MarkupCanvas.svelte';
 
-  let { project, canFiles = false, onclose = () => {}, oncreated = () => {} } = $props();
+  import PrioritySelect from './PrioritySelect.svelte';
+  import IssuePicker from './IssuePicker.svelte';
+
+  let { project, issues = [], canFiles = false, canTickets = false, onclose = () => {}, oncreated = () => {} } = $props();
 
   const MAX_FILES = 8; // besides the main picture: the VM's limit for att/
   const MAX_FILE = 20 * 1024 * 1024;
@@ -17,6 +20,9 @@
   let title = $state('');
   let kind = $state('bug');
   let body = $state('');
+  let priority = $state('normal');
+  let doneWhen = $state('');
+  let related = $state([]); // issue numbers
   let files = $state([]); // {key, file, name, size, image, url, shapes, marked}
   let editing = $state(null); // key of the picture being marked up
   let editShapes = $state([]);
@@ -126,6 +132,7 @@
     saving = true;
     try {
       const payload = { title: title.trim(), kind, body: body.trim(), attachments: [] };
+      if (canTickets) Object.assign(payload, { priority, doneWhen: doneWhen.trim(), related: $state.snapshot(related) });
       if (main) {
         payload.picture = { name: main.name, png: await b64(await fitPng(main.file)) };
         payload.markup = $state.snapshot(main.shapes);
@@ -163,7 +170,7 @@
 <div class="wrap" role="dialog" aria-modal="true" aria-label="New issue">
   <button class="shade" onclick={onclose} aria-label="Cancel"></button>
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="box panel lit" onpaste={paste}>
+  <div class="box panel lit" class:wide={!!editing} onpaste={paste}>
     <header>
       <h2>{editing ? 'Mark up the picture' : 'New issue'}</h2>
       <button class="btn quiet icon" onclick={editing ? () => (editing = null) : onclose} aria-label="Cancel"><Icon name="x" size={14} /></button>
@@ -180,16 +187,48 @@
         </div>
       {/if}
     {:else}
-      <div class="form">
-        <!-- svelte-ignore a11y_autofocus -->
-        <input class="field" placeholder="Short title, e.g. The save menu forgets the cursor" bind:value={title} maxlength="200" autofocus />
-        <select class="field" bind:value={kind} aria-label="Kind">
+      <label class="fieldrow">
+        <span class="lbl">Kind</span>
+        <select class="field" bind:value={kind}>
           <option value="bug">Bug</option>
           <option value="polish">Polish</option>
           <option value="idea">Idea</option>
         </select>
-      </div>
-      <textarea class="field" rows="6" placeholder="What is wrong, or what you would like. Where in the game, how to see it, what you expected." bind:value={body} maxlength="20000"></textarea>
+      </label>
+      <label class="fieldrow">
+        <span class="lbl">Title <span class="req">*</span></span>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input class="field" placeholder="Short, descriptive: The save menu forgets the cursor" bind:value={title} maxlength="200" autofocus />
+      </label>
+      <label class="fieldrow">
+        <span class="lbl">Description</span>
+        <textarea class="field" rows="5" placeholder="What is wrong, or what you would like. Where in the game, how to see it, what you expected." bind:value={body} maxlength="20000"></textarea>
+      </label>
+      {#if canTickets}
+        <label class="fieldrow">
+          <span class="lbl">Done when <span class="dim">(optional)</span></span>
+          <textarea class="field" rows="2" placeholder="What has to be true for this to be fixed" bind:value={doneWhen} maxlength="1000"></textarea>
+        </label>
+        <div class="grid2">
+          <div class="fieldrow">
+            <span class="lbl">Priority</span>
+            <PrioritySelect value={priority} onchange={(v) => (priority = v)} />
+          </div>
+          <div class="fieldrow">
+            <span class="lbl">Related <span class="dim">(optional)</span></span>
+            <IssuePicker {issues} exclude={related} onpick={(i) => (related = [...related, i.number])} />
+            {#if related.length}
+              <div class="rel">
+                {#each related as n (n)}
+                  {@const r = issues.find((i) => i.number === n)}
+                  <span class="chip small">#{n}{r ? ` ${r.title.slice(0, 24)}${r.title.length > 24 ? '…' : ''}` : ''}<button class="x" aria-label="Remove #{n}" onclick={() => (related = related.filter((x) => x !== n))}>×</button></span>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+      <span class="lbl">Pictures and files</span>
 
       <div
         class="drop"
@@ -240,13 +279,49 @@
       <div class="foot">
         <span class="dim small">Goes to the New column. The lead picks it up at the start of its next cycle and moves it as the team works on it.</span>
         <button class="btn quiet" onclick={onclose}>Cancel</button>
-        <button class="btn primary" onclick={save} disabled={saving}>{saving ? 'Sending…' : 'Raise issue'}</button>
+        <button class="btn primary" onclick={save} disabled={saving || !title.trim()}>{saving ? 'Sending…' : 'Create'}</button>
       </div>
     {/if}
   </div>
 </div>
 
 <style>
+  .lbl {
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+  .req {
+    color: var(--critical);
+  }
+  .rel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 2px 4px 2px 8px;
+  }
+  .chip .x {
+    border: 0;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    align-items: start;
+  }
+  textarea.field {
+    resize: vertical;
+  }
   .wrap {
     position: fixed;
     inset: 0;
@@ -265,12 +340,15 @@
   }
   .box {
     position: relative;
-    width: min(1000px, 100%);
+    width: min(760px, 100%);
     padding: 16px;
     border-radius: 12px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .box.wide {
+    width: min(1000px, 100%);
   }
   header {
     display: flex;
@@ -280,11 +358,6 @@
   h2 {
     margin: 0;
     font-size: 18px;
-  }
-  .form {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 8px;
   }
   textarea {
     resize: vertical;

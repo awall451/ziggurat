@@ -42,7 +42,10 @@ export async function POST({ params, request, locals }) {
       markup: pic ? data.markup : [],
       shotPng: pic ? buf(pic.png, 'picture') : null,
       markupPng: pic && data.markupPng != null ? buf(data.markupPng, 'markup image') : null,
-      attachments
+      attachments,
+      priority: data.priority || 'normal',
+      doneWhen: data.doneWhen,
+      related: data.related
     });
     audit(locals.user, project.id, 'issue-create', { id: issue.id, page: 'issues', files: attachments.length + (pic ? 1 : 0) }, { ok: issue.delivered, detail: issue.error });
     return json({ id: issue.id, delivered: issue.delivered, error: issue.error });

@@ -3,72 +3,174 @@
 # console calls it over ssh). Agents cannot write to the issues folder, which
 # is what lets the lead trust what it finds there.
 #
-#   agent-kit-issues put <id> <kind>        issue archive on stdin (issue.md, shot.png, markup.png,
+#   agent-kit-issues put <id> <kind> [--number N] [--priority P]
+#                                           issue archive on stdin (issue.md, shot.png, markup.png,
 #                                           att/<files>: kit 0.7, an issue raised on the Issues page)
+#   agent-kit-issues amend <id> [--kind K] [--priority P] [--number N] [--quiet]
+#                                           the owner changed it (kit 0.12): archive on stdin with the
+#                                           new issue.md and any new att/<files>; nothing is overwritten
+#   agent-kit-issues note <id> <from>       a note from the owner on stdin (kit 0.12), added to notes.md
 #   agent-kit-issues set <id> <status>      owner moved it: new|in_progress|done|wontfix
 #   agent-kit-issues list                   ids, one per line
+#
+# Kinds: bug, polish, idea, planned. Priorities (kit 0.12): low, normal, high, urgent.
 set -uo pipefail
 ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 # shellcheck source=/dev/null
 source "$ETC/project.env"
 IS=$STATE/issues
 ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
+KIND_RE='^(bug|polish|idea|planned)$'
+PRIO_RE='^(low|normal|high|urgent)$'
+NUM_RE='^[1-9][0-9]{0,5}$'
+FROM_RE='^[A-Za-z0-9._@-]{1,80}$'
 MAX_PNG=$((8 * 1024 * 1024))
 MAX_TEXT=65536
-# Attachments of an issue raised on the Issues page: plain files directly in att/.
+MAX_NOTE=8192
+# Attachments of an issue: plain files directly in att/.
 NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
 MAX_ATT=$((20 * 1024 * 1024))
 MAX_FILES=8
 
 die() { echo "agent-kit-issues: $*" >&2; exit 2; }
+header() { sed -n "1,/^---\$/s/^$2: //p" "$1" 2>/dev/null | head -1; }
 umask 022
+
+# Unpack the archive on stdin into $tmp and check it: only issue.md, shot.png,
+# markup.png and plain files directly in att/, within the limits. $1 is how
+# many attachments the issue already has (amend).
+unpack() {
+  local have=${1:-0} bad n f name
+  head -c $((MAX_PNG * 2 + MAX_TEXT + MAX_ATT * MAX_FILES + 1048576)) | tar -x -C "$tmp" --no-same-owner --no-same-permissions \
+    --no-overwrite-dir --delay-directory-restore 2>/dev/null || die "could not read the issue archive"
+  bad=$(find "$tmp" -mindepth 1 ! -path "$tmp/issue.md" ! -path "$tmp/shot.png" ! -path "$tmp/markup.png" \
+    ! -path "$tmp/att" ! -path "$tmp/att/*" -print -quit)
+  [ -z "$bad" ] || die "unexpected entry in archive"
+  bad=$(find "$tmp" -mindepth 1 ! -type f ! -path "$tmp/att" -print -quit)
+  [ -z "$bad" ] || die "archive may hold plain files only"
+  n=0
+  if [ -e "$tmp/att" ]; then
+    [ -d "$tmp/att" ] && [ ! -L "$tmp/att" ] || die "archive may hold plain files only"
+    while IFS= read -r -d '' f; do
+      n=$((n + 1))
+      name=${f##*/}
+      [[ $name =~ $NAME_RE ]] || die "bad attachment name: $name"
+      [ "$(dirname "$f")" = "$tmp/att" ] || die "attachments must sit directly in att/"
+      [ "$(stat -c %s "$f")" -le "$MAX_ATT" ] || die "attachment over 20 MB: $name"
+    done < <(find "$tmp/att" -mindepth 1 -print0)
+  fi
+  [ $((n + have)) -le "$MAX_FILES" ] || die "more than $MAX_FILES attachments"
+  [ -f "$tmp/issue.md" ] || die "archive has no issue.md"
+  [ "$(stat -c %s "$tmp/issue.md")" -le "$MAX_TEXT" ] || die "issue text over 64 KB"
+  for f in shot.png markup.png; do
+    [ ! -e "$tmp/$f" ] || [ "$(stat -c %s "$tmp/$f")" -le "$MAX_PNG" ] || die "$f over 8 MB"
+  done
+}
+
+workdir() {
+  install -d -m 755 "$IS" "$IS/.owner"
+  tmp=$IS/.tmp-$1
+  rm -rf -- "$tmp"
+  mkdir -m 700 "$tmp" || die "cannot create work folder"
+  trap 'rm -rf -- "$tmp"' EXIT
+}
+
+# The header the script writes in front of the owner's text. Only checked values.
+write_header() { # id kind raised number priority amended
+  printf 'Ziggurat-Owner-Issue: 1\nId: %s\nKind: %s\nRaised: %s\n' "$1" "$2" "$3"
+  [ -n "$4" ] && printf 'Number: %s\n' "$4"
+  [ -n "$5" ] && printf 'Priority: %s\n' "$5"
+  [ -n "$6" ] && printf 'Amended: %s\n' "$6"
+  printf -- '---\n'
+}
 
 case "${1:-}" in
   put)
     id=${2:-} kind=${3:-}
     [[ $id =~ $ID_RE ]] || die "bad id"
-    [[ $kind =~ ^(bug|polish|idea|planned)$ ]] || die "kind must be bug, polish, idea or planned"
-    [ ! -e "$IS/$id" ] || die "issue $id already exists"
-    install -d -m 755 "$IS" "$IS/.owner"
-    tmp=$IS/.tmp-$id
-    rm -rf -- "$tmp"
-    mkdir -m 700 "$tmp" || die "cannot create work folder"
-    trap 'rm -rf -- "$tmp"' EXIT
-    head -c $((MAX_PNG * 2 + MAX_TEXT + MAX_ATT * MAX_FILES + 1048576)) | tar -x -C "$tmp" --no-same-owner --no-same-permissions \
-      --no-overwrite-dir --delay-directory-restore 2>/dev/null || die "could not read the issue archive"
-    # Only issue.md, shot.png, markup.png and plain files directly in att/.
-    bad=$(find "$tmp" -mindepth 1 ! -path "$tmp/issue.md" ! -path "$tmp/shot.png" ! -path "$tmp/markup.png" \
-      ! -path "$tmp/att" ! -path "$tmp/att/*" -print -quit)
-    [ -z "$bad" ] || die "unexpected entry in archive"
-    bad=$(find "$tmp" -mindepth 1 ! -type f ! -path "$tmp/att" -print -quit)
-    [ -z "$bad" ] || die "archive may hold plain files only"
-    if [ -e "$tmp/att" ]; then
-      [ -d "$tmp/att" ] && [ ! -L "$tmp/att" ] || die "archive may hold plain files only"
-      n=0
-      while IFS= read -r -d '' f; do
-        n=$((n + 1))
-        name=${f##*/}
-        [[ $name =~ $NAME_RE ]] || die "bad attachment name: $name"
-        [ "$(dirname "$f")" = "$tmp/att" ] || die "attachments must sit directly in att/"
-        [ "$(stat -c %s "$f")" -le "$MAX_ATT" ] || die "attachment over 20 MB: $name"
-      done < <(find "$tmp/att" -mindepth 1 -print0)
-      [ "$n" -le "$MAX_FILES" ] || die "more than $MAX_FILES attachments"
-    fi
-    [ -f "$tmp/issue.md" ] || die "archive has no issue.md"
-    [ "$(stat -c %s "$tmp/issue.md")" -le "$MAX_TEXT" ] || die "issue text over 64 KB"
-    for f in shot.png markup.png; do
-      [ ! -e "$tmp/$f" ] || [ "$(stat -c %s "$tmp/$f")" -le "$MAX_PNG" ] || die "$f over 8 MB"
+    [[ $kind =~ $KIND_RE ]] || die "kind must be bug, polish, idea or planned"
+    shift 3
+    number="" priority=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --number) [[ ${2:-} =~ $NUM_RE ]] || die "bad number"; number=$2 ;;
+        --priority) [[ ${2:-} =~ $PRIO_RE ]] || die "priority must be low, normal, high or urgent"; priority=$2 ;;
+        *) die "unknown argument: $1" ;;
+      esac
+      shift 2
     done
-    {
-      printf 'Ziggurat-Owner-Issue: 1\nId: %s\nKind: %s\nRaised: %s\n---\n' "$id" "$kind" "$(date -u +%FT%TZ)"
-      cat "$tmp/issue.md"
-    } > "$tmp/issue.tmp" && mv "$tmp/issue.tmp" "$tmp/issue.md"
+    [ ! -e "$IS/$id" ] || die "issue $id already exists"
+    workdir "$id"
+    unpack 0
+    { write_header "$id" "$kind" "$(date -u +%FT%TZ)" "$number" "$priority" ""; cat "$tmp/issue.md"; } > "$tmp/issue.tmp" \
+      && mv "$tmp/issue.tmp" "$tmp/issue.md"
     chmod 755 "$tmp"
     find "$tmp" -type d -exec chmod 755 {} +
     find "$tmp" -type f -exec chmod 644 {} +
     mv "$tmp" "$IS/$id" || die "could not publish the issue"
     trap - EXIT
     echo "delivered issue $id kind=$kind"
+    ;;
+
+  amend)
+    id=${2:-}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [ -f "$IS/$id/issue.md" ] && [ ! -L "$IS/$id" ] || die "no such issue: $id"
+    shift 2
+    old=$IS/$id/issue.md
+    kind=$(header "$old" Kind) raised=$(header "$old" Raised) number=$(header "$old" Number) priority=$(header "$old" Priority)
+    quiet=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --kind) [[ ${2:-} =~ $KIND_RE ]] || die "kind must be bug, polish, idea or planned"; kind=$2; shift 2 ;;
+        --priority) [[ ${2:-} =~ $PRIO_RE ]] || die "priority must be low, normal, high or urgent"; priority=$2; shift 2 ;;
+        --number) [[ ${2:-} =~ $NUM_RE ]] || die "bad number"; number=$2; shift 2 ;;
+        --quiet) quiet=1; shift ;;
+        *) die "unknown argument: $1" ;;
+      esac
+    done
+    [[ $kind =~ $KIND_RE ]] || die "the stored issue has no valid kind"
+    have=0
+    [ -d "$IS/$id/att" ] && have=$(find "$IS/$id/att" -mindepth 1 -maxdepth 1 -type f | wc -l)
+    workdir "$id"
+    unpack "$have"
+    [ ! -e "$tmp/shot.png" ] && [ ! -e "$tmp/markup.png" ] || die "the pictures of an issue cannot be replaced: add files instead"
+    if [ -d "$tmp/att" ]; then
+      for f in "$tmp"/att/*; do
+        [ -e "$f" ] || continue
+        [ ! -e "$IS/$id/att/${f##*/}" ] || die "a file of that name is already there: ${f##*/}"
+      done
+    fi
+    amended=""
+    [ "$quiet" = 1 ] || amended=$(date -u +%FT%TZ)
+    # Keep the date of an earlier change when this one is a quiet one.
+    [ -n "$amended" ] || amended=$(header "$old" Amended)
+    { write_header "$id" "$kind" "${raised:-$(date -u +%FT%TZ)}" "$number" "$priority" "$amended"; cat "$tmp/issue.md"; } > "$tmp/issue.new"
+    chmod 644 "$tmp/issue.new"
+    if [ -d "$tmp/att" ]; then
+      install -d -m 755 "$IS/$id/att"
+      for f in "$tmp"/att/*; do
+        [ -e "$f" ] || continue
+        chmod 644 "$f"
+        mv -n -- "$f" "$IS/$id/att/${f##*/}"
+      done
+    fi
+    mv "$tmp/issue.new" "$IS/$id/issue.md" || die "could not save the issue"
+    echo "amended issue $id"
+    ;;
+
+  note)
+    id=${2:-} from=${3:-}
+    [[ $id =~ $ID_RE ]] || die "bad id"
+    [[ $from =~ $FROM_RE ]] || die "bad sender name"
+    [ -f "$IS/$id/issue.md" ] && [ ! -L "$IS/$id" ] || die "no such issue: $id"
+    text=$(head -c $((MAX_NOTE + 1)))
+    [ ${#text} -le $MAX_NOTE ] || die "a note is at most $MAX_NOTE bytes"
+    [ -n "${text//[[:space:]]/}" ] || die "the note is empty"
+    [ ! -L "$IS/$id/notes.md" ] || die "bad notes file"
+    printf '## %s %s\n\n%s\n\n' "$(date -u +%FT%TZ)" "$from" "$text" >> "$IS/$id/notes.md"
+    chmod 644 "$IS/$id/notes.md"
+    echo "noted on $id"
     ;;
 
   set)
@@ -87,6 +189,6 @@ case "${1:-}" in
     ;;
 
   *)
-    die "usage: agent-kit-issues put <id> <kind> | set <id> <status> | list"
+    die "usage: agent-kit-issues put <id> <kind> [--number N] [--priority P] | amend <id> [...] | note <id> <from> | set <id> <status> | list"
     ;;
 esac

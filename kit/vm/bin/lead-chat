@@ -50,17 +50,32 @@ run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)-chat
 unset ZIGGURAT_LEAD_SESSION
 export CLAUDE_CODE_RETRY_WATCHDOG=1
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+# After a pause of more than an hour the prompt cache is gone and the whole
+# session is read again: that first answer costs more (kit 0.12: default 3).
+budget=${CHAT_BUDGET_USD:-3}
 claude -p "$prompt" --resume "$sid" "${settings[@]}" --tools "$CHAT_TOOLS" \
   --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" \
   --dangerously-skip-permissions \
-  --max-budget-usd "${CHAT_BUDGET_USD:-1}" \
+  --max-budget-usd "$budget" \
   --output-format json > "$run.json" 2> "$run.err"
 rc=$?
 touched=false
 if [ -z "$before" ] || busy; then touched=null
 elif [ "$(workspace_print)" != "$before" ]; then touched=true; fi
 if [ -s "$run.json" ] && jq -e . "$run.json" > /dev/null 2>&1; then
-  jq -r '.result // "" | tostring' "$run.json" | reply "$( [ "$(jq -r '.is_error // false' "$run.json")" = true ] && echo error || echo ok)"
+  answer=$(jq -r '.result // "" | tostring' "$run.json")
+  if [ "$(jq -r '.is_error // false' "$run.json")" = true ] || [ -z "${answer//[[:space:]]/}" ] || [ "$answer" = null ]; then
+    # No answer: say why, in words the owner can act on.
+    subtype=$(jq -r '.subtype // ""' "$run.json")
+    spent=$(jq -r --argjson prev "${prev:-0}" '((.total_cost_usd // 0) - $prev) | if . < 0 then 0 else . end | . * 100 | round / 100' "$run.json")
+    if [ "$subtype" = error_max_budget_usd ]; then
+      printf 'Stopped at the chat budget ($%s) before answering. After a pause of more than an hour the whole planning session is read again, which costs more (about $%s this time). Raise "Budget per chat answer" on Controls, or send it again: the session is now in the cache, so the next try should cost less.\n' "$budget" "$spent" | reply error
+    else
+      { echo "The lead did not answer (${subtype:-rc=$rc})."; jq -r '(.errors // []) | map(tostring) | join("; ")' "$run.json" | head -c 600; } | reply error
+    fi
+  else
+    printf '%s\n' "$answer" | reply ok
+  fi
 else
   { echo "The lead did not answer (rc=$rc)."; tail -c 600 "$run.err"; } | reply error
 fi

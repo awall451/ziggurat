@@ -227,6 +227,9 @@
     ['FREE_TAKE_APPROVED', 'Normal cycles may take approved backlog items', 'Off: approved items wait for Run now or a set time. On: a normal cycle may pick one up by itself.']
   ];
   const ACTION_BACKLOG = {
+    'issue-edit': 'Changed an issue',
+    'issue-files': 'Added files to an issue',
+    'issue-note': 'Added a note to an issue',
     'plan-start': 'Started a planning cycle',
     'backlog-decide': 'Decided on a backlog item',
     'job-at': 'Set a job for a time',

@@ -6,7 +6,7 @@
   // The panel is moved to the end of <body> and placed with fixed
   // coordinates: inside a glass panel (backdrop-filter) it would otherwise be
   // painted under the next card, whatever its z-index.
-  let { open = false, onclose = () => {}, align = 'end', trigger, children } = $props();
+  let { open = false, onclose = () => {}, align = 'end', block = false, trigger, children } = $props();
   let anchor = $state(null);
   let pop = $state(null);
   let pos = $state({ top: -9999, left: -9999 });
@@ -64,7 +64,7 @@
 
 <svelte:window onpointerdown={outside} onkeydown={key} />
 
-<span class="anchor" bind:this={anchor}>
+<span class="anchor" class:block bind:this={anchor}>
   {@render trigger?.()}
 </span>
 {#if open}
@@ -76,6 +76,12 @@
 <style>
   .anchor {
     display: inline-flex;
+  }
+  /* A field-like trigger that fills its column. */
+  .anchor.block {
+    display: flex;
+    width: 100%;
+    min-width: 0;
   }
   .pop {
     position: fixed;

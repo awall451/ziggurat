@@ -126,7 +126,7 @@ echo x > "$T/work/ibad/issue.md"; echo x > "$T/work/ibad/evil.sh"
 refuse "unexpected file in issue archive" bash -c "tar -c -C '$T/work/ibad' . | '$BIN/agent-kit-issues' put 20260101T120003Z-i-dddddd bug"
 check "refused issues left nothing" '[ "$("$BIN/agent-kit-issues" list | wc -l)" = 2 ]'
 listed=$("$BIN/owner-issues" list)
-check "list shows two new issues" '[ "$(wc -l <<< "$listed")" = 2 ] && grep -q "$I1  bug .*new .*Names box" <<< "$listed"'
+check "list shows two new issues" '[ "$(wc -l <<< "$listed")" = 2 ] && grep -q "$I1  normal  *bug .*new .*Names box" <<< "$listed"'
 out=$("$BIN/owner-issues" prompt)
 check "prompt has protocol, issue text and image path" 'grep -q "## Owner issues" <<< "$out" && grep -q OBSIDIAN <<< "$out" && grep -q "issues/$I1/markup.png" <<< "$out"'
 echo "Given to the artist." | "$BIN/owner-issues" update $I1 in_progress > /dev/null
@@ -180,14 +180,60 @@ IP=20260101T120010Z-i-a00005
 mkdir -p "$T/work/ip"; printf '# 1. Save slots\n\nBacklog item 20260101T000000Z-b-abcdef. Code word JASPER.\n' > "$T/work/ip/issue.md"
 tarball ip | "$BIN/agent-kit-issues" put $IP planned > /dev/null
 check "a planned issue is stored" 'grep -q "^Kind: planned$" "$S/issues/$IP/issue.md"'
-check "a planned issue is listed" 'grep -q "$IP  planned" <<< "$("$BIN/owner-issues" list)"'
+check "a planned issue is listed" 'grep -q "$IP  normal  *planned" <<< "$("$BIN/owner-issues" list)"'
 check "normal cycles are not given planned issues" '! grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
 echo "FREE_TAKE_APPROVED=1" > "$T/etc/caps.env"
 check "unless the owner lets them take approved items" 'grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
 rm -f "$T/etc/caps.env"
 echo "Started." | "$BIN/owner-issues" update $IP in_progress > /dev/null
-check "the job that names it can update it" 'grep -q "$IP  planned .*in_progress" <<< "$("$BIN/owner-issues" list)"'
+check "the job that names it can update it" 'grep -q "$IP  normal  *planned .*in_progress" <<< "$("$BIN/owner-issues" list)"'
 "$BIN/agent-kit-issues" set $IP done > /dev/null
+
+# Kit 0.12: numbers, priority, amend, notes, the commit of a fix.
+IN1=20260101T130000Z-i-b00001 IN2=20260101T130001Z-i-b00002
+mkdir -p "$T/work/n1" "$T/work/n2" "$T/work/n1b/att" "$T/work/n1c/att" "$T/work/n1d"
+printf '# Save menu flickers\n\nCode word TOPAZ.\n' > "$T/work/n1/issue.md"
+printf '# Title music too loud\n\nCode word BERYL.\n' > "$T/work/n2/issue.md"
+tarball n1 | "$BIN/agent-kit-issues" put $IN1 bug --number 7 --priority low > /dev/null
+tarball n2 | "$BIN/agent-kit-issues" put $IN2 polish --number 8 --priority urgent > /dev/null
+check "number and priority in the header" 'grep -qx "Number: 7" "$S/issues/$IN1/issue.md" && grep -qx "Priority: low" "$S/issues/$IN1/issue.md"'
+refuse "a bad priority" bash -c "tar -c -C '$T/work/n2' . | '$BIN/agent-kit-issues' put 20260101T130002Z-i-b00003 bug --priority now"
+refuse "a bad number" bash -c "tar -c -C '$T/work/n2' . | '$BIN/agent-kit-issues' put 20260101T130002Z-i-b00003 bug --number 0"
+out=$("$BIN/owner-issues" prompt)
+check "the prompt lists urgent first, with the number" '[ "$(grep -n "^--- #8 $IN2 (urgent) ---" <<< "$out" | cut -d: -f1)" -lt "$(grep -n "^--- #7 $IN1 (low) ---" <<< "$out" | cut -d: -f1)" ]'
+check "the prompt explains the priorities" 'grep -q "urgent.: handle it before" <<< "$out"'
+printf '# Save menu flickers on load\n\nCode word TOPAZ, now also on load.\n' > "$T/work/n1b/issue.md"; echo log > "$T/work/n1b/att/trace.log"
+tarball n1b | "$BIN/agent-kit-issues" amend $IN1 --priority high --kind polish > /dev/null
+check "amend replaces the text, keeps Raised and the number, sets priority and kind" 'grep -q "now also on load" "$S/issues/$IN1/issue.md" && grep -qx "Number: 7" "$S/issues/$IN1/issue.md" && grep -qx "Priority: high" "$S/issues/$IN1/issue.md" && grep -qx "Kind: polish" "$S/issues/$IN1/issue.md" && grep -q "^Raised: " "$S/issues/$IN1/issue.md" && grep -q "^Amended: " "$S/issues/$IN1/issue.md"'
+check "amend adds a file" '[ -f "$S/issues/$IN1/att/trace.log" ] && [ "$(stat -c %a "$S/issues/$IN1/att/trace.log")" = 644 ]'
+printf '# x\n' > "$T/work/n1c/issue.md"; echo other > "$T/work/n1c/att/trace.log"
+refuse "amend never overwrites a file" bash -c "tar -c -C '$T/work/n1c' . | '$BIN/agent-kit-issues' amend $IN1"
+check "the first file is kept" '[ "$(cat "$S/issues/$IN1/att/trace.log")" = log ]'
+printf '# x\n' > "$T/work/n1d/issue.md"; echo png > "$T/work/n1d/shot.png"
+refuse "amend does not replace the pictures" bash -c "tar -c -C '$T/work/n1d' . | '$BIN/agent-kit-issues' amend $IN1"
+refuse "amend of an issue that does not exist" bash -c "tar -c -C '$T/work/n1d' . | '$BIN/agent-kit-issues' amend 20260101T130009Z-i-b00009"
+mkdir -p "$T/work/n1e/att"; printf '# x\n' > "$T/work/n1e/issue.md"; for k in 1 2 3 4 5 6 7 8; do echo x > "$T/work/n1e/att/more$k.txt"; done
+refuse "amend keeps an issue at 8 files" bash -c "tar -c -C '$T/work/n1e' . | '$BIN/agent-kit-issues' amend $IN1"
+echo "Still happens after the update. Code word ONYX." | "$BIN/agent-kit-issues" note $IN1 owner > /dev/null
+check "a note is kept root-side and shown" 'grep -q ONYX "$S/issues/$IN1/notes.md" && grep -q ONYX <<< "$("$BIN/owner-issues" show $IN1)"'
+refuse "an empty note" bash -c "echo '  ' | '$BIN/agent-kit-issues' note $IN1 owner"
+refuse "a note with a bad sender" bash -c "echo hi | '$BIN/agent-kit-issues' note $IN1 'x;id'"
+check "an issue changed since the lead's update is marked" 'grep -q "^--- #7 $IN1 (high, changed by the owner since your last update) ---" <<< "$("$BIN/owner-issues" prompt)"'
+sleep 1
+echo "Fixed the flicker." | "$BIN/owner-issues" update $IN1 done --commit abc1234 > /dev/null
+check "done with the commit that fixed it" 'grep -qx "Fixed-in: abc1234" "$S/issues-out/$IN1.md"'
+refuse "a bad commit id" bash -c "echo x | '$BIN/owner-issues' update $IN2 done --commit 'zz;id'"
+mkdir -p "$T/work/n2q"; printf '# Title music too loud\n\nCode word BERYL.\n' > "$T/work/n2q/issue.md"
+echo "Seen." | "$BIN/owner-issues" update $IN2 in_progress > /dev/null; sleep 1
+tarball n2q | "$BIN/agent-kit-issues" amend $IN2 --number 8 --quiet > /dev/null
+check "a quiet amend (numbers for old issues) is not a change for the lead" '! grep -q "$IN2 (urgent, changed" <<< "$("$BIN/owner-issues" prompt)" && ! grep -q "^Amended: " "$S/issues/$IN2/issue.md"'
+long=$(head -c 5000 /dev/zero | tr '\0' a)
+mkdir -p "$T/work/n3"; printf '# Long one\n\n%s\n' "$long" > "$T/work/n3/issue.md"; echo png > "$T/work/n3/markup.png"
+tarball n3 | "$BIN/agent-kit-issues" put 20260101T130003Z-i-b00004 idea --number 9 > /dev/null
+echo "A note at the end. Code word OPAL." | "$BIN/agent-kit-issues" note 20260101T130003Z-i-b00004 owner > /dev/null
+out=$("$BIN/owner-issues" prompt)
+check "a long issue is cut, but its picture path and notes still follow" 'grep -q "cut here" <<< "$out" && grep -q "issues/20260101T130003Z-i-b00004/markup.png" <<< "$out" && grep -q OPAL <<< "$out"'
+for x in $IN1 $IN2 20260101T130003Z-i-b00004; do "$BIN/agent-kit-issues" set $x done > /dev/null; done
 
 echo "== agent-kit-caps"
 "$BIN/agent-kit-caps" set MAX_CYCLES_PER_DAY 3 > /dev/null
@@ -936,6 +982,7 @@ printf '%s\n' "$@" > "$FAKE_ARGS"
 while [ $# -gt 0 ]; do [ "$1" = -p ] && { printf '%s' "$2" > "$FAKE_PROMPT"; break; }; shift; done
 [ -n "${FAKE_TOUCH:-}" ] && echo x > "$FAKE_TOUCH"
 sid=$(grep -A1 -x -e --session-id -e --resume "$FAKE_ARGS" | tail -1)
+[ -n "${FAKE_JSON:-}" ] && { echo "$FAKE_JSON"; exit 1; }
 echo "{\"total_cost_usd\":${FAKE_COST:-0.5},\"num_turns\":3,\"result\":\"${FAKE_RESULT:-plan summary}\",\"is_error\":false,\"session_id\":\"$sid\"}"
 EOF
 chmod 755 "$FB/claude"
@@ -1031,6 +1078,13 @@ L=$(tail -1 "$S/ledger/cycles.jsonl")
 check "ledger: a chat line with this turn's cost only, not counted" '[ "$(jq -r .kind <<< "$L")" = chat ] && [ "$(jq -r .counted <<< "$L")" = false ] && [ "$(jq -r ".cost_usd * 100 | round" <<< "$L")" = "$(jq -n "(0.8 - $prev) * 100 | round")" ]'
 chat finish
 check "finish drops the chat marker" '[ ! -e "$S/chat" ]'
+# Kit 0.12: an answer stopped at the chat budget says why (it was empty before).
+M5=20260102T125000Z-c-eeeeee
+echo "After a long pause." | chat say $PL2 $M5 owner > /dev/null
+FAKE_JSON='{"type":"result","subtype":"error_max_budget_usd","is_error":true,"num_turns":1,"total_cost_usd":9.99,"errors":["Reached maximum budget ($3)"]}' \
+  AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+check "a stopped answer says it hit the chat budget" 'grep -qx "Status: error" "$S/backlog-out/chat/$PL2/$M5.md" && grep -q "Stopped at the chat budget (\$0.5)" "$S/backlog-out/chat/$PL2/$M5.md" && grep -q "send it again" "$S/backlog-out/chat/$PL2/$M5.md"'
+chat finish
 # From 0.10.1 a chat turn runs next to a one-shot job, and is told about it.
 JX=20260102T130000Z-o-backlogjob
 mkdir -p "$T/work/bx"; printf 'Backlog item %s (revision 2), approved by the owner: Save slots\n\nDo it.\n' "$B1" > "$T/work/bx/body.md"
