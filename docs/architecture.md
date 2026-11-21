@@ -321,8 +321,11 @@ what it read.
 
 1. `agent-kit-chat say <plan-id> <msgid> <from>` (text on stdin, at most 20 KB) stores the message
    root-side, writes the marker `/var/lib/agent-kit/chat` and starts `agent-kit-chat.service`. It refuses
-   while a cycle or one-shot job runs, while a turn is still answering, for any plan but the newest, and
-   after the owner ended the chat (`agent-kit-chat end`).
+   while that plan's own planning cycle runs, while a turn is still answering, for any plan but the newest,
+   and after the owner ended the chat (`agent-kit-chat end`). From kit 0.10.1 a turn may run next to a
+   normal cycle or a one-shot job (a Run now from the backlog): the chat notice names the job that is
+   running (and its backlog item), so the lead keeps it in mind. The chat process does not set
+   `ZIGGURAT_LEAD_SESSION`, so owner messages are never delivered into it.
 2. `lead-chat` (as `agent`, in the workspace like a cycle) runs `claude -p --resume <session id>` with the
    chat notice and the message. Tool limits and the permission mode are not kept by a resumed session, so
    it passes them every turn: the same tools as a planning cycle, `CHAT_BUDGET_USD` (default 1). The lead
@@ -330,8 +333,8 @@ what it read.
 3. The ledger line has `kind: chat`, `counted: false` and this turn's cost only: a resumed run reports the
    whole session's total, so `lead-chat` subtracts what the ledger already holds for that session.
 4. `ExecStopPost` runs `agent-kit-chat finish`, which drops the marker; `agent-kit-tick` reaps a marker whose
-   turn is gone. While the marker is there, `lead-cycle` and the schedule start no cycle. A halt stops a
-   turn too.
+   turn is gone. A cycle may start while a turn answers. A halt stops a turn too. With a cycle running
+   next to a turn, its `touched_code` is null: the workspace changes for the cycle's own reasons.
 
 On a subscription the prompt cache lasts an hour. A turn later than that reads the whole session again at
 the full rate, so the first answer after a long pause costs more than the next ones.

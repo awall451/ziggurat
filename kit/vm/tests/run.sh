@@ -997,18 +997,15 @@ check "the chat budget is kept" 'grep -qx "CHAT_BUDGET_USD=0.5" "$T/etc/caps.env
 # Chat.
 M1=20260102T120000Z-c-aaaaaa M2=20260102T120100Z-c-bbbbbb M3=20260102T120200Z-c-cccccc
 refuse "a chat about a plan that was replaced" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL $M1 owner"
-echo "busy" > "$S/oneshot"
-refuse "a chat while a job runs" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
+echo "$PL2 2026-01-02T05:00:00+00:00 halt" > "$S/oneshot"
+refuse "no chat while this session's own planning cycle runs" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
 rm -f "$S/oneshot"
-FAKE_ACTIVE=active refuse "a chat while a cycle runs" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
 refuse "an empty chat message" sh -c "echo '  ' | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
 refuse "a chat with a bad message id" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 'x;id' owner"
 : > "$FAKE_LOG"
 echo "Make the first one smaller. Code word MICA." | chat say $PL2 $M1 owner > /dev/null
 check "a chat message is stored root-side and starts one turn" 'grep -q MICA "$S/backlog/chat/$PL2/$M1.md" && [ -f "$S/chat" ] && grep -qx "start --no-block agent-kit-chat.service" "$FAKE_LOG"'
 refuse "a second message while the lead answers" sh -c "echo again | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M2 owner"
-check "no cycle while a chat turn runs" 'echo "run 2026-01-02T03:00:00+00:00" > "$S/control"; out=$(cycle 2>&1); grep -q "chat turn" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
-echo "stop owner 2026-01-02T04:00:00+00:00" > "$S/control"
 SID2=$(cat "$S/ledger/plans/$PL2")
 prev=$(jq -s --arg s "$SID2" '[.[] | select(.session == $s) | .cost_usd] | add' "$S/ledger/cycles.jsonl")
 rm -f "$FAKE_PROMPT"
@@ -1021,6 +1018,24 @@ L=$(tail -1 "$S/ledger/cycles.jsonl")
 check "ledger: a chat line with this turn's cost only, not counted" '[ "$(jq -r .kind <<< "$L")" = chat ] && [ "$(jq -r .counted <<< "$L")" = false ] && [ "$(jq -r ".cost_usd * 100 | round" <<< "$L")" = "$(jq -n "(0.8 - $prev) * 100 | round")" ]'
 chat finish
 check "finish drops the chat marker" '[ ! -e "$S/chat" ]'
+# From 0.10.1 a chat turn runs next to a one-shot job, and is told about it.
+JX=20260102T130000Z-o-backlogjob
+mkdir -p "$T/work/bx"; printf 'Backlog item %s (revision 2), approved by the owner: Save slots\n\nDo it.\n' "$B1" > "$T/work/bx/body.md"
+tar -c -C "$T/work/bx" . | shot start $JX owner > /dev/null
+M4=20260102T130100Z-c-dddddd
+FAKE_ACTIVE=active sh -c "echo 'Is the save work going well? Code word OPAL.' | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M4 owner" > /dev/null
+check "a chat message is taken while a one-shot job runs" '[ -f "$S/backlog/chat/$PL2/$M4.md" ] && [ -f "$S/chat" ]'
+echo "11111111-2222-3333-4444-555555555555 2026-01-02T13:00:00+00:00" > "$S/ledger/current"
+rm -f "$FAKE_PROMPT"
+AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+check "the chat turn is told which backlog item is running" 'grep -q "one-shot job is running" "$FAKE_PROMPT" && grep -q "$B1" "$FAKE_PROMPT" && grep -q "Save slots" "$FAKE_PROMPT" && grep -q OPAL "$FAKE_PROMPT"'
+check "with a cycle running next to it, a chat turn does not claim the workspace" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .touched_code)" = null ]'
+check "a chat turn does not pose as the cycle's lead session" '! grep -q ZIGGURAT_LEAD_SESSION=  "$BIN/lead-chat" || grep -q "unset ZIGGURAT_LEAD_SESSION" "$BIN/lead-chat"'
+rm -f "$S/ledger/current"
+chat finish
+shot finish > /dev/null
+check "a cycle starts while a chat turn is answering" 'echo "$PL2 $M4 2026-01-02T13:01:00+00:00" > "$S/chat"; echo "run 2026-01-02T13:02:00+00:00" > "$S/control"; : > "$S/ledger/cycles.jsonl"; cycle > /dev/null 2>&1; [ -s "$FAKE_PROMPT" ]'
+rm -f "$S/chat"; echo "stop owner 2026-01-02T13:03:00+00:00" > "$S/control"
 chat end $PL2 > /dev/null
 refuse "no chat after the owner ended it" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M3 owner"
 echo "$PL2 $M3 2026-01-01T00:00:00+00:00" > "$S/chat"; touch -d '-10 min' "$S/chat"

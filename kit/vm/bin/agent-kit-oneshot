@@ -104,7 +104,6 @@ case "${1:-show}" in
     exec 8> "$LOCK"
     flock 8
     [ ! -e "$MARK" ] || die "a one-shot job is already in progress"
-    [ ! -e "$STATE/chat" ] || die "a chat turn with the lead is running. Try again when it has answered"
     # On a halted or an idle team. A cycle that is running takes inbox messages.
     after=halt
     if ! grep -q '^stop' "$STATE/control" 2>/dev/null; then

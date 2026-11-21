@@ -149,7 +149,6 @@ case "${1:-show}" in
         [ "$mark_only" = 1 ] && continue
         if grep -q '^stop' "$STATE/control" 2>/dev/null; then note "$slot" "$day" "skipped: halted"; continue; fi
         if [ -e "$STATE/oneshot" ]; then note "$slot" "$day" "skipped: a one-shot job is in progress"; continue; fi
-        if [ -e "$STATE/chat" ]; then note "$slot" "$day" "skipped: a chat turn with the lead is running"; continue; fi
         if [ -e "$STATE/halt-after" ]; then note "$slot" "$day" "skipped: a halt is pending"; continue; fi
         if [ "$(systemctl is-enabled "$LEAD.timer" 2>/dev/null)" != enabled ]; then note "$slot" "$day" "skipped: timer off"; continue; fi
         if cycle_alive; then note "$slot" "$day" "skipped: a cycle is running"; continue; fi
