@@ -159,7 +159,16 @@
           # Admin user with the pve key, sudo. Agents never get this key.
           id -u {{ cloud_user }} >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo {{ cloud_user }}
           install -d -m 700 -o {{ cloud_user }} -g {{ cloud_user }} /home/{{ cloud_user }}/.ssh
-          install -m 600 -o {{ cloud_user }} -g {{ cloud_user }} /root/.ssh/authorized_keys /home/{{ cloud_user }}/.ssh/authorized_keys
+          # Add the pve key if it is missing; never replace the file: keys added later (the
+          # console's, to jump to agent VMs) must survive a re-run of this playbook.
+          ak=/home/{{ cloud_user }}/.ssh/authorized_keys
+          touch "$ak"
+          while IFS= read -r k; do
+            case "$k" in ''|'#'*) continue ;; esac
+            grep -qxF -- "$k" "$ak" || printf '%s\n' "$k" >> "$ak"
+          done < /root/.ssh/authorized_keys
+          chown {{ cloud_user }}:{{ cloud_user }} "$ak"
+          chmod 600 "$ak"
           echo "{{ cloud_user }} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-{{ cloud_user }}
           chmod 440 /etc/sudoers.d/90-{{ cloud_user }}
 
