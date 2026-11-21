@@ -1261,6 +1261,65 @@ check "a cap out of range stays in the focus text and caps nothing" '! grep -q "
 printf 'Max-proposals: 3' | akb plan 20260104T120000Z-p-only owner > /dev/null
 check "a cap with no focus leaves the focus empty" 'grep -qx "Max-proposals: 3" "$S/backlog/plans/20260104T120000Z-p-only/request.md" && [ -z "$(sed "1,/^---$/d" "$S/backlog/plans/20260104T120000Z-p-only/request.md")" ]'
 
+echo "== package requests (kit 0.16)"
+mkdir -p "$T/opt/recipes"; cp "$HERE"/../recipes/*.sh "$T/opt/recipes/"
+cat > "$T/opt/recipes/hello.sh" <<'EOF'
+#!/bin/bash
+# Domains: example.org
+# Version: required (any)
+# A test recipe: writes its version.
+set -euo pipefail
+echo "hello $1" > "$HELLO_OUT"
+EOF
+cat > "$FB/apt-get" <<'EOF'
+#!/bin/bash
+echo "apt-get $* proxy=$https_proxy" >> "$APT_LOG"
+[ -z "${APT_FAIL:-}" ] || { echo "E: Unable to locate package"; exit 100; }
+EOF
+chmod 755 "$FB/apt-get"
+export APT_LOG=$T/apt.log HELLO_OUT=$T/hello.out
+op() { "$BIN/owner-packages" "$@"; }
+kp() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-packages" "$@"; }
+rid_of() { grep -o '[0-9]\{8\}T[0-9]\{6\}Z-k-[a-f0-9]\{6\}' <<< "$1" | head -1; }
+rm -f "$S/oneshot"; : > "$APT_LOG"
+echo "AGENT_PROXY_URL=http://10.66.0.1:3128" >> "$T/etc/project.env"
+refuse "an apt name with shell text" sh -c "echo why | $BIN/owner-packages request 'apt:libsdl2;id'"
+refuse "a recipe that does not exist" sh -c "echo why | $BIN/owner-packages request recipe:nope"
+refuse "a recipe that needs a version, without one" sh -c "echo why | $BIN/owner-packages request recipe:hello"
+refuse "a request without a reason" sh -c "$BIN/owner-packages request apt:libsdl2-dev < /dev/null"
+refuse "something that is not a package, recipe or domain" sh -c "echo why | $BIN/owner-packages request pip:requests"
+R1=$(rid_of "$(echo "The renderer needs SDL2 headers." | op request apt:libsdl2-dev)")
+R2=$(rid_of "$(echo "Python packages come from PyPI." | op request domain:pypi.org)")
+R3=$(rid_of "$(echo "Screenshots in the emulator." | op request recipe:hello@1.2.3)")
+R4=$(rid_of "$(echo "A typo." | op request apt:libfoo-dev)")
+check "requests are stored for the owner" '[ -f "$S/packages-out/$R1.md" ] && grep -q "^Request: apt:libsdl2-dev$" "$S/packages-out/$R1.md" && [ -n "$R2" ] && [ -n "$R3" ]'
+refuse "the same request twice" sh -c "echo again | $BIN/owner-packages request apt:libsdl2-dev"
+check "the lead sees them waiting" '[ "$(op list | grep -c " waiting ")" = 4 ] && grep -q "^## System packages and domains" <<< "$(op prompt)"'
+check "recipes are listed with their domains" 'grep -q "hello  version: required (any)  domains: example.org" <<< "$(op recipes)" && grep -q "playwright-browsers" <<< "$(op recipes)"'
+check "status: every request, no decision yet" '[ "$(kp status | jq -r "select(.rid == \"$R1\") | .decision")" = null ]'
+kp approve "$R1" > /dev/null; kp approve "$R2" > /dev/null; kp approve "$R3" > /dev/null; kp deny "$R4" > /dev/null
+refuse "a second decision" kp approve "$R1"
+refuse "a request that does not exist" kp approve 20260101T000000Z-k-abcdef
+check "the decision keeps the request as approved" 'grep -q "^approved .* apt:libsdl2-dev$" "$S/packages/.owner/$R1" && grep -q "^denied " "$S/packages/.owner/$R4"'
+# The agent rewrites its request after the approval: the approved one is what gets installed.
+sed -i 's/^Request: apt:libsdl2-dev$/Request: apt:something-else/' "$S/packages-out/$R1.md"
+FAKE_ACTIVE=active kp due
+check "nothing is installed while a cycle runs" '[ ! -s "$APT_LOG" ] && [ ! -e "$S/packages/results/$R1" ]'
+touch "$S/oneshot"; kp due; rm -f "$S/oneshot"
+check "nor when a one-shot job is about to start" '[ ! -s "$APT_LOG" ]'
+kp due
+check "between cycles: the approved package, through the proxy, one per tick" 'grep -q "install -y -q --no-install-recommends libsdl2-dev proxy=http://10.66.0.1:3128" "$APT_LOG" && ! grep -q something-else "$APT_LOG" && grep -q "^ok " "$S/packages/results/$R1" && [ ! -e "$S/packages/results/$R2" ]'
+kp due; kp due
+check "a domain needs no install; a recipe gets its version" 'grep -q "^ok " "$S/packages/results/$R2" && grep -q "^ok " "$S/packages/results/$R3" && [ "$(cat "$HELLO_OUT")" = "hello 1.2.3" ]'
+check "a declined request is never installed" '[ ! -e "$S/packages/results/$R4" ] && grep -q "$R4  declined" <<< "$(op list)"'
+R5=$(rid_of "$(echo "Another one." | op request apt:libbar-dev)")
+kp approve "$R5" > /dev/null
+APT_FAIL=1 kp due
+check "a failed install is recorded, and the lead sees the end of its log" 'grep -q "^failed " "$S/packages/results/$R5" && grep -q "$R5 failed" <<< "$(op prompt)" && grep -q "Unable to locate" <<< "$(op prompt)"'
+check "the status shows results" '[ "$(kp status | jq -r "select(.rid == \"$R1\") | .result")" = ok ] && [ "$(kp status | jq -r "select(.rid == \"$R1\") | .request")" = apt:libsdl2-dev ]'
+check "the tick starts installs in their own unit" 'grep -q "systemctl start --no-block agent-kit-packages.service" "$HERE/../systemd/agent-kit-tick.service" && grep -q "env -i" "$HERE/../systemd/agent-kit-packages.service"'
+sed -i '/AGENT_PROXY_URL/d' "$T/etc/project.env"
+
 check "lead-settings.json is a JSON object" 'jq -e "type == \"object\"" "$HERE/../lead-settings.json" > /dev/null'
 
 echo

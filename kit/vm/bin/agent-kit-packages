@@ -1,0 +1,128 @@
+#!/bin/bash
+# agent-kit-packages: the owner's side of package requests (kit 0.16). Run with
+# sudo (the console calls it over ssh); `due` runs from the tick every minute.
+#
+#   agent-kit-packages status            every request: JSON lines {rid, request, decision, decidedAt, result, resultAt}
+#   agent-kit-packages approve <rid>     the owner approved it: installed between cycles
+#   agent-kit-packages deny <rid>        the owner declined it
+#   agent-kit-packages due               install one approved request, if no cycle is running
+#                                        (agent-kit-packages.service, started by the tick)
+#
+# Layout:
+#   $STATE/packages-out/<rid>.md         agent: the lead's request (owner-packages)
+#   $STATE/packages/.owner/<rid>         root: "<approved|denied> <utc> <request>"; the request is
+#                                        copied here, checked, when the owner decides
+#   $STATE/packages/results/<rid>        root: "<installing|ok|failed> <utc>"
+#   $STATE/packages/logs/<rid>.log       root: the install's output
+#
+# What is installed is the request as the owner approved it, checked again
+# here; the agent's file is never run. Domains are not added here: the console
+# adds the ones a request needs to the gateway's allow-list before approving.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+OPT=${AGENT_KIT_OPT:-/opt/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+P=$STATE/packages
+OUT=$STATE/packages-out
+RECIPES=$OPT/recipes
+LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
+LEAD=agent-kit-lead
+RID_RE='^[0-9]{8}T[0-9]{6}Z-k-[a-f0-9]{6}$'
+APT_RE='^apt:[a-z0-9][a-z0-9+.-]{1,62}$'
+RECIPE_RE='^recipe:([a-z0-9][a-z0-9-]{0,39})(@([0-9][0-9A-Za-z.+-]{0,30}))?$'
+DOMAIN_RE='^domain:\.?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+shopt -s nullglob
+umask 022
+
+die() { echo "agent-kit-packages: $*" >&2; exit 2; }
+valid() { [[ $1 =~ $APT_RE || $1 =~ $DOMAIN_RE ]] && return 0; [[ $1 =~ $RECIPE_RE ]] && [ -f "$RECIPES/${BASH_REMATCH[1]}.sh" ]; }
+# The request line of the agent's file: a regular file, never through a link, first header only.
+request_of() {
+  local f=$OUT/$1.md
+  [ -f "$f" ] && [ ! -L "$f" ] || return 1
+  head -c 4096 "$f" | sed -n '1,/^---$/s/^Request: //p' | head -1
+}
+cycle_alive() {
+  local u
+  for u in "$LEAD.service" agent-kit-chat.service; do
+    case "$(systemctl is-active "$u" 2>/dev/null)" in active | activating | deactivating) return 0 ;; esac
+  done
+  [ -n "$(systemctl show "$LEAD.service" -p Job --value 2>/dev/null)" ] && return 0
+  # A one-shot job or planning cycle about to start.
+  [ -e "$STATE/oneshot" ]
+}
+install_one() { # rid request
+  local what=$2 log=$P/logs/$1.log proxy=${AGENT_PROXY_URL:-}
+  local -a env=(DEBIAN_FRONTEND=noninteractive http_proxy="$proxy" https_proxy="$proxy" HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" PATH="$PATH" HOME=/root)
+  case "$what" in
+    apt:*)
+      env "${env[@]}" timeout 1200 apt-get update -q > "$log" 2>&1
+      env "${env[@]}" timeout 1800 apt-get install -y -q --no-install-recommends "${what#apt:}" >> "$log" 2>&1
+      ;;
+    recipe:*)
+      [[ $what =~ $RECIPE_RE ]] || return 1
+      env "${env[@]}" timeout 1800 bash "$RECIPES/${BASH_REMATCH[1]}.sh" ${BASH_REMATCH[3]:+"${BASH_REMATCH[3]}"} > "$log" 2>&1
+      ;;
+    domain:*)
+      echo "nothing to install: the console added ${what#domain:} to the gateway's allow-list" > "$log"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+case "${1:-status}" in
+  status)
+    for f in "$OUT"/*.md; do
+      rid=$(basename "$f" .md)
+      [[ $rid =~ $RID_RE ]] || continue
+      what=$(request_of "$rid") || continue
+      dec="" dat="" dreq="" res="" rat=""
+      read -r dec dat dreq 2>/dev/null < "$P/.owner/$rid"
+      read -r res rat 2>/dev/null < "$P/results/$rid"
+      jq -nc --arg rid "$rid" --arg r "${dreq:-$what}" --arg d "$dec" --arg da "$dat" --arg s "$res" --arg sa "$rat" \
+        '{rid:$rid, request:$r, decision:(if $d == "" then null else $d end), decidedAt:(if $da == "" then null else $da end), result:(if $s == "" then null else $s end), resultAt:(if $sa == "" then null else $sa end)}'
+    done | tail -200
+    ;;
+
+  approve | deny)
+    rid=${2:-}
+    [[ $rid =~ $RID_RE ]] || die "usage: agent-kit-packages $1 <rid>"
+    what=$(request_of "$rid") || die "no such request: $rid"
+    valid "$what" || die "the request is not one the kit can install: $what"
+    [ ! -e "$P/.owner/$rid" ] || die "already decided: $(cat "$P/.owner/$rid")"
+    install -d -m 755 "$P" "$P/.owner" "$P/results" "$P/logs"
+    st=approved; [ "$1" = deny ] && st=denied
+    printf '%s %s %s\n' "$st" "$(date -u +%FT%TZ)" "$what" > "$P/.owner/.$rid.tmp" && mv "$P/.owner/.$rid.tmp" "$P/.owner/$rid"
+    echo "$st $rid: $what"
+    ;;
+
+  due)
+    [ -d "$P/.owner" ] || exit 0
+    exec 8> "$LOCK"
+    flock -n 8 || exit 0
+    cycle_alive && exit 0
+    # In the order the owner approved them.
+    while read -r _ rid; do
+      f=$P/.owner/$rid
+      [[ $rid =~ $RID_RE ]] || continue
+      read -r dec _ what < "$f"
+      [ "$dec" = approved ] && [ ! -e "$P/results/$rid" ] || continue
+      valid "$what" || { printf 'failed %s\n' "$(date -u +%FT%TZ)" > "$P/results/$rid"; echo "not installable: $what" > "$P/logs/$rid.log"; continue; }
+      printf 'installing %s\n' "$(date -u +%FT%TZ)" > "$P/results/$rid"
+      # The lock only guards the choice: halts, resumes and jobs must not wait for an install.
+      flock -u 8
+      if install_one "$rid" "$what"; then r=ok; else r=failed; fi
+      printf '%s %s\n' "$r" "$(date -u +%FT%TZ)" > "$P/results/.$rid.tmp" && mv "$P/results/.$rid.tmp" "$P/results/$rid"
+      chmod 644 "$P/results/$rid" "$P/logs/$rid.log" 2>/dev/null
+      printf '%s package:%s %s %s\n' "$(date -u +%FT%TZ)" "$rid" "$what" "$r" >> "$STATE/schedule.log"
+      break # one per tick
+    done < <(find "$P/.owner" -maxdepth 1 -type f ! -name '.*' -printf '%T@ %f\n' | sort -n)
+    ;;
+
+  *)
+    die "usage: agent-kit-packages status | approve <rid> | deny <rid> | due"
+    ;;
+esac

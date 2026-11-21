@@ -5,6 +5,7 @@ import { peekStatus } from '$lib/server/live.js';
 import { notes } from '$lib/server/aggregate.js';
 import { list as backlog } from '$lib/server/backlog.js';
 import { heldChanges, kitHasGateHold } from '$lib/server/gatehold.js';
+import { requests as packageRequests, kitHasPackages } from '$lib/server/packages.js';
 
 export async function load({ params, parent }) {
   const project = getProject(params.id);
@@ -23,5 +24,10 @@ export async function load({ params, parent }) {
   if (status?.reachable && kitHasGateHold(status.kitVersion)) {
     gateHeld = await Promise.race([heldChanges(project), new Promise((r) => setTimeout(() => r({ held: [], error: 'the VM took too long to answer' }), 12000))]);
   }
-  return { ...threads(project), escalations: notes(project).escalations, backlogChat, gateHeld };
+  // System packages and domains the lead asked for (kit 0.16).
+  let packages = null;
+  if (status?.reachable && kitHasPackages(status.kitVersion)) {
+    packages = await Promise.race([packageRequests(project), new Promise((r) => setTimeout(() => r({ requests: [], error: 'the VM took too long to answer', gateway: null }), 12000))]);
+  }
+  return { ...threads(project), escalations: notes(project).escalations, backlogChat, gateHeld, packages };
 }

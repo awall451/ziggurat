@@ -26,6 +26,9 @@ packages:
   - htop
   - build-essential
   - nftables
+  # Common toolchains, so most teams need no provisioning script (more on request: owner-packages).
+  - python3-venv
+  - python3-pip
 
 write_files:
   - path: /etc/environment

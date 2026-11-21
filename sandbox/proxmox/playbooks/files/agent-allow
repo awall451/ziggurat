@@ -1,0 +1,33 @@
+#!/bin/bash
+# agent-allow: the owner's extra domains on the agent gateway (installed by
+# create-agent-gateway.yml). The console runs it through `pct exec` after the
+# owner approved a team's request; nothing on the agent side can reach it.
+#
+#   agent-allow add <domain>     append one domain (".example.org" covers sub-domains) and reload squid
+#   agent-allow list             the extra domains
+set -euo pipefail
+F=/etc/squid/agent-allow-extra.txt
+RE='^\.?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+exec 9> /run/agent-allow.lock
+flock 9
+case "${1:-list}" in
+  add)
+    d=$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z')
+    [[ $d =~ $RE ]] && [ ${#d} -le 253 ] || { echo "agent-allow: not a domain name: ${2:-}" >&2; exit 2; }
+    touch "$F"
+    if grep -qxF -- "$d" "$F" || grep -qxF -- "$d" /etc/squid/agent-allow.txt; then echo "already allowed: $d"; exit 0; fi
+    printf '%s\n' "$d" >> "$F"
+    if ! squid -k parse > /dev/null 2>&1; then
+      sed -i "\$d" "$F"   # take it back: squid refused the list
+      echo "agent-allow: squid refused the list with $d" >&2; exit 1
+    fi
+    squid -k reconfigure
+    echo "allowed: $d"
+    ;;
+  list)
+    cat "$F" 2>/dev/null || true
+    ;;
+  *)
+    echo "usage: agent-allow add <domain> | list" >&2; exit 2
+    ;;
+esac

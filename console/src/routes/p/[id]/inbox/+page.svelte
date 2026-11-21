@@ -27,6 +27,29 @@
 
   const messages = $derived(data.messages.filter((m) => showClosed || m.open || (m.error && !m.closed)));
 
+  // System packages and domains the lead asked for (kit 0.16).
+  let pkgBusy = $state('');
+  let pkgNote = $state('');
+  const openPkgs = $derived((data.packages?.requests || []).filter((r) => r.state === 'waiting'));
+  const pastPkgs = $derived((data.packages?.requests || []).filter((r) => r.state !== 'waiting').slice(0, 6));
+  const PKG_KIND = { apt: 'Ubuntu package', recipe: 'Install recipe', domain: 'Domain on the allow-list' };
+  async function decidePkg(r, decision) {
+    if (decision === 'approve' && r.missing?.length && !confirm(`Approving adds ${r.missing.join(', ')} to the gateway's allow-list, for every agent VM behind it. Go on?`)) return;
+    pkgBusy = r.rid;
+    pkgNote = '';
+    try {
+      const res = await fetch(`${base}/packages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rid: r.rid, decision }) });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.message || 'The VM refused');
+      pkgNote = decision === 'approve' ? `Approved ${r.request}${out.added?.length ? `; allowed ${out.added.join(', ')}` : ''}. It is installed between cycles.` : `Declined ${r.request}.`;
+      await invalidateAll();
+    } catch (e) {
+      pkgNote = e.message;
+    } finally {
+      pkgBusy = '';
+    }
+  }
+
   // Changes to what "done" means, held by the gate (kit 0.14).
   let gateBusy = $state('');
   let gateNote = $state('');
@@ -361,6 +384,48 @@
       </section>
     {/if}
 
+    {#if data.packages && (data.packages.requests.length || data.packages.error || pkgNote)}
+      <section class="block">
+        <h2>Packages and domains</h2>
+        <p class="dim small">{lead} is not root and the proxy is closed. What it asks for is installed between cycles once you approve.</p>
+        {#if pkgNote}<p class="small">{pkgNote}</p>{/if}
+        {#if data.packages.error && !data.packages.requests.length}<p class="small s-failed">Could not ask the VM: {data.packages.error}</p>{/if}
+        {#each openPkgs as r (r.rid)}
+          <article class="panel msg">
+            <header>
+              <span class="pill halted">Waiting on you</span>
+              <span class="mono small">{r.request}</span>
+              <span class="grow"></span>
+              <span class="dim small">{PKG_KIND[r.what.kind]}</span>
+            </header>
+            {#if r.what.about}<p class="small dim">{r.what.about}</p>{/if}
+            {#if r.reason}<div class="md">{@html md(r.reason, { breaks: true })}</div>{:else}<p class="small dim">No reason was given.</p>{/if}
+            {#if r.what.domains.length}
+              <p class="small">
+                Needs {#each r.what.domains as dm, i (dm)}<span class="mono">{dm}</span>{i < r.what.domains.length - 1 ? ', ' : ''}{/each}.
+                {#if r.missing == null}<span class="s-interrupted">The gateway's list could not be checked{data.packages.gateway === 'none' ? ': this project has no deploy target' : ''}.</span>
+                {:else if r.missing.length}<span class="s-interrupted">Not allowed yet: approving adds {r.missing.join(', ')} for every agent VM.</span>
+                {:else}<span class="dim">All allowed already.</span>{/if}
+              </p>
+            {/if}
+            {#if p.canControl}
+              <footer class="actions end">
+                <button class="btn sm" disabled={pkgBusy === r.rid} onclick={() => decidePkg(r, 'deny')}>Decline</button>
+                <button class="btn primary sm" disabled={pkgBusy === r.rid} onclick={() => decidePkg(r, 'approve')}>Approve</button>
+              </footer>
+            {/if}
+          </article>
+        {/each}
+        {#if pastPkgs.length}
+          <ul class="pkgs small">
+            {#each pastPkgs as r (r.rid)}
+              <li><span class="pill {r.state === 'installed' ? 'done' : r.state === 'failed' ? 'failed' : r.state === 'declined' ? 'halted' : 'running'}">{r.state}</span> <span class="mono">{r.request}</span></li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+    {/if}
+
     <section class="block">
       <h2>Questions from {lead}</h2>
       {#each data.asks as a (a.id)}
@@ -397,6 +462,14 @@
 </div>
 
 <style>
+  .pkgs {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
   .diff pre {
     max-height: 420px;
     overflow: auto;

@@ -1,11 +1,13 @@
 # Squid config for {{ agent_gw_name }} (managed by ansible, create-agent-gateway.yml).
 # Agent VMs on {{ agent_bridge }} ({{ agent_cidr }}) reach the internet ONLY
-# through this proxy, and only for domains in agent-allow.txt.
+# through this proxy, and only for domains in agent-allow.txt (this playbook)
+# and agent-allow-extra.txt (domains the owner approved in the console, added
+# by /usr/local/sbin/agent-allow; this playbook never rewrites that file).
 
 http_port {{ agent_gw_bridge_ip }}:{{ agent_proxy_port }}
 
 acl agent_net src {{ agent_cidr }}
-acl allowed dstdomain "/etc/squid/agent-allow.txt"
+acl allowed dstdomain "/etc/squid/agent-allow.txt" "/etc/squid/agent-allow-extra.txt"
 acl SSL_ports port 443
 acl Safe_ports port 80 443
 acl CONNECT method CONNECT

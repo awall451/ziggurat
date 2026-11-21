@@ -1,0 +1,128 @@
+#!/bin/bash
+# owner-packages: how the lead asks the owner for system packages and domains
+# (kit 0.16). Runs as `agent`. Root-owned, like everything in /opt/agent-kit.
+#
+#   owner-packages request <what>     the reason on stdin. <what> is one of:
+#                                       apt:<package>              an Ubuntu package
+#                                       recipe:<name>[@<version>]  an install recipe of the kit
+#                                       domain:<domain>            a domain on the proxy allow-list
+#   owner-packages recipes            the recipes, with the domains they need
+#   owner-packages list               your requests and where each stands
+#   owner-packages prompt             the protocol and recent requests (for the lead's prompt)
+#
+# The owner approves or declines each request in the console; an approved
+# install runs as root between cycles (agent-kit-packages). Requests are data:
+# what gets installed is what the owner approved, checked again by root.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+OPT=${AGENT_KIT_OPT:-/opt/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+P=$STATE/packages
+OUT=$STATE/packages-out
+RECIPES=$OPT/recipes
+RID_RE='^[0-9]{8}T[0-9]{6}Z-k-[a-f0-9]{6}$'
+APT_RE='^apt:[a-z0-9][a-z0-9+.-]{1,62}$'
+RECIPE_RE='^recipe:([a-z0-9][a-z0-9-]{0,39})(@([0-9][0-9A-Za-z.+-]{0,30}))?$'
+DOMAIN_RE='^domain:\.?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+MAX_OPEN=10
+MAX_REASON=2000
+shopt -s nullglob
+
+die() { echo "owner-packages: $*" >&2; exit 2; }
+header() { sed -n "1,/^---\$/s/^$2: //p" "$1" 2>/dev/null | head -1; }
+recipe_line() { sed -n "s/^# $2: //p" "$RECIPES/$1.sh" 2>/dev/null | head -1; }
+
+# Where a request stands: waiting, declined, approved, installing, installed, failed.
+status_of() {
+  local d r
+  read -r d _ 2>/dev/null < "$P/.owner/$1" || d=""
+  read -r r _ 2>/dev/null < "$P/results/$1" || r=""
+  case "$d" in
+    denied) echo declined ;;
+    approved) case "$r" in ok) echo installed ;; failed) echo failed ;; installing) echo installing ;; *) echo approved ;; esac ;;
+    *) echo waiting ;;
+  esac
+}
+
+case "${1:-list}" in
+  request)
+    what=${2:-}
+    if [[ $what =~ $RECIPE_RE ]]; then
+      name=${BASH_REMATCH[1]} ver=${BASH_REMATCH[3]}
+      [ -f "$RECIPES/$name.sh" ] || die "no recipe called $name (owner-packages recipes)"
+      [[ "$(recipe_line "$name" Version)" == required* && -z $ver ]] && die "recipe $name needs a version: recipe:$name@<version>"
+    elif ! [[ $what =~ $APT_RE || $what =~ $DOMAIN_RE ]]; then
+      die "usage: owner-packages request apt:<package> | recipe:<name>[@<version>] | domain:<domain>   (reason on stdin)"
+    fi
+    reason=$(head -c $((MAX_REASON + 1)) | tr -d '\r')
+    [ -n "$(printf '%s' "$reason" | tr -d '[:space:]')" ] || die "say why on stdin: what needs it and what you tried"
+    [ ${#reason} -le $MAX_REASON ] || die "the reason is longer than $MAX_REASON bytes"
+    open=0
+    for f in "$OUT"/*.md; do
+      id=$(basename "$f" .md)
+      [[ $id =~ $RID_RE ]] || continue
+      [ "$(header "$f" Request)" = "$what" ] && [[ "$(status_of "$id")" =~ ^(waiting|approved|installing)$ ]] && die "already asked: $id ($what)"
+      [[ "$(status_of "$id")" =~ ^(waiting|approved|installing)$ ]] && open=$((open + 1))
+    done
+    [ "$open" -lt $MAX_OPEN ] || die "$MAX_OPEN requests are open already: wait for the owner"
+    mkdir -p "$OUT"
+    rid=$(date -u +%Y%m%dT%H%M%SZ)-k-$(head -c 3 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    tmp=$(mktemp "$OUT/.req.XXXXXX")
+    { printf 'Request: %s\nDate: %s\n---\n' "$what" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf '%s\n' "$reason"; } > "$tmp"
+    chmod 644 "$tmp" && mv "$tmp" "$OUT/$rid.md"
+    echo "asked $rid: $what (the owner decides in the console; an approved install runs between cycles)"
+    ;;
+
+  recipes)
+    for f in "$RECIPES"/*.sh; do
+      n=$(basename "$f" .sh)
+      printf '%s  version: %s  domains: %s\n' "$n" "$(recipe_line "$n" Version || true)" "$(recipe_line "$n" Domains)"
+      sed -n '/^# Version:/,/^set /{/^# [A-Z][a-z]*:/d;/^set /d;s/^# /    /p}' "$f"
+    done
+    ;;
+
+  list)
+    n=0
+    for f in "$OUT"/*.md; do
+      id=$(basename "$f" .md)
+      [[ $id =~ $RID_RE ]] || continue
+      n=$((n + 1))
+      printf '%s  %-10s  %s\n' "$id" "$(status_of "$id")" "$(header "$f" Request)"
+    done
+    [ "$n" -gt 0 ] || echo "No requests."
+    ;;
+
+  prompt)
+    cat <<'PROMPT'
+## System packages and domains: ask the owner
+
+You are not root, and the proxy lets through only allowed domains. When the work needs a system package
+or a domain the VM does not have, ask instead of working around it:
+
+    owner-packages request apt:<package>              <<< "why: what needs it, what you tried"
+    owner-packages request recipe:<name>[@<version>]  (owner-packages recipes lists them)
+    owner-packages request domain:<domain>
+
+The owner approves or declines in the console. An approved install runs as root between cycles; its
+result shows below in a later cycle. Meanwhile work on something else. Ask for what the project really
+needs, once; say in docs/DECISIONS.md why.
+PROMPT
+    lines=$("$0" list | grep -v '^No requests.$' | tail -10)
+    if [ -n "$lines" ]; then
+      echo
+      echo "Your requests (newest last):"
+      printf '%s\n' "$lines" | sed 's/^/  /'
+      for f in "$P"/results/*; do
+        id=$(basename "$f")
+        [[ $id =~ $RID_RE ]] && [ "$(status_of "$id")" = failed ] || continue
+        echo "  $id failed; the end of its log:"
+        tail -5 "$P/logs/$id.log" 2>/dev/null | sed 's/^/    /'
+      done
+    fi
+    ;;
+
+  *)
+    die "usage: owner-packages request <what> | recipes | list | prompt"
+    ;;
+esac

@@ -127,6 +127,12 @@
         dest: "{{ stage_dir }}/agent-allow.txt"
         mode: "0644"
 
+    - name: Stage the allow-list helper
+      ansible.builtin.copy:
+        src: files/agent-allow
+        dest: "{{ stage_dir }}/agent-allow"
+        mode: "0755"
+
     - name: Render bootstrap script
       ansible.builtin.copy:
         dest: "{{ stage_dir }}/bootstrap.sh"
@@ -169,6 +175,9 @@
 
           install -m 0644 /root/agent-gw/squid.conf /etc/squid/squid.conf
           install -m 0644 /root/agent-gw/agent-allow.txt /etc/squid/agent-allow.txt
+          # Domains the owner approves in the console: kept across re-runs of this playbook.
+          [ -f /etc/squid/agent-allow-extra.txt ] || install -m 0644 /dev/null /etc/squid/agent-allow-extra.txt
+          install -m 0755 /root/agent-gw/agent-allow /usr/local/sbin/agent-allow
           squid -k parse
           systemctl enable squid
           systemctl restart squid
@@ -189,7 +198,7 @@
       ansible.builtin.shell: |
         set -e
         pct exec {{ agent_gw_vmid }} -- mkdir -p /root/agent-gw
-        for f in squid.conf agent-allow.txt bootstrap.sh; do
+        for f in squid.conf agent-allow.txt agent-allow bootstrap.sh; do
           pct push {{ agent_gw_vmid }} {{ stage_dir }}/$f /root/agent-gw/$f --perms 0600
         done
       changed_when: true

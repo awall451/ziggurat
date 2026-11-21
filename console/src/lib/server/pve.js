@@ -20,8 +20,9 @@ function script(t) {
     sec('snippets', `pvesh get /storage/${q(t.snippetsStorage)} --output-format json`),
     sec('storage', `pvesm status --storage ${q(t.storage)}`),
     sec('mem', 'free -m'),
-    // The gateway's domain allow-list (read-only), to warn about a team that needs more.
-    sec('allow', `pct exec ${t.gatewayVmid} -- cat /etc/squid/agent-allow.txt`),
+    // The gateway's domain allow-list (read-only), to warn about a team that needs more:
+    // the playbook's list and the domains the owner approved since (agent-allow, kit 0.16).
+    sec('allow', `pct exec ${t.gatewayVmid} -- sh -c 'cat /etc/squid/agent-allow.txt; cat /etc/squid/agent-allow-extra.txt 2>/dev/null; true'`),
     sec('version', 'pveversion')
   ].join('\n');
 }
