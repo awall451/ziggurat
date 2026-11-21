@@ -371,7 +371,7 @@
       </div>
       <p class="dim small">Per day: cycles that ran (filled) and start times still to come (outlined). Open a day or the week to change times.</p>
     {:else}
-      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} ghost={moving ? { project: moving.project, minutes: moving.job.minutes } : null} onpick={(_, ms) => (movePick = ms)} />
+      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => (movePick = ms)} />
     {#if moving}
       <div class="actions movebar">
         {#if movePick}
