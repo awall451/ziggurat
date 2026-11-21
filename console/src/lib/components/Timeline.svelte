@@ -8,7 +8,9 @@
   //   scroll sideways          move through time (also Shift + wheel)
   // Backlog jobs (row.jobs) are drawn with their estimate; hover shows what
   // they are, a click calls onjob. With `ghost` set, the pointer carries a bar
-  // of that length along its row and a click calls onpick with the start.
+  // of that length along its row and a click calls onpick with the start; the
+  // parent passes the picked start back as ghost.at, which stays drawn and can
+  // be dragged, or picked again with another click.
   import { wallClock, timeOfDay, hourLabel, clockLabel, DAYS } from '$lib/schedule.js';
 
   let {
@@ -25,7 +27,7 @@
     onzoom = () => {}, // (from, to)
     onpan = () => {}, // (milliseconds, positive is later)
     onjob = null, // (project, job): a backlog job was clicked
-    ghost = null, // {project, minutes}: place a job of this length
+    ghost = null, // {project, minutes, at}: place a job of this length; `at` is the start picked so far
     onpick = () => {} // (project, start in ms)
   } = $props();
   // Ids inside the SVG must be unique on the page: there can be two timelines.
@@ -154,6 +156,25 @@
     hoverT = Math.round(timeAt(e.clientX) / SNAP) * SNAP;
   }
   const ghostOk = $derived(hoverT != null && hoverT >= now + 60000);
+  // Dragging the picked bar: where it would start now.
+  let placeDrag = $state(null); // {startX, at, t}
+  const snapAt = (clientX) => Math.round(timeAt(clientX) / SNAP) * SNAP;
+  function grabPlaced(e) {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    placeDrag = { startX: e.clientX, at: ghost.at, t: ghost.at };
+  }
+  function pullPlaced(e) {
+    if (!placeDrag) return;
+    placeDrag.t = Math.round((placeDrag.at + ((e.clientX - placeDrag.startX) / track) * span) / SNAP) * SNAP;
+  }
+  function dropPlaced() {
+    if (!placeDrag) return;
+    const t = placeDrag.t;
+    placeDrag = null;
+    if (t >= now + 60000) onpick(ghost.project, t);
+  }
+  const placedAt = $derived(placeDrag ? placeDrag.t : ghost?.at ?? null);
 
   // ---- backlog jobs: hover card and click ----
   let tip = $state(null); // {row, job, left, top}
@@ -319,8 +340,19 @@
             {/if}
           {/each}
 
-          {#if ghost && ghost.project === row.id && hoverT != null}
-            <g class="ghost" class:bad={!ghostOk}>
+          {#if ghost && ghost.project === row.id && placedAt != null}
+            {@const ok = placedAt >= now + 60000}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <g class="ghost placed" class:bad={!ok} class:moving={!!placeDrag} onpointerdown={grabPlaced} onpointermove={pullPlaced} onpointerup={dropPlaced} onpointercancel={() => (placeDrag = null)}>
+              <rect x={x(placedAt)} y={y + 6} width={Math.max(6, x(placedAt + ghost.minutes * 60000) - x(placedAt))} height={ROW - 12} rx="4">
+                <title>Drag to move, or click elsewhere in the row</title>
+              </rect>
+              <line x1={x(placedAt)} x2={x(placedAt)} y1={y + 3} y2={y + ROW - 3} />
+              <text x={x(placedAt) + 4} y={y + ROW - 8}>{ok ? clockText(placedAt) : 'not in the past'}</text>
+            </g>
+          {/if}
+          {#if ghost && ghost.project === row.id && hoverT != null && !placeDrag && hoverT !== ghost.at}
+            <g class="ghost hover" class:bad={!ghostOk}>
               <rect x={x(hoverT)} y={y + 6} width={Math.max(6, x(hoverT + ghost.minutes * 60000) - x(hoverT))} height={ROW - 12} rx="4" />
               <line x1={x(hoverT)} x2={x(hoverT)} y1={y + 3} y2={y + ROW - 3} />
               <text x={x(hoverT) + 4} y={y + ROW - 8}>{ghostOk ? clockText(hoverT) : 'not in the past'}</text>
@@ -466,6 +498,17 @@
   }
   .ghost {
     pointer-events: none;
+  }
+  .ghost.hover rect {
+    fill: rgba(var(--glow), 0.12);
+    stroke-dasharray: 4 3;
+  }
+  .ghost.placed {
+    pointer-events: all;
+    cursor: grab;
+  }
+  .ghost.placed.moving {
+    cursor: grabbing;
   }
   .ghost rect {
     fill: rgba(var(--glow), 0.3);

@@ -79,11 +79,11 @@
       </div>
     </div>
     <div class="panel tlbox">
-      <Timeline {rows} {range} tz={settings.timezone} clock={settings.clock} {quiet} now={tl.now} ghost={{ project, minutes }} onpick={(_, ms) => (picked = ms)} onzoom={() => {}} onpan={() => {}} />
+      <Timeline {rows} {range} tz={settings.timezone} clock={settings.clock} {quiet} now={tl.now} ghost={{ project, minutes, at: picked }} onpick={(_, ms) => (picked = ms)} onzoom={() => {}} onpan={() => {}} />
     </div>
     <div class="actions">
       {#if picked}
-        <span>Starts <b>{when(picked)}</b>, ends about <b>{when(picked + minutes * 60000)}</b> (estimate {minutes} min).</span>
+        <span>Starts <b>{when(picked)}</b>, ends about <b>{when(picked + minutes * 60000)}</b> (estimate {minutes} min). <span class="dim small">Drag the bar, or click elsewhere in the row, to change it.</span></span>
       {:else}
         <span class="small dim">Click in the first row to pick the start. It snaps to the quarter hour.</span>
       {/if}
