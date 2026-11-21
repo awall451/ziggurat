@@ -21,6 +21,53 @@
   const label = (s) =>
     `Cycle ${s.number} · ${s.live ? 'live' : s.state} · ${when(s.started)} · ${s.agents + 1} agents${s.costUsd != null ? ` · ${usd(s.costUsd)}` : ''}`;
 
+  // The details panel can be made wider or narrower by dragging the bar
+  // between it and the map. The width is remembered in this browser.
+  const MIN_SIDE = 320;
+  const MIN_MAP = 320;
+  let sideW = $state(420);
+  let splitEl = $state(null);
+  let dragging = $state(false);
+  try {
+    const saved = Number(localStorage.getItem('topology.sideW'));
+    if (saved >= MIN_SIDE && saved <= 4000) sideW = saved;
+  } catch {
+    /* no storage: the default width */
+  }
+  function clampW(w) {
+    const total = splitEl?.getBoundingClientRect().width || 1400;
+    return Math.round(Math.max(MIN_SIDE, Math.min(w, total - MIN_MAP - 12)));
+  }
+  function keep() {
+    try {
+      localStorage.setItem('topology.sideW', String(sideW));
+    } catch {
+      /* not kept */
+    }
+  }
+  function dragStart(e) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragging = true;
+  }
+  function dragMove(e) {
+    if (!dragging || !splitEl) return;
+    sideW = clampW(splitEl.getBoundingClientRect().right - e.clientX);
+  }
+  function dragEnd() {
+    if (!dragging) return;
+    dragging = false;
+    keep();
+  }
+  function gutterKey(e) {
+    const step = e.shiftKey ? 80 : 20;
+    if (e.key === 'ArrowLeft') sideW = clampW(sideW + step);
+    else if (e.key === 'ArrowRight') sideW = clampW(sideW - step);
+    else return;
+    e.preventDefault();
+    keep();
+  }
+
   const counts = $derived(tree?.session.total.byStatus || {});
   const LEGEND = [
     ['running', 'Running'],
@@ -39,7 +86,7 @@
     <p class="dim">The agent tree appears here once the {p.tiers[0]} has run a cycle and its transcripts have been pulled.</p>
   </div>
 {:else}
-  <div class="split" class:open={!!selected}>
+  <div class="split" class:open={!!selected} class:dragging bind:this={splitEl} style:--side-w="{sideW}px">
     <section class="canvas panel">
       <div class="over top">
         <label class="picker">
@@ -72,6 +119,22 @@
     </section>
 
     {#if selected}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="gutter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Drag to resize the details panel"
+        aria-valuenow={sideW}
+        tabindex="0"
+        title="Drag to resize. Double-click for the default width."
+        onpointerdown={dragStart}
+        onpointermove={dragMove}
+        onpointerup={dragEnd}
+        onpointercancel={dragEnd}
+        ondblclick={() => ((sideW = 420), keep())}
+        onkeydown={gutterKey}
+      ></div>
       <div class="side">
         <NodeDrawer
           node={selected}
@@ -96,12 +159,38 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-    gap: 16px;
+    gap: 2px;
     height: calc(100vh - 56px - 196px);
     min-height: 480px;
   }
   .split.open {
-    grid-template-columns: minmax(0, 1fr) 420px;
+    grid-template-columns: minmax(0, 1fr) 12px var(--side-w, 420px);
+  }
+  .split.dragging {
+    user-select: none;
+    cursor: col-resize;
+  }
+  .gutter {
+    cursor: col-resize;
+    position: relative;
+    touch-action: none;
+  }
+  .gutter::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 4px;
+    width: 4px;
+    height: 48px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--line);
+  }
+  .gutter:hover::after,
+  .gutter:focus-visible::after,
+  .split.dragging .gutter::after {
+    background: var(--accent);
+    height: 96px;
   }
   .canvas {
     position: relative;
@@ -164,6 +253,9 @@
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: auto;
       height: auto;
+    }
+    .gutter {
+      display: none;
     }
     .canvas {
       height: 60vh;
