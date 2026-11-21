@@ -34,6 +34,7 @@ export const OPEN = ['new', 'in_progress'];
 const ID_RE = /^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$/;
 const SCREEN_RE = /^[a-z0-9][a-z0-9-]{0,80}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SHOT_SHA_RE = /^[0-9a-f]{40}$/;
 const FILE_RE = /^[A-Za-z0-9._-]+\.png$/;
 const MAX_TEXT = 20_000;
 const MAX_PNG = 8 * 1024 * 1024;
@@ -193,7 +194,8 @@ export async function create(
   const rel = cleanRelated(project, related);
   let o = null;
   if (origin?.type === 'gallery') {
-    if (!DATE_RE.test(origin.date || '') || !FILE_RE.test(origin.file || '')) throw new Error('Bad screenshot');
+    // `date` names the gallery folder: a day (older kits) or a build's sha (kit 0.13).
+    if (!(DATE_RE.test(origin.date || '') || SHOT_SHA_RE.test(origin.date || '')) || !FILE_RE.test(origin.file || '')) throw new Error('Bad screenshot');
     o = { type: 'gallery', date: origin.date, file: origin.file, screen: screenKey(origin.file) };
   } else if (origin?.type === 'upload') {
     o = { type: 'upload', name: safeName(origin.name) || 'picture.png' };
@@ -439,7 +441,7 @@ export function image(project, id, name) {
 }
 
 
-const FIXED_RE = /^shots\/\d{4}-\d{2}-\d{2}\/[A-Za-z0-9._-]+\.png$/;
+const FIXED_RE = /^shots\/(\d{4}-\d{2}-\d{2}|[0-9a-f]{40})\/[A-Za-z0-9._-]+\.png$/;
 
 /**
  * Apply the lead's updates from the pulled `issues-out/<id>.md` files. Each

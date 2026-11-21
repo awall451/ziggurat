@@ -152,3 +152,78 @@ describe('ledger kinds (kit 0.10)', () => {
     expect(s.lastCycle.kind).toBe('plan');
   });
 });
+
+describe('galleryCycles (kit 0.13)', () => {
+  const sha = (c) => c.repeat(40);
+  const S1 = '11111111-1111-4111-8111-111111111111';
+  const S2 = '22222222-2222-4222-8222-222222222222';
+  const S3 = '33333333-3333-4333-8333-333333333333';
+  let project;
+  beforeAll(() => {
+    const fleet = fs.mkdtempSync(path.join(os.tmpdir(), 'gallery-cycles-'));
+    project = { paths: { fleet } };
+    const shots = path.join(fleet, 'shots');
+    const build = (s, files) => {
+      fs.mkdirSync(path.join(shots, s), { recursive: true });
+      for (const f of files) fs.writeFileSync(path.join(shots, s, f), 'png');
+    };
+    build(sha('a'), ['01-title.png']); // gate proof, before any cycle
+    build(sha('b'), ['01-title.png', '02-room.png']); // during cycle 1
+    build(sha('c'), ['01-title.png']); // after cycle 1 ended, before cycle 2: still cycle 1
+    build(sha('d'), ['01-title.png', 'bad name.png']); // during cycle 2 (a plan)
+    build(sha('e'), []); // no files: left out
+    build(sha('f'), ['03-new.png']); // during the live cycle
+    fs.writeFileSync(
+      path.join(shots, 'index'),
+      [
+        `2026-01-01T09:00:00+00:00 ${sha('a')} gate-proof-good-1`,
+        `2026-01-01T10:20:00+00:00 ${sha('b')} room-art`,
+        `2026-01-01T11:05:00+00:00 ${sha('c')} title-fix`,
+        `2026-01-01T12:10:00+00:00 ${sha('d')} plan-notes`,
+        `2026-01-01T12:30:00+00:00 ${sha('e')} empty`,
+        `2026-01-01T14:10:00+00:00 ${sha('f')} new-screen`,
+        `2026-01-01T14:20:00+00:00 ${sha('b')} room-art`,
+        'garbage line',
+        `not-a-date ${sha('9')} x`
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(fleet, 'cycles.jsonl'),
+      [
+        { start: '2026-01-01T10:00:00+00:00', end: '2026-01-01T11:00:00+00:00', session: S1, kind: 'normal' },
+        { start: '2026-01-01T11:30:00+00:00', end: '2026-01-01T11:40:00+00:00', session: S1, kind: 'chat', counted: false },
+        { start: '2026-01-01T12:00:00+00:00', end: '2026-01-01T12:40:00+00:00', session: S2, kind: 'plan' }
+      ]
+        .map((l) => JSON.stringify(l))
+        .join('\n')
+    );
+  });
+
+  it('puts each merged build in the cycle that made it, newest first', async () => {
+    const { galleryCycles } = await import('../src/lib/server/aggregate.js');
+    const out = galleryCycles(project, { session: S3, start: '2026-01-01T14:00:00+00:00' });
+    expect(out.map((c) => [c.key, c.number, c.kind, c.live])).toEqual([
+      [S3, 3, 'normal', true],
+      [S2, 2, 'plan', false],
+      [S1, 1, 'normal', false],
+      ['setup', null, 'setup', false]
+    ]);
+    expect(out[2].builds.map((b) => b.topic)).toEqual(['title-fix', 'room-art']);
+    expect(out[2].builds[1].files).toEqual(['01-title.png', '02-room.png']);
+    expect(out[1].builds[0].files).toEqual(['01-title.png']);
+    expect(out[3].builds[0].sha).toBe(sha('a'));
+  });
+
+  it('without a live cycle, later builds stay with the newest cycle; chat turns are never cycles', async () => {
+    const { galleryCycles } = await import('../src/lib/server/aggregate.js');
+    const out = galleryCycles(project);
+    expect(out.map((c) => c.key)).toEqual([S2, S1, 'setup']);
+    expect(out[0].builds.map((b) => b.topic)).toEqual(['new-screen', 'plan-notes']);
+  });
+
+  it('serves a build screenshot through the shots root and still lists days separately', () => {
+    expect(mediaFile(project, `shots/${sha('b')}/02-room.png`)).not.toBeNull();
+    expect(mediaFile(project, `shots/${sha('b')}/../../cycles.jsonl`)).toBeNull();
+    expect(gallery(project)).toEqual([]);
+  });
+});

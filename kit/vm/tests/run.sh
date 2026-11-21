@@ -905,6 +905,33 @@ proof=$("$BIN/agent-kit-gate-proof" run); rc=$?
 check "refused while the team is not halted" '[ $rc = 1 ] && grep -q "not halted" <<< "$(jq -r .error <<< "$proof")"'
 refuse "unknown command" "$BIN/agent-kit-gate-proof" merge-everything
 
+echo "== gate-run keeps the screenshots of merged builds"
+# Checks that write screenshots, including some the gate must not copy.
+cat > "$T/opt/gate/bin/gate-checks" <<'STUB'
+#!/bin/bash
+cd "$1" || exit 2
+mkdir -p "$2/shots"
+printf 'png' > "$2/shots/01-title.png"; printf 'png' > "$2/shots/02-room.png"
+printf 'x' > "$2/shots/bad name.png"; printf 'x' > "$2/shots/notes.txt"
+ln -s /etc/hostname "$2/shots/link.png"
+[ -f BROKEN ] && { echo "STEP unit FAIL 0s"; exit 1; }
+echo "STEP unit ok 0s"
+echo "TESTS_PASSED=$(ls tests/test_*.py 2>/dev/null | wc -l)"
+STUB
+G fetch -q gate; G checkout -q -B shots-a gate/main; echo a > "$T/ws/a.txt"; G add -A; G commit -q -m "shots a"
+G branch -f ready/shots-a shots-a > /dev/null
+asha=$(G rev-parse shots-a)
+"$T/opt/gate/bin/gate-run"
+check "a merged build's screenshots are kept by sha" '[ "$(jq -r .status "$S/gate/results/shots-a.json")" = merged ] && [ -f "$S/gate/shots/$asha/01-title.png" ] && [ -f "$S/gate/shots/$asha/02-room.png" ]'
+check "links, odd names and other files are not copied" '[ ! -e "$S/gate/shots/$asha/link.png" ] && [ ! -e "$S/gate/shots/$asha/bad name.png" ] && [ ! -e "$S/gate/shots/$asha/notes.txt" ]'
+check "the index names the build and its topic" 'grep -qE "^[0-9T:+-]+ $asha shots-a$" "$S/gate/shots/index"'
+G fetch -q gate; G checkout -q -B shots-b gate/main; touch "$T/ws/BROKEN"; G add -A; G commit -q -m "shots b"
+G branch -f ready/shots-b shots-b > /dev/null
+bsha=$(G rev-parse shots-b)
+"$T/opt/gate/bin/gate-run"
+check "a failed build keeps no screenshots" '[ "$(jq -r .status "$S/gate/results/shots-b.json")" = failed ] && [ ! -e "$S/gate/shots/$bsha" ] && ! grep -q "$bsha" "$S/gate/shots/index"'
+G branch -q -D ready/shots-a ready/shots-b; G checkout -q -B main gate/main
+
 echo "== agent-kit-publish, owner-publish"
 # Same repository as above: $T/ws is the agents' workspace, $T/bare the gate's.
 pub() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-publish" "$@"; }

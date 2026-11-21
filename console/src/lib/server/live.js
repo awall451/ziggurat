@@ -47,7 +47,7 @@ today=$(jq -s --arg d "$(date +%F)" '[.[] | select(.date == $d and .counted != f
 next=$(systemctl show "$UNIT.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
 next=$([ -n "$next" ] && date -d "$next" +%s 2>/dev/null)
 dayend=$(date -d 'tomorrow 00:00' +%s 2>/dev/null)
-f=$(grep -l "all checks passed" "$STATE"/gate/results/*.json 2>/dev/null | xargs -r ls -t | head -1)
+f=$(grep -l '"status": *"merged"' "$STATE"/gate/results/*.json 2>/dev/null | xargs -r grep -l "all checks passed" | xargs -r ls -t | head -1)
 shots=$([ -n "$f" ] && jq -r '.shots // empty' "$f" 2>/dev/null)
 jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg since "$since" \\
   --arg head "$head" --arg ready "$ready" --arg remote "$remote" --arg current "$current" \\
@@ -102,7 +102,10 @@ function shape(raw) {
   const running = raw.lead === 'active' || raw.lead === 'activating';
   // Session of the cycle in progress: the kit's `current` file when present,
   // otherwise the newest transcript in the workspace's folder.
-  let session = (raw.current || '').trim().split(/\s+/)[0] || '';
+  const [curSid, curStart] = (raw.current || '').trim().split(/\s+/);
+  let session = curSid || '';
+  // When the kit's `current` file names the session, its second field is the start ("date -Is").
+  const sessionStart = UUID_RE.test(session) && Number.isFinite(Date.parse(curStart || '')) ? curStart : null;
   if (!UUID_RE.test(session)) {
     const m = /([0-9a-f-]{36})\.jsonl$/.exec(raw.newest || '');
     session = m ? m[1] : '';
@@ -125,6 +128,7 @@ function shape(raw) {
     worktrees: raw.worktrees,
     remote: raw.remote || null,
     session: UUID_RE.test(session) ? session : null,
+    sessionStart,
     haltAt: /^\d+$/.test(haltEpoch || '') ? { epoch: Number(haltEpoch), reason: haltReason.join(' ') } : null,
     gatePaused: raw.gatepaused === 'yes',
     kitVersion: raw.kitver || null,
