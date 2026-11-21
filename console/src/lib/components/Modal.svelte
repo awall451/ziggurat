@@ -2,7 +2,7 @@
   // A dialog over the page: a shade, Escape or the shade closes it. The
   // content and its action rows come from the parent.
   import Icon from '$lib/components/Icon.svelte';
-  let { title = '', onclose = () => {}, wide = false, children } = $props();
+  let { title = '', onclose = () => {}, wide = false, header = null, children } = $props();
   function key(e) {
     if (e.key === 'Escape') onclose();
   }
@@ -14,7 +14,7 @@
   <button class="shade" onclick={onclose} aria-label="Close"></button>
   <div class="box panel lit" class:wide>
     <header>
-      <h2>{title}</h2>
+      {#if header}<div class="head">{@render header()}</div>{:else}<h2>{title}</h2>{/if}
       <button class="btn quiet icon" onclick={onclose} aria-label="Close"><Icon name="x" size={14} /></button>
     </header>
     {@render children?.()}
@@ -59,5 +59,9 @@
   h2 {
     margin: 0;
     font-size: 17px;
+  }
+  .head {
+    flex: 1;
+    min-width: 0;
   }
 </style>

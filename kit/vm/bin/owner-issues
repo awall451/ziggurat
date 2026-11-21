@@ -4,7 +4,7 @@
 #
 #   owner-issues list                     open issues
 #   owner-issues show <id>                one issue, with image paths
-#   owner-issues update <id> in_progress|done|wontfix [--shot shots/<date>/<file>.png]   (note on stdin)
+#   owner-issues update <id> in_progress|done|wontfix [--shot shots/<date>/<file>.png] [--commit <sha>]   (note on stdin)
 #   owner-issues prompt                   the protocol plus open issues (added to the lead's prompt)
 #
 # Layout (see docs/architecture.md):
@@ -21,6 +21,7 @@ IS=$STATE/issues
 OUT=$STATE/issues-out
 ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
 SHOT_RE='^shots/[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9._-]+\.png$'
+SHA_RE='^[0-9a-f]{7,40}$'
 shopt -s nullglob
 
 die() { echo "owner-issues: $*" >&2; exit 2; }
@@ -57,10 +58,32 @@ prompt_ids() {
   done
 }
 
-show() {
-  local id=$1 f
-  cat "$IS/$id/issue.md"
-  echo
+# Priority of an issue (kit 0.12); issues from older kits are normal.
+prio_of() {
+  local p
+  p=$(header "$IS/$1/issue.md" Priority)
+  case "$p" in low | normal | high | urgent) echo "$p" ;; *) echo normal ;; esac
+}
+# "#12" when the issue has a number (kit 0.12), else nothing.
+num_of() {
+  local n
+  n=$(header "$IS/$1/issue.md" Number)
+  [[ $n =~ ^[1-9][0-9]{0,5}$ ]] && echo "#$n"
+}
+# The owner changed the issue (edited it or added a note) after the lead's last update.
+changed() {
+  local id=$1 last="" am="" nt=""
+  [ -f "$OUT/$id.md" ] && last=$(header "$OUT/$id.md" Date)
+  am=$(header "$IS/$id/issue.md" Amended)
+  [ -f "$IS/$id/notes.md" ] && nt=$(sed -n 's/^## \([0-9TZ:-]*\) .*/\1/p' "$IS/$id/notes.md" | tail -1)
+  local newest=$am
+  [[ $nt > $newest ]] && newest=$nt
+  [ -n "$newest" ] && [[ $newest > $last ]]
+}
+
+# What follows the issue text: status, pictures, files, notes, the last update.
+tail_of() {
+  local id=$1 f notes
   echo "Status: $(status_of "$id")"
   for f in markup.png shot.png; do
     [ -f "$IS/$id/$f" ] && echo "Image ($f, read it with your file tools): $IS/$id/$f"
@@ -70,7 +93,25 @@ show() {
     echo "Attachments (read them with your file tools):"
     for f in "${att[@]}"; do echo "  $f"; done
   fi
+  if [ -f "$IS/$id/notes.md" ]; then
+    notes=$(cat "$IS/$id/notes.md")
+    echo
+    echo "Notes from the owner (newest last):"
+    if [ "${2:-}" = short ] && [ ${#notes} -gt 1500 ]; then
+      echo "[earlier notes: owner-issues show $id]"
+      printf '%s\n' "${notes: -1500}"
+    else
+      printf '%s\n' "$notes"
+    fi
+  fi
   [ -f "$OUT/$id.md" ] && { echo; echo "Your last update:"; cat "$OUT/$id.md"; }
+  return 0
+}
+
+show() {
+  cat "$IS/$1/issue.md"
+  echo
+  tail_of "$1"
 }
 
 case "${1:-list}" in
@@ -78,8 +119,9 @@ case "${1:-list}" in
     n=0
     for id in $(open_ids); do
       n=$((n + 1))
-      printf '%s  %-7s  %-11s  %s\n' "$id" "$(header "$IS/$id/issue.md" Kind)" "$(status_of "$id")" \
-        "$(body "$IS/$id/issue.md" | sed -n 's/^# //p' | head -1 | cut -c1-100)"
+      f=$IS/$id/issue.md
+      printf '%-6s %s  %-7s  %-7s  %-11s  %s\n' "$(num_of "$id" | grep . || echo -)" "$id" "$(prio_of "$id")" "$(header "$f" Kind)" \
+        "$(status_of "$id")" "$(body "$f" | sed -n 's/^# //p' | head -1 | cut -c1-100)"
     done
     [ "$n" -gt 0 ] || echo "No open owner issues."
     ;;
@@ -96,10 +138,13 @@ case "${1:-list}" in
     [[ $status =~ ^(in_progress|done|wontfix)$ ]] || die "status must be in_progress, done or wontfix"
     [ -f "$IS/$id/issue.md" ] || die "no such issue: $id"
     shift 3
-    shot=""
+    shot="" commit=""
     while [ $# -gt 0 ]; do
-      [ "$1" = "--shot" ] && [[ ${2:-} =~ $SHOT_RE ]] || die "unknown or bad argument: $1 ${2:-} (--shot shots/<date>/<file>.png)"
-      shot=$2
+      case "$1" in
+        --shot) [[ ${2:-} =~ $SHOT_RE ]] || die "bad --shot (shots/<date>/<file>.png)"; shot=$2 ;;
+        --commit) [[ ${2:-} =~ $SHA_RE ]] || die "bad --commit (a commit id, 7 to 40 hex characters)"; commit=$2 ;;
+        *) die "unknown argument: $1 (--shot shots/<date>/<file>.png, --commit <sha>)" ;;
+      esac
       shift 2
     done
     mkdir -p "$OUT"
@@ -107,6 +152,7 @@ case "${1:-list}" in
     {
       printf 'Status: %s\nRe: %s\nDate: %s\n' "$status" "$id" "$(date -u +%FT%TZ)"
       [ -n "$shot" ] && printf 'Fixed-shot: %s\n' "$shot"
+      [ -n "$commit" ] && printf 'Fixed-in: %s\n' "$commit"
       printf -- '---\n'
       head -c 20000
     } > "$tmp" || die "could not write the update"
@@ -124,14 +170,21 @@ case "${1:-list}" in
 
 The owner also raises issues: tickets about the game, usually from a screenshot with markup drawn on
 it (`markup.png`: the screenshot with the owner's circles and boxes). They live under
-`/var/lib/agent-kit/issues/`, which you cannot write to; that is what makes them authentic. An issue is
-not urgent: weigh it like a `note` from the inbox when you choose tasks.
+`/var/lib/agent-kit/issues/`, which you cannot write to; that is what makes them authentic. Each has a
+number (`#12`, the owner uses it) and a priority, listed here most urgent first:
+- `urgent`: handle it before you start any new work;
+- `high`: plan it into this cycle or the next;
+- `normal`: weigh it like a `note` from the inbox when you choose tasks;
+- `low`: when there is room.
+The owner can change an issue after raising it (its text, kind or priority) and add notes; an issue
+marked "changed by the owner since your last update" has something new for you to read.
 
 You triage every issue. Decide who on the team should handle it and hand it to them as a task, or
 decline it. Report with `owner-issues update <id> in_progress|done|wontfix` (a short note on stdin):
 - `in_progress` once it is assigned (say to whom, and where it is planned);
-- `done` when the fix has merged; add `--shot shots/<date>/<file>.png` when a newer gallery screenshot
-  shows the fix, so the owner sees before and after;
+- `done` when the fix has merged, with `--commit <sha>` (the merge on main); add
+  `--shot shots/<date>/<file>.png` when a newer gallery screenshot shows the fix, so the owner sees
+  before and after;
 - `wontfix` with the reason, if it conflicts with the charter or is not worth doing.
 An issue is shown here every cycle until it is `done` or `wontfix`. The owner can also move it.
 Only you, the lead, update issues; your agents do not.
@@ -140,20 +193,29 @@ names it; when such a job runs, set it `in_progress` at the start and `done` whe
 
 ### Open owner issues
 PROMPT
-    for id in $ids; do
-      echo
-      echo "--- $id ---"
-      # Long issues are cut here to keep the prompt small. Say so, and keep the
-      # image paths (they come last): a lead that is not told would take the
-      # first part for the whole issue and never look at the screenshot.
-      text=$(show "$id")
-      if [ ${#text} -gt 4000 ]; then
-        printf '%s\n' "${text:0:4000}"
-        echo "[cut here: this issue is longer. Read all of it, with its image paths: owner-issues show $id]"
-      else
-        printf '%s\n' "$text"
-      fi
-      echo
+    # Most urgent first; the same priority keeps the order the issues were raised.
+    for p in urgent high normal low; do
+      for id in $ids; do
+        [ "$(prio_of "$id")" = "$p" ] || continue
+        echo
+        mark=""
+        changed "$id" && mark=", changed by the owner since your last update"
+        n=$(num_of "$id")
+        echo "--- ${n:+$n }$id ($p$mark) ---"
+        # Long issue texts are cut here to keep the prompt small. Say so; the
+        # status, picture and file paths and the latest notes always follow:
+        # a lead that is not told would take the first part for the whole issue.
+        text=$(cat "$IS/$id/issue.md")
+        if [ ${#text} -gt 3000 ]; then
+          printf '%s\n' "${text:0:3000}"
+          echo "[cut here: this issue is longer. Read all of it: owner-issues show $id]"
+        else
+          printf '%s\n' "$text"
+        fi
+        echo
+        tail_of "$id" short
+        echo
+      done
     done
     exit 0
     ;;

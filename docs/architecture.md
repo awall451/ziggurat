@@ -328,7 +328,8 @@ what it read.
    `ZIGGURAT_LEAD_SESSION`, so owner messages are never delivered into it.
 2. `lead-chat` (as `agent`, in the workspace like a cycle) runs `claude -p --resume <session id>` with the
    chat notice and the message. Tool limits and the permission mode are not kept by a resumed session, so
-   it passes them every turn: the same tools as a planning cycle, `CHAT_BUDGET_USD` (default 1). The lead
+   it passes them every turn: the same tools as a planning cycle, `CHAT_BUDGET_USD` (default 3 from kit
+   0.12; it was 1). An answer stopped at that budget says so in its reply, with what it would have cost. The lead
    may revise or add proposals; still no code. The answer goes to `backlog-out/chat/`.
 3. The ledger line has `kind: chat`, `counted: false` and this turn's cost only: a resumed run reports the
    whole session's total, so `lead-chat` subtracts what the ledger already holds for that session.
@@ -362,6 +363,22 @@ time, the job running) and the ledger: the estimate dashed, what ran hatched, ho
 the proposal. Run now shows a running bar at once. A job set for a time can be moved (`unat`, then `at` again
 with the stored job) or cancelled there. On the Backlog, "Schedule ▾ → On the timeline…" opens a day of all
 teams in a pop-up: the job's estimate follows the pointer in its team's row and a click picks the start.
+
+### Issues as tickets
+
+From kit 0.12. An issue has a number per team (`#12`, given by the console, `Number:` in its header) and
+a priority (`low`, `normal`, `high`, `urgent`; `Priority:`). `owner-issues prompt` lists open issues
+most urgent first and says what each priority means. The owner can change an issue after raising it:
+`agent-kit-issues amend` replaces `issue.md` (keeping `Raised:`, adding `Amended:`), adds new files under
+`att/` (never overwriting, 8 at most) and may change kind and priority; `--quiet` (giving old issues their
+number) does not count as a change. `agent-kit-issues note` appends to the root-owned `notes.md`. An issue
+changed or noted after the lead's last update is marked "changed by the owner since your last update". A
+long issue text is cut at 3000 characters in the prompt, but its status, picture and file paths, the
+latest notes and the last update always follow. `owner-issues update … done --commit <sha>` records
+`Fixed-in:`, shown on the issue as "Fixed in".
+
+On the console, **Fix now** on an open issue starts a one-shot job whose text names the issue (the
+same rules as any one-shot job: on a halted or idle team, not while a cycle runs).
 
 ### Ledger kinds
 

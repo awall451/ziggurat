@@ -49,6 +49,13 @@
     <path d="M5 12 H19" />
   {:else if name === 'fit'}
     <path d="M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15" />
+  {:else if name === 'pencil'}
+    <path d="M4 20 L8.5 19 L19 8.5 A2.1 2.1 0 0 0 16 5.5 L5.5 16 Z M14 7.5 L17 10.5" />
+  {:else if name === 'chevron'}
+    <path d="M6 9 L12 15 L18 9" />
+  {:else if name === 'search'}
+    <circle cx="11" cy="11" r="6" />
+    <path d="M20 20 L15.5 15.5" />
   {:else}
     <circle cx="12" cy="12" r="4" />
   {/if}

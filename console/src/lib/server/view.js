@@ -71,6 +71,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canOneshotIdle: !!status.canOneshot && kitAtLeast(status.kitVersion, '0.6.0'),
     // Files attached to an issue (beyond its one picture) need kit 0.7.
     canIssueFiles: kitAtLeast(status.kitVersion, '0.7.0'),
+    // Issues as tickets (numbers, priority, edits, notes, files later) need kit 0.12.
+    canTickets: kitAtLeast(status.kitVersion, '0.12.0'),
     // Cycle slots need kit 0.9.
     canSchedule: kitAtLeast(status.kitVersion, '0.9.0'),
     // Publishing main to a remote repository needs kit 0.8.

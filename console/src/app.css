@@ -280,7 +280,10 @@ a.btn.quiet {
 
 select.field,
 input.field,
-textarea.field {
+textarea.field,
+button.field,
+span.field {
+  box-sizing: border-box;
   min-height: 36px;
   padding: 6px 10px;
   border-radius: 8px;

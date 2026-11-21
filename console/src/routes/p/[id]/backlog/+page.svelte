@@ -276,7 +276,16 @@
               {#if c.reply}
                 <div class="msg lead small" class:bad={c.reply.status === 'error'}>
                   <span class="dim">{lead}{#if c.cost != null}, {usd(c.cost)}{/if}</span>
-                  <div class="md">{@html md(c.reply.text)}</div>
+                  {#if c.reply.text}
+                    <div class="md">{@html md(c.reply.text)}</div>
+                  {:else}
+                    <div class="dim">No answer came back.</div>
+                  {/if}
+                  {#if c.reply.status === 'error' && plan.newest && !plan.ended}
+                    <div class="actions end">
+                      <button class="btn sm" disabled={!!busy || !!data.busy?.chat || plan.running} onclick={() => post({ action: 'chat', plan: plan.id, text: c.text }, 'chat')}>Send again</button>
+                    </div>
+                  {/if}
                 </div>
               {:else if c.delivered}
                 <div class="msg lead small dim">{lead} is answering…</div>
