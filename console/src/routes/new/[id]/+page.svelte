@@ -197,7 +197,7 @@
         <button class="btn" onclick={() => act('dry-run', 'dry')} disabled={!!busy || !!d.busyElsewhere}>{busy === 'dry' ? 'Starting…' : d.state === 'draft' ? 'Dry run' : 'Dry run again'}</button>
       {/if}
       {#if d.state === 'planned'}
-        <button class="btn go" onclick={askCreate} disabled={!!busy || !d.can.create || !!d.busyElsewhere}>Create project…</button>
+        <button class="btn primary" onclick={askCreate} disabled={!!busy || !d.can.create || !!d.busyElsewhere}>Create project…</button>
       {/if}
     </div>
   </section>
@@ -212,7 +212,7 @@
       </p>
       {#if d.error}
         <div class="panel note bad">{d.error}</div>
-        <div class="actions"><span class="grow"></span><button class="btn go" onclick={() => act('install', 'install')} disabled={!!busy || !!d.busyElsewhere}>Install the team</button></div>
+        <div class="actions"><span class="spacer"></span><button class="btn primary" onclick={() => act('install', 'install')} disabled={!!busy || !!d.busyElsewhere}>Install the team</button></div>
       {:else}
         <p class="dim small">The install of the kit and the team starts by itself.</p>
       {/if}
@@ -240,7 +240,7 @@
         <summary>Or remove the VM instead</summary>
         <pre class="well doc">{d.failure.cleanup.join('\n')}</pre>
       </details>
-      <div class="actions"><span class="grow"></span><button class="btn go" onclick={() => act('install', 'install')} disabled={!!busy || !!d.busyElsewhere}>Retry the install</button></div>
+      <div class="actions"><span class="spacer"></span><button class="btn primary" onclick={() => act('install', 'install')} disabled={!!busy || !!d.busyElsewhere}>Retry the install</button></div>
     </section>
   {/if}
 
@@ -253,7 +253,7 @@
       </p>
       {#if d.tokenConfigured}
         <p>A subscription token is saved in the console now. It can be handed to the VM:</p>
-        <div><button class="btn go" onclick={() => act('apply-token', 'token')} disabled={!!busy}>{busy === 'token' ? 'Working…' : 'Apply the saved token'}</button></div>
+        <div class="actions"><button class="btn primary" onclick={() => act('apply-token', 'token')} disabled={!!busy}>{busy === 'token' ? 'Working…' : 'Apply the saved token'}</button></div>
       {:else}
         <p class="dim small">
           To skip this step for future projects, save a token from <span class="mono">claude setup-token</span> as
@@ -262,24 +262,24 @@
         <ol class="steps">
           <li>
             Add this to <span class="mono">~/.ssh/config</span> on your workstation
-            <button class="btn quiet tiny" onclick={() => copy(d.login.sshConfig, 'config')}>{copied === 'config' ? 'Copied' : 'Copy'}</button>
+            <button class="btn quiet sm" onclick={() => copy(d.login.sshConfig, 'config')}>{copied === 'config' ? 'Copied' : 'Copy'}</button>
             <pre class="well doc">{d.login.sshConfig}</pre>
           </li>
           <li>
             Add this line to <span class="mono">~/.ssh/known_hosts</span> (the VM's key, read through Proxmox, so you are not asked to trust it)
-            <button class="btn quiet tiny" onclick={() => copy(d.login.knownHosts, 'hosts')}>{copied === 'hosts' ? 'Copied' : 'Copy'}</button>
+            <button class="btn quiet sm" onclick={() => copy(d.login.knownHosts, 'hosts')}>{copied === 'hosts' ? 'Copied' : 'Copy'}</button>
             <pre class="well doc">{d.login.knownHosts}</pre>
           </li>
           <li>
             Run this, follow the link it prints, and leave Claude again with <span class="mono">/exit</span>
-            <button class="btn quiet tiny" onclick={() => copy(d.login.command, 'cmd')}>{copied === 'cmd' ? 'Copied' : 'Copy'}</button>
+            <button class="btn quiet sm" onclick={() => copy(d.login.command, 'cmd')}>{copied === 'cmd' ? 'Copied' : 'Copy'}</button>
             <pre class="well doc">{d.login.command}</pre>
           </li>
         </ol>
         <p class="dim small">Turn off paid overflow usage on your account if headless runs must never spend money.</p>
       {/if}
       {#if d.install?.checkedAt}<p class="small dim">Last looked {when(d.install.checkedAt)}: not signed in.</p>{/if}
-      <div class="actions"><span class="grow"></span><button class="btn" onclick={() => act('login-check', 'login')} disabled={!!busy}>{busy === 'login' ? 'Looking…' : 'I signed in: check now'}</button></div>
+      <div class="actions"><span class="spacer"></span><button class="btn" onclick={() => act('login-check', 'login')} disabled={!!busy}>{busy === 'login' ? 'Looking…' : 'I signed in: check now'}</button></div>
     </section>
   {/if}
 
@@ -335,7 +335,7 @@
       {/if}
       <div class="actions">
         {#if d.can.proof}<button class="btn quiet" onclick={() => act('gate-proof', 'proof')} disabled={!!busy}>{d.proof ? 'Run the gate proof again' : 'Run the gate proof'}</button>{/if}
-        <span class="grow"></span><a class="btn go" href="/p/{d.id}/controls">Open {r.name}</a>
+        <span class="spacer"></span><a class="btn primary" href="/p/{d.id}/controls">Open {r.name}</a>
       </div>
     </section>
   {/if}
@@ -361,7 +361,7 @@
       {/if}
       <div class="actions">
         <span class="grow"></span>
-        {#if d.can.continue}<button class="btn go" onclick={() => act('continue', 'continue')} disabled={!!busy || !!d.busyElsewhere}>Continue</button>{/if}
+        {#if d.can.continue}<button class="btn primary" onclick={() => act('continue', 'continue')} disabled={!!busy || !!d.busyElsewhere}>Continue</button>{/if}
       </div>
     </section>
   {/if}
@@ -445,12 +445,6 @@
     flex-direction: column;
     gap: 12px;
   }
-  .tiny {
-    min-height: 26px;
-    padding: 0 10px;
-    font-size: 12px;
-    margin-left: 6px;
-  }
   .panel.note {
     margin-bottom: 0;
   }
@@ -484,10 +478,5 @@
   }
   .nowrap {
     white-space: nowrap;
-  }
-  .actions a,
-  .bar a.btn {
-    display: inline-flex;
-    align-items: center;
   }
 </style>

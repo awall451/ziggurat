@@ -9,6 +9,7 @@
   import { ago, usd } from '$lib/format.js';
   import { md } from '$lib/md.js';
   import { instantOf, wallClock, clockLabel, zoneLabel } from '$lib/schedule.js';
+  import Popover from '$lib/components/Popover.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -21,6 +22,7 @@
   let flash = $state(null); // {ok, text}
   let focus = $state('');
   let planAt = $state('');
+  let planLater = $state(false); // the "Later…" pop-over of the planning form
   let chatText = $state('');
   let atFor = $state(null); // pid whose time picker is open
   let atValue = $state('');
@@ -28,7 +30,8 @@
   let chatBox = $state(null);
 
   const STATE_WORD = { new: 'New', approved: 'Approved', rejected: 'Rejected', revised: 'Revised: decide again' };
-  const busyTeam = $derived(data.busy?.state === 'running' || !!data.busy?.oneshot || !!data.busy?.chat);
+  // A chat turn does not block a cycle or a job (kit 0.10.1); a cycle does.
+  const busyTeam = $derived(data.busy?.state === 'running' || !!data.busy?.oneshot);
   const waiting = $derived(plans.some((x) => x.waiting || x.running) || !!data.busy?.chat);
 
   // While the lead works or answers, look again every 10 seconds.
@@ -73,16 +76,17 @@
     return `${day}, ${clockLabel(`${String(c.H).padStart(2, '0')}:${String(c.M).padStart(2, '0')}`, data.clock)} (${zoneLabel(data.timezone)})`;
   }
 
-  function startPlan() {
+  function startPlan(later = false) {
     let at = null;
-    if (planAt) {
+    if (later) {
       at = epochOf(planAt);
-      if (!at) return (flash = { ok: false, text: 'That time does not exist in your time zone' });
+      if (!at) return (flash = { ok: false, text: 'Pick a date and time that exists in your time zone' });
     }
     post({ action: 'plan', focus, at }, 'plan').then((out) => {
       if (out) {
         focus = '';
         planAt = '';
+        planLater = false;
       }
     });
   }
@@ -133,13 +137,29 @@
       and cost. The team's normal cycles carry on as before. Not while a cycle runs.
     </p>
     <textarea class="field" rows="3" placeholder="Optional: what to focus on (a feature, a part of the game, a problem)" bind:value={focus}></textarea>
-    <div class="row">
-      <button class="btn primary" disabled={!!busy || busyTeam} onclick={startPlan}>{planAt ? 'Set for that time' : 'Start planning now'}</button>
-      <label class="small dim">or at <input class="field" type="datetime-local" bind:value={planAt} /></label>
-      {#if busyTeam}<span class="small dim">The team is busy: {data.busy.chat ? 'the lead is answering a chat message' : data.busy.oneshot?.plan ? 'a planning cycle is running' : 'a cycle is running'}.</span>{/if}
+    <div class="actions">
+      {#if busyTeam}<span class="small dim">The team is busy: {data.busy.oneshot?.plan ? 'a planning cycle is running' : 'a cycle is running'}.</span>{/if}
+      <span class="spacer"></span>
+      <Popover open={planLater} onclose={() => (planLater = false)}>
+        {#snippet trigger()}
+          <button class="btn quiet" disabled={!!busy} onclick={() => (planLater = !planLater)}>Later…</button>
+        {/snippet}
+        <label class="fieldrow small">
+          <span class="dim">Start at ({zoneLabel(data.timezone)})</span>
+          <input class="field" type="datetime-local" bind:value={planAt} />
+        </label>
+        <div class="actions end">
+          <button class="btn quiet sm" onclick={() => (planLater = false)}>Cancel</button>
+          <button class="btn primary sm" disabled={!!busy || !planAt} onclick={() => startPlan(true)}>Set</button>
+        </div>
+      </Popover>
+      <button class="btn primary" disabled={!!busy || busyTeam} onclick={() => startPlan()}>Start planning now</button>
     </div>
     {#each data.atJobs.filter((j) => j.plan) as j (j.id)}
-      <div class="small">Planning cycle set for {whenText(j.at)} <button class="btn quiet" disabled={!!busy} onclick={() => post({ action: 'cancel-at', id: j.id }, 'cancel')}>Cancel</button></div>
+      <div class="actions small">
+        <span>Planning cycle set for {whenText(j.at)}</span>
+        <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'cancel-at', id: j.id }, 'cancel')}>Cancel it</button>
+      </div>
     {/each}
   </section>
 
@@ -159,7 +179,7 @@
         {:else if plan.scheduledFor && !plan.done && !plan.cancelled}<span class="pill">set for {whenText(plan.scheduledFor)}</span>
         {:else if plan.error && !plan.done}<span class="pill s-failed" title={plan.error}>not started</span>{/if}
         {#if plan.cost != null}<span class="small dim">planning: {plan.minutes} min, {usd(plan.cost)}{#if plan.chatCost}, chat {usd(plan.chatCost)}{/if}</span>{/if}
-        {#if !plan.newest}<button class="btn quiet" onclick={() => (openPlan = openPlan === plan.id ? null : plan.id)}>{openPlan === plan.id ? 'Hide' : 'Show'}</button>{/if}
+        {#if !plan.newest}<button class="btn quiet sm" onclick={() => (openPlan = openPlan === plan.id ? null : plan.id)}>{openPlan === plan.id ? 'Hide' : 'Show'}</button>{/if}
       </header>
       {#if plan.focus}<p class="small"><span class="dim">Focus:</span> {plan.focus}</p>{/if}
       {#if plan.touchedCode}
@@ -191,34 +211,38 @@
               {#if prop.risk}<div class="small"><span class="dim">Risk:</span> {prop.risk}</div>{/if}
               {#if prop.depends.length}<div class="small"><span class="dim">After:</span> {prop.depends.map((d) => title(plans, d)).join(', ')}</div>{/if}
               <div class="md small">{@html md(prop.text)}</div>
-              <div class="row actions">
+              <div class="actions foot">
+                {#if prop.state !== 'rejected' && !prop.taken}
+                  <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'rejected' }, prop.pid)}>Reject</button>
+                {/if}
+                {#if plan.newest && !plan.ended}<button class="btn quiet sm" onclick={() => edit(prop)}>Change…</button>{/if}
+                <span class="spacer"></span>
                 {#if prop.state !== 'approved'}
-                  <button class="btn" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'approved' }, prop.pid)}>Approve</button>
-                {/if}
-                {#if prop.state !== 'rejected'}
-                  <button class="btn quiet" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'rejected' }, prop.pid)}>Reject</button>
-                {/if}
-                {#if plan.newest && !plan.ended}<button class="btn quiet" onclick={() => edit(prop)}>Change…</button>{/if}
-                {#if prop.state === 'approved' && !prop.taken}
-                  <span class="grow"></span>
-                  {#if job}
-                    <span class="small">Set for {whenText(job.at)}</span>
-                    <button class="btn quiet" disabled={!!busy} onclick={() => post({ action: 'cancel-at', id: job.id }, 'cancel')}>Cancel</button>
-                  {:else if prop.run && prop.run.rev === prop.rev && !prop.run.cancelled}
-                    <a class="small" href="{base}/inbox">Job sent {ago(prop.run.at, p.now)}: see the Inbox</a>
-                  {:else}
-                    <button class="btn primary" disabled={!!busy || busyTeam} onclick={() => post({ action: 'run', pid: prop.pid }, `run-${prop.pid}`)}>Run now</button>
-                    <button class="btn" disabled={!!busy} onclick={() => ((atFor = atFor === prop.pid ? null : prop.pid), (atValue = ''))}>Schedule…</button>
-                  {/if}
+                  <button class="btn primary sm" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'approved' }, prop.pid)}>Approve</button>
+                {:else if prop.taken}
+                  <span class="small dim">A normal cycle took it.</span>
+                {:else if job}
+                  <span class="small">Set for {whenText(job.at)}</span>
+                  <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'cancel-at', id: job.id }, 'cancel')}>Cancel it</button>
+                {:else if prop.run && prop.run.rev === prop.rev && !prop.run.cancelled}
+                  <a class="small" href="{base}/inbox">Job sent {ago(prop.run.at, p.now)}: see the Inbox</a>
+                {:else}
+                  <Popover open={atFor === prop.pid} onclose={() => (atFor = null)}>
+                    {#snippet trigger()}
+                      <button class="btn quiet sm" disabled={!!busy} onclick={() => ((atFor = atFor === prop.pid ? null : prop.pid), (atValue = ''))}>Schedule…</button>
+                    {/snippet}
+                    <label class="fieldrow small">
+                      <span class="dim">Start at ({zoneLabel(data.timezone)})</span>
+                      <input class="field" type="datetime-local" bind:value={atValue} />
+                    </label>
+                    <div class="actions end">
+                      <button class="btn quiet sm" onclick={() => (atFor = null)}>Cancel</button>
+                      <button class="btn primary sm" disabled={!!busy || !atValue} onclick={() => runAt(prop.pid)}>Set</button>
+                    </div>
+                  </Popover>
+                  <button class="btn primary sm" disabled={!!busy || busyTeam} onclick={() => post({ action: 'run', pid: prop.pid }, `run-${prop.pid}`)}>Run now</button>
                 {/if}
               </div>
-              {#if atFor === prop.pid}
-                <div class="row small">
-                  <input class="field" type="datetime-local" bind:value={atValue} />
-                  <span class="dim">{zoneLabel(data.timezone)}</span>
-                  <button class="btn" disabled={!!busy} onclick={() => runAt(prop.pid)}>Set</button>
-                </div>
-              {/if}
             </article>
           {/each}
         </div>
@@ -243,14 +267,14 @@
               <p class="small dim">This chat is ended. Start a new planning cycle to plan again.</p>
             {:else}
               <textarea class="field" rows="3" bind:this={chatBox} bind:value={chatText} placeholder="Ask about a proposal, or ask {lead} to change, split or drop one"></textarea>
-              <div class="row">
-                <button class="btn primary" disabled={!!busy || !!data.busy?.chat || plan.running || !chatText.trim()} onclick={sendChat}>Send</button>
-                <span class="small dim">
-                  Each message resumes the planning session for one answer (counts as usage, not as a cycle).
-                  {#if data.busy?.oneshot && !data.busy.oneshot.plan}The chat stays open while a job runs; {lead} is told what is running.{/if}
-                </span>
-                <span class="grow"></span>
+              <p class="small dim">
+                Each message resumes the planning session for one answer (counts as usage, not as a cycle).
+                {#if data.busy?.oneshot && !data.busy.oneshot.plan}The chat stays open while a job runs; {lead} is told what is running.{/if}
+              </p>
+              <div class="actions">
                 <button class="btn quiet" disabled={!!busy} onclick={() => post({ action: 'chat-end', plan: plan.id }, 'end')}>End chat</button>
+                <span class="spacer"></span>
+                <button class="btn primary" disabled={!!busy || !!data.busy?.chat || plan.running || !chatText.trim()} onclick={sendChat}>Send</button>
               </div>
             {/if}
           </div>
@@ -332,8 +356,10 @@
   .conf.low {
     color: var(--warn, #d9a441);
   }
-  .actions {
+  .actions.foot {
     margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
   }
   .chat {
     margin-top: 14px;

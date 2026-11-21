@@ -91,19 +91,19 @@
 
 <svelte:window onkeydown={key} />
 
-<div class="toolbar">
-  <!-- Works with the VM off too: the issue is kept here and sent when asked again. -->
-  <button class="btn go" onclick={() => (creating = true)}>
-    <Icon name="plus" size={14} /> New issue
-  </button>
-  <div class="chips" role="group" aria-label="Kind">
+<div class="toolbar actions">
+  <div class="seg" role="group" aria-label="Kind">
     {#each KIND_FILTERS as [k, label] (k)}
-      <button class="chip" class:on={kindFilter === k} aria-pressed={kindFilter === k} onclick={() => (kindFilter = k)}>{label}</button>
+      <button class="btn quiet sm" class:on={kindFilter === k} aria-pressed={kindFilter === k} onclick={() => (kindFilter = k)}>{label}</button>
     {/each}
   </div>
   <input class="field search" type="search" placeholder="Search issues" bind:value={query} aria-label="Search issues" />
-  <span class="grow"></span>
+  <span class="spacer"></span>
   <span class="dim small">{p.tiers[0]} moves the cards as the team works. Drag one to override.</span>
+  <!-- Works with the VM off too: the issue is kept here and sent when asked again. -->
+  <button class="btn primary" onclick={() => (creating = true)}>
+    <Icon name="plus" size={14} /> New issue
+  </button>
 </div>
 
 {#if flash}<div class="small err" class:s-done={flash.ok} class:s-interrupted={!flash.ok}>{flash.text}</div>{/if}
@@ -172,7 +172,7 @@
           </div>
         </div>
         <span class="pill st {open.status}">{WORD[open.status]}</span>
-        <button class="btn quiet" onclick={() => (openId = null)} aria-label="Close"><Icon name="x" size={14} /></button>
+        <button class="btn quiet icon" onclick={() => (openId = null)} aria-label="Close"><Icon name="x" size={14} /></button>
       </header>
 
       <div class="pics" class:two={open.resolution?.fixedShot}>
@@ -201,10 +201,16 @@
       {/if}
 
       <div class="actions">
-        {#each ['new', 'in_progress', 'done', 'wontfix'] as s (s)}
-          <button class="btn" class:primary={open.status === s} disabled={busy || open.status === s} onclick={() => move(open.id, s)}>{WORD[s]}</button>
-        {/each}
-        {#if !open.delivered}<button class="btn" disabled={busy} onclick={() => retry(open.id)}>Send to the VM again</button>{/if}
+        <span class="small dim">Status</span>
+        <div class="seg" role="group" aria-label="Status">
+          {#each ['new', 'in_progress', 'done', 'wontfix'] as s (s)}
+            <button class="btn quiet sm" class:on={open.status === s} aria-pressed={open.status === s} disabled={busy} onclick={() => move(open.id, s)}>{WORD[s]}</button>
+          {/each}
+        </div>
+        {#if !open.delivered}
+          <span class="spacer"></span>
+          <button class="btn primary sm" disabled={busy} onclick={() => retry(open.id)}>Send to the VM again</button>
+        {/if}
       </div>
       {#if open.error && !open.delivered}<div class="s-failed small">{open.error}</div>{/if}
 
@@ -234,32 +240,6 @@
     gap: 10px;
     flex-wrap: wrap;
     margin-bottom: 12px;
-  }
-  .toolbar .go {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border-color: var(--accent);
-    background: rgba(var(--glow), 0.25);
-  }
-  .chips {
-    display: flex;
-    gap: 4px;
-  }
-  .chip {
-    border: 1px solid var(--line);
-    background: none;
-    color: var(--ink-2);
-    border-radius: 999px;
-    padding: 3px 10px;
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .chip.on {
-    border-color: var(--accent);
-    color: var(--ink);
-    background: rgba(var(--glow), 0.16);
   }
   .search {
     width: 200px;
@@ -420,15 +400,6 @@
   .body {
     white-space: pre-wrap;
     margin: 0;
-  }
-  .actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .btn.primary {
-    border-color: var(--accent);
-    background: rgba(var(--glow), 0.25);
   }
   .hist {
     margin: 0;

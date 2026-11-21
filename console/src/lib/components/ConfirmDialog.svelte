@@ -10,9 +10,9 @@
     <div class="panel lit box">
       <h2>{confirm.title}</h2>
       <p>{confirm.body}</p>
-      <div class="actions">
+      <div class="actions end">
         <button class="btn quiet" onclick={oncancel} disabled={busy}>Cancel</button>
-        <button class="btn {confirm.danger ? 'stop' : 'go'}" onclick={confirm.run} disabled={busy}>{busy ? 'Working…' : confirm.word}</button>
+        <button class="btn {confirm.danger ? 'danger' : 'primary'}" onclick={confirm.run} disabled={busy}>{busy ? 'Working…' : confirm.word}</button>
       </div>
     </div>
   </div>
@@ -45,10 +45,5 @@
     flex-direction: column;
     gap: 14px;
     background: var(--panel-solid);
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
   }
 </style>

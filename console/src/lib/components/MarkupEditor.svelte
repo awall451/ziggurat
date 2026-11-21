@@ -48,7 +48,7 @@
   <div class="box panel lit">
     <header>
       <h2>Note on <span class="cap">{name}</span></h2>
-      <button class="btn quiet" onclick={oncancel} aria-label="Cancel"><Icon name="x" size={14} /></button>
+      <button class="btn quiet icon" onclick={oncancel} aria-label="Cancel"><Icon name="x" size={14} /></button>
     </header>
 
     <MarkupCanvas bind:this={drawing} {src} bind:shapes />
@@ -66,8 +66,8 @@
     {#if err}<div class="s-failed small">{err}</div>{/if}
     <div class="foot">
       <span class="dim small">Goes to the Issues board. The lead triages it and hands it to the team.</span>
-      <button class="btn" onclick={oncancel}>Cancel</button>
-      <button class="btn go" onclick={save} disabled={saving}>{saving ? 'Saving…' : 'Raise issue'}</button>
+      <button class="btn quiet" onclick={oncancel}>Cancel</button>
+      <button class="btn primary" onclick={save} disabled={saving}>{saving ? 'Saving…' : 'Raise issue'}</button>
     </div>
   </div>
 </div>
@@ -132,9 +132,5 @@
   }
   .foot .dim {
     flex: 1;
-  }
-  .go {
-    border-color: var(--accent);
-    background: rgba(var(--glow), 0.25);
   }
 </style>

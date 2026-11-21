@@ -34,7 +34,7 @@
     {#if hiddenCount}
       <label class="check"><input type="checkbox" checked={showHidden} onchange={toggle} /> Show hidden</label>
     {/if}
-    {#if data.deploy}<a class="btn new" href="/new">New project</a>{/if}
+    {#if data.deploy}<a class="btn primary" href="/new">New project</a>{/if}
   </div>
 
   {#if !shown.length}
@@ -160,11 +160,6 @@
   }
   .empty {
     padding: 32px;
-  }
-  .new {
-    display: inline-flex;
-    align-items: center;
-    color: var(--ink);
   }
   .cards {
     display: grid;

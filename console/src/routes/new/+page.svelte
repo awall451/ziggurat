@@ -261,7 +261,7 @@
 
   <div class="actions">
     <a class="btn quiet" href="/">Cancel</a>
-    <button class="btn go" onclick={submit} disabled={busy || !data.targets.length}>{busy ? 'Checking…' : 'Check the team'}</button>
+    <button class="btn primary" onclick={submit} disabled={busy || !data.targets.length}>{busy ? 'Checking…' : 'Check the team'}</button>
   </div>
 </div>
 
@@ -334,10 +334,6 @@
     display: flex;
     justify-content: flex-end;
     gap: 10px;
-  }
-  .actions a {
-    display: inline-flex;
-    align-items: center;
   }
   .panel.note {
     margin-bottom: 0;
