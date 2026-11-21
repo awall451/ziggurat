@@ -916,6 +916,138 @@ check "disabled: no prompt, the record stays" '[ -z "$(op prompt)" ] && [ -f "$S
 refuse "unknown command" pub push
 refuse "unknown command for the lead" op push
 
+echo "== planning cycle, backlog, chat (kit 0.10)"
+cat > "$FB/claude" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$FAKE_ARGS"
+while [ $# -gt 0 ]; do [ "$1" = -p ] && { printf '%s' "$2" > "$FAKE_PROMPT"; break; }; shift; done
+[ -n "${FAKE_TOUCH:-}" ] && echo x > "$FAKE_TOUCH"
+sid=$(grep -A1 -x -e --session-id -e --resume "$FAKE_ARGS" | tail -1)
+echo "{\"total_cost_usd\":${FAKE_COST:-0.5},\"num_turns\":3,\"result\":\"${FAKE_RESULT:-plan summary}\",\"is_error\":false,\"session_id\":\"$sid\"}"
+EOF
+chmod 755 "$FB/claude"
+export FAKE_ARGS=$T/args.txt
+mkdir -p "$T/ws"; git -C "$T/ws" init -q 2>/dev/null
+ob() { "$BIN/owner-backlog" "$@"; }
+akb() { "$BIN/agent-kit-backlog" "$@"; }
+chat() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-chat" "$@"; }
+PL=20260102T100000Z-p-plan1 PL2=20260102T110000Z-p-plan2
+rm -f "$S/oneshot"; : > "$S/ledger/cycles.jsonl"
+echo "stop owner 2026-01-02T00:00:00+00:00" > "$S/control"
+refuse "a planning cycle with a job id" shot start $J2 owner --plan
+refuse "a job with a plan id" job $PL
+: > "$FAKE_LOG"
+echo "Focus on the save system. Code word FELDSPAR." | shot start $PL owner --plan > /dev/null
+check "a planning request is stored in the backlog, not the inbox" '[ -f "$S/backlog/plans/$PL/request.md" ] && grep -q FELDSPAR "$S/backlog/plans/$PL/request.md" && [ ! -e "$S/inbox/$PL" ]'
+check "it is the current plan" '[ "$(cat "$S/backlog/current")" = "$PL" ]'
+check "marker and control name the plan" '[ "$(cut -d" " -f1 "$S/oneshot")" = "$PL" ] && grep -q "^run oneshot $PL " "$S/control"'
+out=$(cycle 2>&1)
+check "the planning cycle runs" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$PL" <<< "$out"'
+check "its prompt starts with the planning notice" '[ "$(head -c 50 "$FAKE_PROMPT")" = "**Read this first: this cycle is a planning cycle." ]'
+check "its prompt holds the focus and the rules, not the one-shot rules" 'grep -q FELDSPAR "$FAKE_PROMPT" && grep -q "^## Planning cycle: this cycle only" "$FAKE_PROMPT" && ! grep -q "^## One-shot job" "$FAKE_PROMPT"'
+check "it runs with the planning tools and budget" 'grep -qx -- --tools "$FAKE_ARGS" && grep -qx "Read,Grep,Glob,Bash" "$FAKE_ARGS" && [ "$(grep -A1 -x -- --max-budget-usd "$FAKE_ARGS" | tail -1)" = 2 ]'
+L=$(tail -1 "$S/ledger/cycles.jsonl")
+check "ledger line: kind plan, the plan id, no code touched" '[ "$(jq -r .kind <<< "$L")" = plan ] && [ "$(jq -r .plan <<< "$L")" = "$PL" ] && [ "$(jq -r .touched_code <<< "$L")" = false ]'
+SID=$(cat "$S/ledger/plans/$PL")
+check "the session id is kept for the chat" '[[ $SID =~ ^[0-9a-f-]{36}$ ]] && [ "$(jq -r .session <<< "$L")" = "$SID" ]'
+shot finish > /dev/null
+check "the team is halted again after the planning cycle" 'grep -q "^stop one-shot job $PL ended" "$S/control"'
+# A planning cycle that changes the workspace anyway is flagged.
+echo "Second plan." | shot start $PL2 owner --plan > /dev/null
+FAKE_TOUCH=$T/ws/stray.txt cycle > /dev/null 2>&1
+check "a planning cycle that changed the workspace is flagged" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .touched_code)" = true ]'
+rm -f "$T/ws/stray.txt"; shot finish > /dev/null
+check "a normal cycle's prompt has the backlog section" 'echo "run 2026-01-02T01:00:00+00:00" > "$S/control"; cycle > /dev/null 2>&1; grep -q "^## Backlog: proposals to the owner" "$FAKE_PROMPT" && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .kind)" = normal ]'
+echo "stop owner 2026-01-02T02:00:00+00:00" > "$S/control"
+
+# Proposals.
+prop() { ob propose --title "Save slots" --minutes 45 --cost 1.20 --confidence medium --areas "save system" "$@"; }
+B1=$(echo "Why: players lose progress. Steps: 1. add slots" | prop | awk '{print $2}')
+check "a proposal is written with its estimate" '[ -f "$S/backlog-out/$B1.md" ] && grep -qx "Minutes: 45" "$S/backlog-out/$B1.md" && grep -qx "Plan: $PL2" "$S/backlog-out/$B1.md" && grep -qx "Rev: 1" "$S/backlog-out/$B1.md"'
+refuse "a proposal over 90 minutes" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 120 --cost 1 --confidence low"
+refuse "a proposal with a bad confidence" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence sure"
+refuse "a proposal with a bad cost" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 30 --cost '1;id' --confidence low"
+refuse "a title on two lines" sh -c "echo x | $BIN/owner-backlog propose --title \"\$(printf 'a\nb')\" --minutes 30 --cost 1 --confidence low"
+refuse "a dependency that does not exist" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low --depends 20260101T000000Z-b-abcdef"
+refuse "a proposal without text" sh -c "$BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low < /dev/null"
+refuse "a proposal that is too long" sh -c "head -c 9000 /dev/zero | tr '\0' a | $BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low"
+B2=$(echo "Second step" | prop --order 2 --depends "$B1" | awk '{print $2}')
+check "a proposal may depend on another" 'grep -qx "Depends: $B1" "$S/backlog-out/$B2.md"'
+echo "" | ob revise "$B1" --minutes 60 > /dev/null
+check "a revision keeps the rest and counts up" 'grep -qx "Rev: 2" "$S/backlog-out/$B1.md" && grep -qx "Minutes: 60" "$S/backlog-out/$B1.md" && grep -q "players lose progress" "$S/backlog-out/$B1.md"'
+refuse "the owner decides on a proposal that does not exist" akb set 20260101T000000Z-b-abcdef approved 1
+refuse "a bad decision" akb set "$B1" maybe 2
+refuse "a bad revision" akb set "$B1" approved x
+akb set "$B1" approved 1 > /dev/null
+check "an approval of an older revision does not count" 'grep -q "revised after approved" <<< "$(ob list)"'
+akb set "$B1" approved 2 > /dev/null
+check "approved" 'grep -q "$B1  approved" <<< "$(ob list)"'
+refuse "taking an approved item when the owner has not allowed it" ob taken "$B1"
+check "no approved items in the prompt by default" '! grep -q "$B1" <<< "$(ob prompt)"'
+"$BIN/agent-kit-caps" set FREE_TAKE_APPROVED 1 > /dev/null
+check "allowed: approved items are offered to normal cycles" 'grep -q "$B1" <<< "$(ob prompt)" && ! grep -q "$B2" <<< "$(ob prompt)"'
+ob taken "$B1" > /dev/null
+check "a taken item is no longer offered" '! grep -q "$B1" <<< "$(ob prompt)" && grep -q "$B1  taken" <<< "$(ob list)"'
+"$BIN/agent-kit-caps" set FREE_TAKE_APPROVED 0 > /dev/null
+refuse "FREE_TAKE_APPROVED must be 0 or 1" "$BIN/agent-kit-caps" set FREE_TAKE_APPROVED yes
+refuse "PLAN_BUDGET_USD must be a small number" "$BIN/agent-kit-caps" set PLAN_BUDGET_USD 500
+"$BIN/agent-kit-caps" set CHAT_BUDGET_USD 0.5 > /dev/null
+check "the chat budget is kept" 'grep -qx "CHAT_BUDGET_USD=0.5" "$T/etc/caps.env" && grep -qx "FREE_TAKE_APPROVED=0" "$T/etc/caps.env"'
+
+# Chat.
+M1=20260102T120000Z-c-aaaaaa M2=20260102T120100Z-c-bbbbbb M3=20260102T120200Z-c-cccccc
+refuse "a chat about a plan that was replaced" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL $M1 owner"
+echo "busy" > "$S/oneshot"
+refuse "a chat while a job runs" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
+rm -f "$S/oneshot"
+FAKE_ACTIVE=active refuse "a chat while a cycle runs" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
+refuse "an empty chat message" sh -c "echo '  ' | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M1 owner"
+refuse "a chat with a bad message id" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 'x;id' owner"
+: > "$FAKE_LOG"
+echo "Make the first one smaller. Code word MICA." | chat say $PL2 $M1 owner > /dev/null
+check "a chat message is stored root-side and starts one turn" 'grep -q MICA "$S/backlog/chat/$PL2/$M1.md" && [ -f "$S/chat" ] && grep -qx "start --no-block agent-kit-chat.service" "$FAKE_LOG"'
+refuse "a second message while the lead answers" sh -c "echo again | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M2 owner"
+check "no cycle while a chat turn runs" 'echo "run 2026-01-02T03:00:00+00:00" > "$S/control"; out=$(cycle 2>&1); grep -q "chat turn" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+echo "stop owner 2026-01-02T04:00:00+00:00" > "$S/control"
+SID2=$(cat "$S/ledger/plans/$PL2")
+prev=$(jq -s --arg s "$SID2" '[.[] | select(.session == $s) | .cost_usd] | add' "$S/ledger/cycles.jsonl")
+rm -f "$FAKE_PROMPT"
+FAKE_COST=0.8 FAKE_RESULT="Made it smaller" AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+check "the turn resumes the planning session" '[ "$(grep -A1 -x -- --resume "$FAKE_ARGS" | tail -1)" = "$SID2" ] && ! grep -qx -- --session-id "$FAKE_ARGS"'
+check "the turn passes the tool limits and the chat budget again" 'grep -qx "Read,Grep,Glob,Bash" "$FAKE_ARGS" && [ "$(grep -A1 -x -- --max-budget-usd "$FAKE_ARGS" | tail -1)" = 0.5 ]'
+check "the turn gets the chat notice and the message" 'grep -q "agent-kit owner chat" "$FAKE_PROMPT" && grep -q MICA "$FAKE_PROMPT"'
+check "the answer is written for the console" 'grep -qx "Status: ok" "$S/backlog-out/chat/$PL2/$M1.md" && grep -q "Made it smaller" "$S/backlog-out/chat/$PL2/$M1.md"'
+L=$(tail -1 "$S/ledger/cycles.jsonl")
+check "ledger: a chat line with this turn's cost only, not counted" '[ "$(jq -r .kind <<< "$L")" = chat ] && [ "$(jq -r .counted <<< "$L")" = false ] && [ "$(jq -r ".cost_usd * 100 | round" <<< "$L")" = "$(jq -n "(0.8 - $prev) * 100 | round")" ]'
+chat finish
+check "finish drops the chat marker" '[ ! -e "$S/chat" ]'
+chat end $PL2 > /dev/null
+refuse "no chat after the owner ended it" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M3 owner"
+echo "$PL2 $M3 2026-01-01T00:00:00+00:00" > "$S/chat"; touch -d '-10 min' "$S/chat"
+chat reap
+check "a chat turn that is gone is reaped" '[ ! -e "$S/chat" ]'
+
+# A one-shot job set for a time.
+JA=20260103T100000Z-o-atjob JB=20260103T100100Z-o-missed
+now=$(date +%s)
+refuse "a time in the past" sh -c "tar -c -C $T/work/j . | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-oneshot at $((now - 60)) $JA owner"
+tar -c -C "$T/work/j" . | shot at $((now + 3600)) $JA owner > /dev/null
+check "a timed job waits outside the inbox" '[ -f "$S/oneshot-at/$JA" ] && [ ! -e "$S/inbox/$JA" ] && grep -q "$JA" <<< "$(shot list-at)"'
+shot due
+check "not before its time" '[ -f "$S/oneshot-at/$JA" ] && [ ! -e "$S/oneshot" ]'
+echo "$((now - 30)) owner" > "$S/oneshot-at/$JA"
+: > "$FAKE_LOG"
+shot due
+check "at its time it starts as a one-shot job" '[ ! -e "$S/oneshot-at/$JA" ] && grep -q BASALT "$S/inbox/$JA/message.md" && grep -q "^run oneshot $JA " "$S/control" && grep -q "job:$JA .* started" "$S/schedule.log"'
+shot finish > /dev/null
+tar -c -C "$T/work/j" . | shot at $((now + 3600)) $JB owner > /dev/null
+echo "$((now - 4000)) owner" > "$S/oneshot-at/$JB"
+shot due
+check "a job the team was too busy for is dropped and logged" '[ ! -e "$S/oneshot-at/$JB" ] && [ ! -e "$S/inbox/$JB" ] && grep -q "job:$JB .* missed" "$S/schedule.log"'
+echo "Plan later." | shot at $((now + 600)) 20260103T110000Z-p-later owner --plan > /dev/null
+shot unat 20260103T110000Z-p-later > /dev/null
+check "a timed job can be cancelled" '[ ! -e "$S/oneshot-at/20260103T110000Z-p-later" ]'
+
 check "lead-settings.json is a JSON object" 'jq -e "type == \"object\"" "$HERE/../lead-settings.json" > /dev/null'
 
 echo

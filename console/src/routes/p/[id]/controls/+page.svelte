@@ -220,8 +220,20 @@
     ['MAX_CYCLES_PER_DAY', 'Cycles per day', 'Counted per UTC day. A cap on cycles, not on hours.'],
     ['CYCLE_BUDGET_USD', 'Budget per cycle, USD', "Claude Code's API-equivalent estimate. A runaway brake, not a bill."],
     ['LEAD_MODEL', "Lead's model", 'Used from the next cycle.'],
-    ['FALLBACK_MODEL', 'Fallback model', 'Used when the first one is unavailable.']
+    ['FALLBACK_MODEL', 'Fallback model', 'Used when the first one is unavailable.'],
+    // Kit 0.10: shown only when the VM reports them.
+    ['PLAN_BUDGET_USD', 'Budget per planning cycle, USD', 'For "Find what to do next" on the Backlog tab. Keep it small.'],
+    ['CHAT_BUDGET_USD', 'Budget per chat answer, USD', 'Each message to the lead in a backlog chat.'],
+    ['FREE_TAKE_APPROVED', 'Normal cycles may take approved backlog items', 'Off: approved items wait for Run now or a set time. On: a normal cycle may pick one up by itself.']
   ];
+  const ACTION_BACKLOG = {
+    'plan-start': 'Started a planning cycle',
+    'backlog-decide': 'Decided on a backlog item',
+    'job-at': 'Set a job for a time',
+    'job-at-cancel': 'Cancelled a job set for a time',
+    'chat-say': 'Sent a chat message to the lead',
+    'chat-end': 'Ended a backlog chat'
+  };
   const KIND = { token: 'Runs Claude: stopped by a halt', keep: 'Kept running (on the keep list)', other: 'Not Claude: keeps running' };
   const ACTION = {
     halt: 'Halt',
@@ -405,8 +417,23 @@
     <section class="panel block">
       <h2>Brakes and models</h2>
       <p class="dim small">Changes apply from the next cycle.</p>
-      {#each CAPS as [key, label, help] (key)}
+      {#each CAPS.filter(([key]) => !key.startsWith('PLAN_') && !key.startsWith('CHAT_') && key !== 'FREE_TAKE_APPROVED' || c.caps[key] != null) as [key, label, help] (key)}
         <div class="cap">
+          {#if key === 'FREE_TAKE_APPROVED'}
+          <label class="stack">
+            <span>{label}</span>
+            <span class="small dim">{help}</span>
+            <span class="pair tight">
+              <input
+                type="checkbox"
+                checked={c.caps[key] === '1'}
+                disabled={!!busy}
+                onchange={(e) => act({ action: 'cap', key, value: e.currentTarget.checked ? '1' : '0' }, key)}
+              />
+              <span>{c.caps[key] === '1' ? 'On' : 'Off'}</span>
+            </span>
+          </label>
+          {:else}
           <label class="stack">
             <span>{label}</span>
             <span class="small dim">{help}</span>
@@ -419,6 +446,7 @@
               >Save</button>
             </span>
           </label>
+          {/if}
         </div>
       {/each}
     </section>
@@ -600,7 +628,7 @@
           <tr>
             <td class="mono nowrap">{when(a.at)}</td>
             <td>{a.user}</td>
-            <td class="nowrap">{ACTION[a.action] || a.action}</td>
+            <td class="nowrap">{ACTION[a.action] || ACTION_BACKLOG[a.action] || a.action}</td>
             <td class="dim">{args(a.args)}</td>
             <td class={a.ok ? 'dim' : 's-failed'}>{a.ok ? a.detail || 'ok' : `failed: ${a.detail || ''}`}</td>
           </tr>

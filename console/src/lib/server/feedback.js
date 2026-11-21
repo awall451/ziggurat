@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
+import { parseHeaderFile } from './headerfile.js';
 
 export const TIERS = ['note', 'priority', 'urgent'];
 // A one-shot job is stored and shown like a message, but it is not a tier the
@@ -121,6 +122,40 @@ export async function sendOneshot(project, user, { text, attachments = [] }) {
   // From here on the stored job holds the files.
   for (const token of attachments) fs.rmSync(path.join(draftDir(project), token), { recursive: true, force: true });
   return out;
+}
+
+/**
+ * A one-shot job set for a time (kit 0.10): the VM keeps it and starts it
+ * then (agent-kit-oneshot at). A refusal throws and keeps nothing here; with
+ * no clear answer the job is kept, marked with the error.
+ */
+export async function scheduleOneshot(project, user, { text, epoch }) {
+  const id = store(project, user, { tier: ONESHOT, text, attachments: [], inReplyTo: null });
+  const dir = path.join(sentDir(project), id);
+  const file = path.join(dir, 'meta.json');
+  const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, user.name && /^[A-Za-z0-9._@-]{1,80}$/.test(user.name) ? user.name : 'owner'], {
+    inputStream: tarStream(dir),
+    timeout: 300000
+  });
+  const scheduled = res.code === 0;
+  const error = scheduled ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-300);
+  if (!scheduled && vmSaidNo(res.code)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new Error(error);
+  }
+  const meta = readJson(file);
+  meta.scheduledFor = scheduled ? epoch : null;
+  meta.error = error;
+  fs.writeFileSync(file, JSON.stringify(meta, null, 2));
+  return { id, scheduled, error };
+}
+
+/** The VM started a job that was set for a time: show it as started. */
+export function noteScheduledStart(project, status) {
+  const id = status?.oneshot?.id;
+  if (!OWNER_ID.test(id || '')) return;
+  const meta = readJson(path.join(sentDir(project), id, 'meta.json'));
+  if (meta?.scheduledFor && !meta.delivered) markStarted(project, id);
 }
 
 /**
@@ -274,24 +309,6 @@ export function syncOutbox(project, { force = false } = {}) {
   return pending;
 }
 
-function parseHeaderFile(file, max = 200_000) {
-  let text;
-  try {
-    if (!fs.lstatSync(file).isFile()) return null;
-    text = fs.readFileSync(file, 'utf8').slice(0, max);
-  } catch {
-    return null;
-  }
-  const i = text.indexOf('\n---\n');
-  const head = i >= 0 ? text.slice(0, i) : text;
-  const body = i >= 0 ? text.slice(i + 5) : '';
-  const fields = {};
-  for (const line of head.split('\n')) {
-    const j = line.indexOf(': ');
-    if (j > 0) fields[line.slice(0, j).toLowerCase()] = line.slice(j + 2).trim();
-  }
-  return { fields, body: body.trim() };
-}
 
 /** The lead's reply status for a message, from the pulled outbox (agent-written: parsed as data). */
 function replyStatus(project, id) {
@@ -348,6 +365,8 @@ export function threads(project) {
       closed: !!meta.closed,
       // One-shot jobs: when the console last started its cycle.
       startedAt: meta.startedAt || null,
+      // Set for a time on the VM (kit 0.10), not started yet.
+      scheduledFor: !meta.delivered && Number.isInteger(meta.scheduledFor) ? meta.scheduledFor : null,
       seen: seen.includes(id),
       nudged: seen.filter((n) => n.startsWith(`${id}@`)).length,
       reply: status ? { status, date: reply.fields.date || null, text: reply.body, attachments: listFiles(path.join(out, `${id}.d`)) } : null,

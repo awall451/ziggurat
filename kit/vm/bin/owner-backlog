@@ -1,0 +1,276 @@
+#!/bin/bash
+# owner-backlog: how the lead proposes work to the owner (kit 0.10). Runs as
+# `agent`. Root-owned, like everything in /opt/agent-kit.
+#
+#   owner-backlog propose --title T --minutes N --cost USD --confidence low|medium|high
+#                 [--areas A] [--depends <pid>,...] [--order N] [--risk R]    (why and steps on stdin)
+#   owner-backlog revise <pid> [the same flags]       a new revision; flags left out keep their value,
+#                                                     the body is replaced only when stdin has text
+#   owner-backlog taken <pid>                         a normal cycle took an approved item (only when
+#                                                     the owner allows it)
+#   owner-backlog list | show <pid>
+#   owner-backlog prompt                              protocol, recent cycle numbers, proposals
+#   owner-backlog plan <plan-id> [--head]             the rules of a planning cycle
+#   owner-backlog chat <plan-id> <msgid>              the notice of a chat turn, with the message
+#
+# Layout: see agent-kit-backlog. Everything this script writes is data the
+# console checks; nothing here can change what the owner decided.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+# shellcheck source=/dev/null
+[ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
+BL=$STATE/backlog
+OUT=$STATE/backlog-out
+LEDGER=$STATE/ledger/cycles.jsonl
+PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
+PID_RE='^[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}$'
+MSG_RE='^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$'
+LINE_RE='^[^[:cntrl:]]{1,300}$'
+MAX_BODY=8000
+shopt -s nullglob
+
+die() { echo "owner-backlog: $*" >&2; exit 2; }
+header() { sed -n "1,/^---\$/s/^$2: //p" "$1" 2>/dev/null | head -1; }
+body() { sed '1,/^---$/d' "$1" 2>/dev/null; }
+current_plan() { local p; read -r p _ < "$BL/current" 2>/dev/null; [[ ${p:-} =~ $PLAN_RE ]] && echo "$p"; }
+
+# The owner's decision on a proposal: approved/rejected count only for the
+# revision the owner saw. A later revision needs a new decision.
+status_of() {
+  local pid=$1 os="" orev="" rev
+  rev=$(header "$OUT/$pid.md" Rev)
+  [ -f "$BL/.owner/$pid" ] && read -r os orev _ < "$BL/.owner/$pid"
+  if [ -n "$os" ] && [ "$os" != new ] && [ "${orev:-}" = "$rev" ]; then
+    if [ "$os" = approved ] && [ -e "$OUT/taken/$pid" ]; then echo taken; else echo "$os"; fi
+  elif [ -n "$os" ] && [ "$os" != new ]; then echo "revised after $os"
+  else echo new; fi
+}
+
+ids() { local f; for f in "$OUT"/2*-b-*.md; do f=$(basename "$f" .md); [[ $f =~ $PID_RE ]] && echo "$f"; done; }
+
+write_proposal() { # $1 pid, $2 plan, $3 rev; fields in globals; body in $text
+  mkdir -p "$OUT"
+  local tmp=$OUT/.$1.tmp
+  {
+    printf 'Plan: %s\nRev: %s\nDate: %s\nTitle: %s\nMinutes: %s\nCost-usd: %s\nConfidence: %s\n' \
+      "$2" "$3" "$(date -u +%FT%TZ)" "$title" "$minutes" "$cost" "$confidence"
+    [ -n "$areas" ] && printf 'Areas: %s\n' "$areas"
+    [ -n "$depends" ] && printf 'Depends: %s\n' "$depends"
+    [ -n "$order" ] && printf 'Order: %s\n' "$order"
+    [ -n "$risk" ] && printf 'Risk: %s\n' "$risk"
+    printf -- '---\n%s\n' "$text"
+  } > "$tmp" || die "could not write the proposal"
+  mv "$tmp" "$OUT/$1.md"
+}
+
+parse_flags() {
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || die "flag $1 needs a value"
+    case "$1" in
+      --title) title=$2 ;;
+      --minutes) minutes=$2 ;;
+      --cost) cost=$2 ;;
+      --confidence) confidence=$2 ;;
+      --areas) areas=$2 ;;
+      --depends) depends=$2 ;;
+      --order) order=$2 ;;
+      --risk) risk=$2 ;;
+      *) die "unknown flag: $1" ;;
+    esac
+    shift 2
+  done
+  [[ $title =~ $LINE_RE ]] || die "--title: one line, at most 300 characters"
+  [[ $minutes =~ ^[0-9]{1,2}$ ]] && [ "$minutes" -ge 1 ] && [ "$minutes" -le 90 ] \
+    || die "--minutes: 1 to 90. Split larger work into several proposals with --order and --depends"
+  [[ $cost =~ ^[0-9]{1,3}(\.[0-9]{1,2})?$ ]] || die "--cost: US dollars, like 1.50"
+  [[ $confidence =~ ^(low|medium|high)$ ]] || die "--confidence: low, medium or high"
+  [ -z "$areas" ] || [[ $areas =~ $LINE_RE ]] || die "--areas: one line, at most 300 characters"
+  [ -z "$risk" ] || [[ $risk =~ $LINE_RE ]] || die "--risk: one line, at most 300 characters"
+  [ -z "$order" ] || [[ $order =~ ^[0-9]{1,3}$ ]] || die "--order: a number"
+  if [ -n "$depends" ]; then
+    local d
+    IFS=, read -ra deps <<< "$depends"
+    [ ${#deps[@]} -le 10 ] || die "--depends: at most 10"
+    for d in "${deps[@]}"; do [[ $d =~ $PID_RE ]] && [ -f "$OUT/$d.md" ] || die "--depends: unknown proposal $d"; done
+  fi
+  return 0
+}
+
+read_body() {
+  text=$(head -c $((MAX_BODY + 1)))
+  [ ${#text} -le $MAX_BODY ] || die "the text is longer than $MAX_BODY bytes: keep a proposal short"
+}
+
+case "${1:-list}" in
+  propose)
+    shift
+    plan=$(current_plan) || die "there is no planning request to propose against"
+    title="" minutes="" cost="" confidence="" areas="" depends="" order="" risk=""
+    parse_flags "$@"
+    read_body
+    [ -n "$text" ] || die "write why and the steps on stdin"
+    pid=$(date -u +%Y%m%dT%H%M%SZ)-b-$(head -c 3 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    write_proposal "$pid" "$plan" 1
+    echo "proposed $pid"
+    ;;
+
+  revise)
+    pid=${2:-}
+    [[ $pid =~ $PID_RE ]] && [ -f "$OUT/$pid.md" ] || die "usage: owner-backlog revise <pid> [flags] (no such proposal)"
+    shift 2
+    f=$OUT/$pid.md
+    plan=$(header "$f" Plan) rev=$(header "$f" Rev)
+    [[ $rev =~ ^[0-9]{1,4}$ ]] || rev=1
+    title=$(header "$f" Title) minutes=$(header "$f" Minutes) cost=$(header "$f" Cost-usd)
+    confidence=$(header "$f" Confidence) areas=$(header "$f" Areas) depends=$(header "$f" Depends)
+    order=$(header "$f" Order) risk=$(header "$f" Risk)
+    parse_flags "$@"
+    old=$(body "$f")
+    if [ -t 0 ]; then text=""; else read_body; fi
+    [ -n "$text" ] || text=$old
+    write_proposal "$pid" "$plan" $((rev + 1))
+    echo "revised $pid: revision $((rev + 1))"
+    ;;
+
+  taken)
+    pid=${2:-}
+    [[ $pid =~ $PID_RE ]] && [ -f "$OUT/$pid.md" ] || die "usage: owner-backlog taken <pid>"
+    [ "${FREE_TAKE_APPROVED:-0}" = 1 ] || die "the owner has not allowed normal cycles to take approved items"
+    [ "$(status_of "$pid")" = approved ] || die "$pid is not approved"
+    mkdir -p "$OUT/taken"
+    date -u +%FT%TZ > "$OUT/taken/$pid"
+    echo "taken $pid"
+    ;;
+
+  list)
+    n=0
+    for pid in $(ids); do
+      n=$((n + 1))
+      f=$OUT/$pid.md
+      printf '%s  %-18s  %3s min  $%-6s  %-6s  %s\n' "$pid" "$(status_of "$pid")" "$(header "$f" Minutes)" \
+        "$(header "$f" Cost-usd)" "$(header "$f" Confidence)" "$(header "$f" Title)"
+    done
+    [ "$n" -gt 0 ] || echo "No proposals."
+    ;;
+
+  show)
+    pid=${2:-}
+    [[ $pid =~ $PID_RE ]] && [ -f "$OUT/$pid.md" ] || die "usage: owner-backlog show <pid>"
+    echo "Status: $(status_of "$pid")"
+    cat "$OUT/$pid.md"
+    ;;
+
+  prompt)
+    # Printed in the lead's prompt every cycle. Neutral wording: team themes
+    # rename roles, this text must fit all of them.
+    cat <<'EOF'
+## Backlog: proposals to the owner
+
+Besides your own planning, the owner can ask you to plan bigger work together: a planning cycle, in
+which you write proposals and no code. The owner reviews them on the console and approves, rejects
+or discusses them with you. `owner-backlog list` shows them with the owner's decision; `owner-backlog
+show <pid>` shows one. An approved item runs as a one-shot job the owner starts, now or at a set time.
+EOF
+    if [ "${FREE_TAKE_APPROVED:-0}" = 1 ]; then
+      approved=()
+      for pid in $(ids); do [ "$(status_of "$pid")" = approved ] && approved+=("$pid"); done
+      if [ ${#approved[@]} -gt 0 ]; then
+        echo
+        echo "The owner allows normal cycles to take approved items. When you choose this cycle's work, you may"
+        echo "take one of these (the oldest first, unless its dependencies are not done): mark it with"
+        echo "\`owner-backlog taken <pid>\` before you start, and work it as the proposal says."
+        for pid in "${approved[@]}"; do
+          printf -- '- %s: %s (%s min, $%s)\n' "$pid" "$(header "$OUT/$pid.md" Title)" "$(header "$OUT/$pid.md" Minutes)" "$(header "$OUT/$pid.md" Cost-usd)"
+        done
+      fi
+    fi
+    ;;
+
+  plan)
+    id=${2:-}
+    [[ $id =~ $PLAN_RE ]] && [ -f "$BL/plans/$id/request.md" ] || die "usage: owner-backlog plan <plan-id> [--head]"
+    if [ "${3:-}" = "--head" ]; then
+      cat <<EOF
+**Read this first: this cycle is a planning cycle.** The owner started this single cycle to plan
+work together with you: planning request \`$id\`. You write proposals and **no code**: no edits,
+no branches, no worktrees, no gate submissions, no agents that change files. The section "Planning
+cycle: this cycle only" at the end of this prompt holds the request and replaces the usual steps of a
+cycle wherever the two differ. Read what follows for who is on your team and your rules.
+EOF
+      exit 0
+    fi
+    [ -z "${3:-}" ] || die "usage: owner-backlog plan <plan-id> [--head]"
+    focus=$(body "$BL/plans/$id/request.md")
+    cat <<EOF
+## Planning cycle: this cycle only
+
+The owner asks you to find what to do next and to propose it, with an estimate for each item. When
+this cycle ends the team goes back to what it was doing before. Afterwards the owner may talk with
+you about the proposals: each message resumes this same session for one answer, so what you read
+now stays with you.
+
+### What the owner asked
+EOF
+    if [ -n "${focus//[[:space:]]/}" ]; then
+      printf '\n%s\n' "$focus"
+    else
+      printf '\nNo focus given: look at the whole project.\n'
+    fi
+    cat <<EOF
+
+### How to work this cycle
+
+- **Read before you read code.** Start from your own notes (STATE.md, the roadmap, the journal) and
+  the open owner messages and issues. Open code only where you need it to judge the size of a step.
+- **Write no code.** Do not edit files, create branches or worktrees, submit to the gate, or start
+  agents that do. Your file tools are limited this cycle; use the shell only to read and for
+  \`owner-backlog\`.
+- **One proposal per job, at most 90 minutes each.** Larger work becomes several proposals, with
+  \`--order\` (1, 2, 3...) and \`--depends <pid>\`. Each proposal says why, the steps, the areas it
+  touches (not single files) and the main risk.
+- **Estimate honestly.** Minutes of wall clock and US dollars for the job as a one-shot cycle, and how
+  sure you are. Base it on the recent numbers below and on your own judgement.
+- **A handful, not a list of everything.** Three to eight proposals, most valuable first.
+
+Write each with:
+
+    owner-backlog propose --title "..." --minutes 45 --cost 1.20 --confidence medium \\
+      --areas "..." --risk "..." [--order 1] [--depends <pid>]  <<'TEXT'
+    Why: ...
+    Steps:
+    1. ...
+    TEXT
+
+Then end the cycle with a short summary of what you proposed. Do not look for more work.
+
+### Recent cycles (for your estimates)
+
+EOF
+    if [ -s "$LEDGER" ]; then
+      tail -n 10 "$LEDGER" | jq -r '"- \(.start // "?" | .[0:16])  \(.kind // (if .oneshot then "oneshot" else "normal" end))  \((.secs // 0) / 60 | floor) min  $\(.cost_usd // 0 | . * 100 | round / 100)  \(.turns // "?") turns"' 2>/dev/null
+    else
+      echo "No cycles recorded yet."
+    fi
+    ;;
+
+  chat)
+    id=${2:-} msg=${3:-}
+    [[ $id =~ $PLAN_RE ]] && [[ $msg =~ $MSG_RE ]] && [ -f "$BL/chat/$id/$msg.md" ] || die "usage: owner-backlog chat <plan-id> <msgid>"
+    cat <<EOF
+[agent-kit owner chat] This is the owner, through the kit, about the proposals of this planning
+session. Answer in a few plain lines. You may change proposals (\`owner-backlog revise <pid>\`) or add
+new ones (\`owner-backlog propose\`) when the owner asks or agrees; say which you changed. Still no
+code: no edits, no branches, no agents. The owner decides on the backlog page.
+
+The owner's message:
+
+EOF
+    body "$BL/chat/$id/$msg.md"
+    ;;
+
+  *)
+    die "unknown command: $1 (propose, revise, taken, list, show, prompt, plan, chat)"
+    ;;
+esac

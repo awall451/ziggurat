@@ -475,6 +475,24 @@
       </div>
     {/if}
   </section>
+
+  {#if tl.projects.some((x) => x.atJobs?.length)}
+    <section class="panel block">
+      <h2>Set for a time</h2>
+      <p class="small dim">One-time starts from the Backlog: a planning cycle or an approved item. Cancel them on the project's Backlog tab.</p>
+      <ul class="small">
+        {#each tl.projects as x (x.id)}
+          {#each x.atJobs || [] as j (j.id)}
+            <li>
+              <a href="/p/{x.id}/backlog">{x.name}</a>: {j.plan ? 'planning cycle' : 'job'},
+              {new Date(j.at * 1000).toLocaleDateString([], { timeZone: tl.settings.timezone, weekday: 'short', day: 'numeric', month: 'short' })}
+              {clockAt(j.at * 1000)}
+            </li>
+          {/each}
+        {/each}
+      </ul>
+    </section>
+  {/if}
 </div>
 
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />

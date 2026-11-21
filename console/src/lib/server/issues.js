@@ -12,6 +12,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
+import { parseHeaderFile } from './headerfile.js';
 
 export const KINDS = ['bug', 'polish', 'idea'];
 export const STATUSES = ['new', 'in_progress', 'done', 'wontfix'];
@@ -285,23 +286,6 @@ export function image(project, id, name) {
   }
 }
 
-function parseHeaderFile(file) {
-  let text;
-  try {
-    if (!fs.lstatSync(file).isFile()) return null;
-    text = fs.readFileSync(file, 'utf8').slice(0, 200_000);
-  } catch {
-    return null;
-  }
-  const i = text.indexOf('\n---\n');
-  const head = i >= 0 ? text.slice(0, i) : text;
-  const fields = {};
-  for (const line of head.split('\n')) {
-    const j = line.indexOf(': ');
-    if (j > 0) fields[line.slice(0, j).toLowerCase()] = line.slice(j + 2).trim();
-  }
-  return { fields, body: i >= 0 ? text.slice(i + 5).trim() : '' };
-}
 
 const FIXED_RE = /^shots\/\d{4}-\d{2}-\d{2}\/[A-Za-z0-9._-]+\.png$/;
 

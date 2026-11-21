@@ -119,7 +119,9 @@ export async function timeline({ view = 'week', date = null, from = null, to = n
           typicalSecs: typicalSecs(cycles),
           past,
           running: Number.isFinite(since) ? { start: since } : null,
-          log: readSlotLog(p.paths.fleet, dataFrom, dataTo)
+          log: readSlotLog(p.paths.fleet, dataFrom, dataTo),
+          // One-shot jobs and planning cycles set for a time (kit 0.10). Bars on the timeline are for later.
+          atJobs: status.atJobs || []
         };
       })
   );

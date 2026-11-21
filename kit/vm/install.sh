@@ -84,7 +84,8 @@ fi
 for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-resume agent-kit-halt-at \
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
-         owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule; do
+         owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule \
+         agent-kit-backlog owner-backlog agent-kit-chat; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 
@@ -101,6 +102,10 @@ install -d -m 755 -o agent -g agent "$STATE/issues-out"
 # Publishing: the console's notes are root-owned; the lead's request goes to publish-out.
 install -d -m 755 "$STATE/publish"
 install -d -m 755 -o agent -g agent "$STATE/publish-out"
+# Backlog (kit 0.10): planning requests, decisions and chat messages are
+# root-owned; the lead's proposals and chat answers go to backlog-out.
+install -d -m 755 "$STATE/backlog" "$STATE/backlog/plans" "$STATE/backlog/.owner" "$STATE/backlog/chat"
+install -d -m 755 -o agent -g agent "$STATE/backlog-out" "$STATE/ledger/plans"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"
 

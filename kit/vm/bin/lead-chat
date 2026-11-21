@@ -1,0 +1,70 @@
+#!/bin/bash
+# lead-chat: one chat turn of the lead (kit 0.10). Runs as `agent` from
+# agent-kit-chat.service, which agent-kit-chat starts for one owner message.
+# Resumes the planning cycle's own session for one answer.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+KIT=${AGENT_KIT_HOME:-/opt/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+# shellcheck source=/dev/null
+[ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
+LEDGER=$STATE/ledger/cycles.jsonl
+PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
+MSG_RE='^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$'
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+# The same limits as a planning cycle: talk and proposals, no code. Tool
+# limits are not kept by a resumed session, so they are passed every turn.
+CHAT_TOOLS="Read,Grep,Glob,Bash"
+
+[ -f "$STATE/chat" ] || { echo "no chat marker: nothing to do"; exit 0; }
+read -r plan msg _ < "$STATE/chat"
+[[ ${plan:-} =~ $PLAN_RE ]] && [[ ${msg:-} =~ $MSG_RE ]] || { echo "bad chat marker"; exit 1; }
+[ -f "$STATE/backlog/chat/$plan/$msg.md" ] || { echo "no such chat message"; exit 1; }
+read -r sid _ < "$STATE/ledger/plans/$plan" 2>/dev/null
+[[ ${sid:-} =~ $UUID_RE ]] || { echo "no session id for $plan"; exit 1; }
+out=$STATE/backlog-out/chat/$plan
+mkdir -p "$out" "$STATE/ledger/runs"
+
+reply() { # $1 status ok|error; body on stdin
+  { printf 'Re: %s\nStatus: %s\nDate: %s\n---\n' "$msg" "$1" "$(date -u +%FT%TZ)"; head -c 20000; } > "$out/.$msg.tmp"
+  mv "$out/.$msg.tmp" "$out/$msg.md"
+}
+
+prompt=$("$KIT/bin/owner-backlog" chat "$plan" "$msg" 2>/dev/null)
+[ -n "$prompt" ] || { echo "could not build the chat prompt" | reply error; exit 1; }
+settings=()
+[ -f "$KIT/lead-settings.json" ] && settings=(--settings "$KIT/lead-settings.json")
+cd "$WORKSPACE" || exit 1
+workspace_print() { { git rev-parse HEAD 2>/dev/null; git status --porcelain 2>/dev/null; git worktree list --porcelain 2>/dev/null; git branch --list 2>/dev/null; } | sha256sum | cut -c1-16; }
+before=$(workspace_print)
+# The session's total so far: a resumed run reports the total of all its runs.
+prev=$(jq -s --arg s "$sid" '[.[] | select(.session == $s) | .cost_usd // 0] | add // 0' "$LEDGER" 2>/dev/null || echo 0)
+start=$(date -Is); t0=$SECONDS
+run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)-chat
+export ZIGGURAT_LEAD_SESSION=$sid CLAUDE_CODE_RETRY_WATCHDOG=1
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+claude -p "$prompt" --resume "$sid" "${settings[@]}" --tools "$CHAT_TOOLS" \
+  --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" \
+  --dangerously-skip-permissions \
+  --max-budget-usd "${CHAT_BUDGET_USD:-1}" \
+  --output-format json > "$run.json" 2> "$run.err"
+rc=$?
+touched=false
+[ "$(workspace_print)" != "$before" ] && touched=true
+if [ -s "$run.json" ] && jq -e . "$run.json" > /dev/null 2>&1; then
+  jq -r '.result // "" | tostring' "$run.json" | reply "$( [ "$(jq -r '.is_error // false' "$run.json")" = true ] && echo error || echo ok)"
+else
+  { echo "The lead did not answer (rc=$rc)."; tail -c 600 "$run.err"; } | reply error
+fi
+jq -nc --arg date "$(date +%F)" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg plan "$plan" --arg msg "$msg" \
+  --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson prev "${prev:-0}" --argjson touched $touched \
+  --slurpfile r <( [ -s "$run.json" ] && jq -c . "$run.json" 2>/dev/null || echo '{}') \
+  '($r[0] // {}) as $o |
+   {date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:false, counted:false, halted:false,
+    oneshot:null, slot:null, kind:"chat", plan:$plan, chat:$msg, touched_code:$touched,
+    cost_usd:(if $o.total_cost_usd then ([$o.total_cost_usd - $prev, 0] | max) else null end),
+    turns:($o.num_turns // null), session:$sid, is_error:($o.is_error // null),
+    summary:(($o.result // "") | tostring | .[-600:])}' >> "$LEDGER"
+echo "chat turn $msg done rc=$rc in $((SECONDS - t0))s"
+exit 0

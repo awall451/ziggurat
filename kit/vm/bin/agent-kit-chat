@@ -1,0 +1,118 @@
+#!/bin/bash
+# agent-kit-chat: one chat turn with the lead about a planning session (kit 0.10).
+# Run with sudo (the console calls it over ssh).
+#
+#   agent-kit-chat say <plan-id> <msgid> <from>   the owner's message on stdin (plain text);
+#                                                 starts agent-kit-chat.service for one answer
+#   agent-kit-chat end <plan-id>                  the owner ended the chat: no more turns
+#   agent-kit-chat finish                         drop the marker (run by agent-kit-chat.service)
+#   agent-kit-chat reap                           drop a marker whose turn is gone (agent-kit-tick)
+#   agent-kit-chat show
+#
+# A turn resumes the planning cycle's own session (lead-chat), so the lead
+# keeps what it read. Only the newest planning session can be resumed: the
+# next planning cycle replaces it. No turn while a cycle runs, and no cycle
+# while a turn runs (lead-cycle and the schedule wait for the marker).
+# The marker ($STATE/chat) is "<plan-id> <msgid> <since>".
+set -uo pipefail
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+LEAD=agent-kit-lead
+CHAT=agent-kit-chat
+BL=$STATE/backlog
+MARK=$STATE/chat
+LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
+PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
+MSG_RE='^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$'
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+MAX_TEXT=20000
+REAP_AFTER=120
+
+die() { echo "agent-kit-chat: $*" >&2; exit 2; }
+active() {
+  case "$(systemctl is-active "$1.service" 2>/dev/null)" in
+    active | activating | deactivating) return 0 ;;
+  esac
+  [ -n "$(systemctl show "$1.service" -p Job --value 2>/dev/null)" ]
+}
+umask 022
+
+case "${1:-show}" in
+  say)
+    plan=${2:-} msg=${3:-} from=${4:-}
+    [[ $plan =~ $PLAN_RE ]] || die "bad plan id"
+    [[ $msg =~ $MSG_RE ]] || die "bad message id"
+    [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
+    exec 8> "$LOCK"
+    flock 8
+    [ -f "$BL/plans/$plan/request.md" ] || die "no such planning session: $plan"
+    read -r cur _ < "$BL/current" 2>/dev/null
+    [ "${cur:-}" = "$plan" ] || die "a newer planning cycle has replaced this session"
+    [ ! -e "$BL/chat/$plan/.ended" ] || die "this chat was ended"
+    [ ! -e "$MARK" ] || die "the lead is still answering the last message"
+    [ ! -e "$STATE/oneshot" ] || die "a one-shot job or planning cycle is running. Try again when it has ended"
+    active "$LEAD" && die "a cycle is running. Try again when it has ended"
+    # Written by lead-cycle as the agent: checked, and only ever used as a session id.
+    read -r sid _ < "$STATE/ledger/plans/$plan" 2>/dev/null
+    [[ ${sid:-} =~ $UUID_RE ]] || die "the planning session has no session id (did its cycle run?)"
+    [ ! -e "$BL/chat/$plan/$msg.md" ] || die "that message was already sent"
+    text=$(head -c $((MAX_TEXT + 1)))
+    [ ${#text} -le $MAX_TEXT ] || die "the message is longer than $MAX_TEXT bytes"
+    [ -n "${text//[[:space:]]/}" ] || die "the message is empty"
+    install -d -m 755 "$BL/chat" "$BL/chat/$plan"
+    {
+      printf 'Ziggurat-Owner-Chat: 1\nId: %s\nPlan: %s\nFrom: %s\nSent: %s\n---\n' "$msg" "$plan" "$from" "$(date -u +%FT%TZ)"
+      printf '%s\n' "$text"
+    } > "$BL/chat/$plan/.$msg.tmp"
+    chmod 644 "$BL/chat/$plan/.$msg.tmp"
+    mv "$BL/chat/$plan/.$msg.tmp" "$BL/chat/$plan/$msg.md"
+    printf '%s %s %s\n' "$plan" "$msg" "$(date -Is)" > "$MARK.tmp"
+    chmod 644 "$MARK.tmp"
+    mv "$MARK.tmp" "$MARK"
+    if ! systemctl start --no-block "$CHAT.service" > /dev/null 2>&1; then
+      rm -f "$MARK" "$BL/chat/$plan/$msg.md"
+      die "could not start the chat turn"
+    fi
+    echo "chat message $msg sent. The lead answers in a minute or two"
+    ;;
+
+  end)
+    plan=${2:-}
+    [[ $plan =~ $PLAN_RE ]] || die "bad plan id"
+    [ -f "$BL/plans/$plan/request.md" ] || die "no such planning session: $plan"
+    install -d -m 755 "$BL/chat" "$BL/chat/$plan"
+    date -u +%FT%TZ > "$BL/chat/$plan/.ended"
+    echo "chat about $plan ended"
+    ;;
+
+  finish)
+    rm -f "$MARK"
+    ;;
+
+  reap)
+    [ -f "$MARK" ] || exit 0
+    exec 8> "$LOCK"
+    flock 8
+    [ -f "$MARK" ] || exit 0
+    active "$CHAT" && exit 0
+    age=$(($(date +%s) - $(stat -c %Y "$MARK" 2>/dev/null || date +%s)))
+    [ "$age" -ge "$REAP_AFTER" ] || exit 0
+    rm -f "$MARK"
+    ;;
+
+  show)
+    if [ -f "$MARK" ]; then
+      read -r plan msg since _ < "$MARK"
+      echo "chat turn in progress: $msg about $plan since $since"
+    else
+      echo "no chat turn in progress"
+    fi
+    ;;
+
+  *)
+    die "usage: agent-kit-chat say <plan-id> <msgid> <from> | end <plan-id> | finish | reap | show"
+    ;;
+esac

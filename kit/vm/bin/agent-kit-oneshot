@@ -4,7 +4,12 @@
 # daily cycle cap is used up).
 # Run with sudo (the console calls it over ssh).
 #
-#   agent-kit-oneshot start <id> <from>   job text on stdin, as for `agent-kit-inbox put`
+#   agent-kit-oneshot start <id> <from> [--plan]   job on stdin, as for `agent-kit-inbox put`;
+#                                         with --plan (an id with -p-) a planning cycle, focus text
+#                                         on stdin, stored by `agent-kit-backlog plan` (kit 0.10)
+#   agent-kit-oneshot at <unix> <id> <from> [--plan]   the same, started by the tick at that time
+#   agent-kit-oneshot unat <id>           cancel a job set for a time
+#   agent-kit-oneshot due                 start jobs whose time has come (run every minute by agent-kit-tick)
 #   agent-kit-oneshot finish              end the job (run by agent-kit-lead.service when a cycle ends)
 #   agent-kit-oneshot reap                end a job that lost its cycle (run every minute by agent-kit-tick)
 #   agent-kit-oneshot show
@@ -38,7 +43,14 @@ IN=$STATE/inbox
 MARK=$STATE/oneshot
 LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
 ID_RE='^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$'
+PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
+# Either kind, for the marker and the control line.
+ANY_RE='^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}$'
 REAP_AFTER=120
+AT=$STATE/oneshot-at
+# A job set for a time waits at most this long for a busy team, then is dropped.
+AT_GRACE=1800
+MAX_JOB=$((200 * 1024 * 1024))
 
 timer_held=0 # start stopped the lead timer: a refusal must turn it back on
 die() {
@@ -69,7 +81,7 @@ end_job() { # $1 = how it ended, for the control line
   local id after
   read -r id _ after _ < "$MARK"
   rm -f "$MARK"
-  [[ ${id:-} =~ $ID_RE ]] || id=unknown
+  [[ ${id:-} =~ $ANY_RE ]] || id=unknown
   if grep -q '^run oneshot ' "$STATE/control" 2>/dev/null; then
     if [ "${after:-}" = run ]; then
       control "run after one-shot job $id $1 $(date -Is)"
@@ -84,12 +96,15 @@ end_job() { # $1 = how it ended, for the control line
 
 case "${1:-show}" in
   start)
-    id=${2:-} from=${3:-}
-    [[ $id =~ $ID_RE ]] || die "bad id"
+    id=${2:-} from=${3:-} kind=job
+    [ "${4:-}" = --plan ] && kind=plan
+    if [ "$kind" = plan ]; then [[ $id =~ $PLAN_RE ]] || die "bad plan id"
+    else [[ $id =~ $ID_RE ]] || die "bad id"; fi
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     exec 8> "$LOCK"
     flock 8
     [ ! -e "$MARK" ] || die "a one-shot job is already in progress"
+    [ ! -e "$STATE/chat" ] || die "a chat turn with the lead is running. Try again when it has answered"
     # On a halted or an idle team. A cycle that is running takes inbox messages.
     after=halt
     if ! grep -q '^stop' "$STATE/control" 2>/dev/null; then
@@ -104,12 +119,24 @@ case "${1:-show}" in
     # The job is an owner message like any other: same checks, same root-owned
     # place. When a job is started again it is already there.
     stored=0
-    if [ ! -d "$IN/$id" ]; then
-      "$BIN/agent-kit-inbox" put "$id" oneshot "$from" > /dev/null || die "the job was not accepted"
-      stored=1
+    if [ "$kind" = plan ]; then
+      # A planning request is not an owner message: normal cycles must not
+      # see it in their inbox. It lives in the backlog folder.
+      jobdir=$STATE/backlog/plans/$id
+      if [ ! -d "$jobdir" ]; then
+        "$BIN/agent-kit-backlog" plan "$id" "$from" > /dev/null || die "the planning request was not accepted"
+        stored=1
+      fi
+      [ -f "$jobdir/request.md" ] || die "no such planning request: $id"
+    else
+      jobdir=$IN/$id
+      if [ ! -d "$IN/$id" ]; then
+        "$BIN/agent-kit-inbox" put "$id" oneshot "$from" > /dev/null || die "the job was not accepted"
+        stored=1
+      fi
+      [ -f "$IN/$id/message.md" ] || die "no such message: $id"
+      [ ! -e "$IN/.closed/$id" ] || die "that job is closed"
     fi
-    [ -f "$IN/$id/message.md" ] || die "no such message: $id"
-    [ ! -e "$IN/.closed/$id" ] || die "that job is closed"
     # A stop time that has already passed would keep the cycle from starting.
     if [ -f "$STATE/halt-at" ]; then
       read -r due _ < "$STATE/halt-at"
@@ -126,12 +153,17 @@ case "${1:-show}" in
       # and be picked up by some later cycle.
       rm -f "$MARK"
       control "$before"
-      [ "$stored" = 1 ] && rm -rf -- "${IN:?}/$id"
+      [ "$stored" = 1 ] && rm -rf -- "${jobdir:?}"
       [ "$after" = run ] && die "could not start the cycle. The team runs on as before"
       die "could not start the cycle. The team is still halted"
     fi
     timer_held=0 # off for the job: end_job turns it back on
-    if [ "$after" = run ]; then
+    # Started by hand while it was set for a time: it must not start again then.
+    rm -f -- "$AT/$id" "$AT/$id.job"
+    if [ "$kind" = plan ]; then
+      [ "$after" = run ] && echo "planning cycle $id started. The team runs on when it ends" \
+        || echo "planning cycle $id started. The team halts again when it ends"
+    elif [ "$after" = run ]; then
       echo "one-shot job $id started. The team runs on when it ends"
     else
       echo "one-shot job $id started. The team halts again when it ends"
@@ -159,6 +191,71 @@ case "${1:-show}" in
     end_job "lost its cycle"
     ;;
 
+  at)
+    when=${2:-} id=${3:-} from=${4:-} flag=${5:-}
+    [[ $when =~ ^[0-9]{9,11}$ ]] || die "bad time"
+    if [ "$flag" = --plan ]; then [[ $id =~ $PLAN_RE ]] || die "bad plan id"
+    else [ -z "$flag" ] || die "unknown flag: $flag"; [[ $id =~ $ID_RE ]] || die "bad id"; fi
+    [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
+    now=$(date +%s)
+    [ "$when" -ge $((now + 30)) ] && [ "$when" -le $((now + 31 * 86400)) ] || die "the time must be between now and 31 days ahead"
+    [ ! -e "$AT/$id" ] || die "that job is already set for a time"
+    [ ! -e "$IN/$id" ] && [ ! -e "$STATE/backlog/plans/$id" ] || die "that job was already started"
+    install -d -m 700 "$AT"
+    # The job is kept here, not in the inbox, until its time: a normal cycle
+    # in between must not see it as an open owner message.
+    head -c $((MAX_JOB + 1)) > "$AT/.$id.job" || die "could not store the job"
+    [ "$(stat -c %s "$AT/.$id.job")" -le "$MAX_JOB" ] || { rm -f "$AT/.$id.job"; die "the job is too large"; }
+    mv "$AT/.$id.job" "$AT/$id.job"
+    printf '%s %s\n' "$when" "$from" > "$AT/.$id.tmp"
+    mv "$AT/.$id.tmp" "$AT/$id"
+    echo "job $id set for $(date -d "@$when" -Is)"
+    ;;
+
+  unat)
+    id=${2:-}
+    [[ $id =~ $ANY_RE ]] || die "bad id"
+    [ -e "$AT/$id" ] || die "no job set for a time: $id"
+    rm -f -- "$AT/$id" "$AT/$id.job"
+    echo "job $id no longer set for a time"
+    ;;
+
+  due)
+    [ -d "$AT" ] || exit 0
+    now=$(date +%s)
+    for f in "$AT"/2*; do
+      [ -f "$f" ] || continue
+      id=$(basename "$f")
+      [[ $id =~ $ANY_RE ]] || continue
+      read -r when from _ < "$f"
+      [[ ${when:-} =~ ^[0-9]{9,11}$ ]] || { rm -f -- "$f" "$f.job"; continue; }
+      [ "$now" -ge "$when" ] || continue
+      flag=(); [[ $id =~ $PLAN_RE ]] && flag=(--plan)
+      if [ $((now - when)) -gt "$AT_GRACE" ]; then
+        rm -f -- "$f" "$f.job"
+        printf '%s job:%s %s missed: the team was busy for %s minutes after the set time\n' \
+          "$(date -u +%FT%TZ)" "$id" "$(date +%F)" $((AT_GRACE / 60)) >> "$STATE/schedule.log"
+        continue
+      fi
+      if out=$("$0" start "$id" "$from" "${flag[@]}" < "$f.job" 2>&1); then
+        rm -f -- "$f" "$f.job"
+        printf '%s job:%s %s started\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" >> "$STATE/schedule.log"
+      fi
+      : "$out"
+      break # one start per tick: the next waits for this one to end
+    done
+    ;;
+
+  list-at)
+    for f in "$AT"/2*; do
+      [ -f "$f" ] || continue
+      id=$(basename "$f")
+      [[ $id =~ $ANY_RE ]] || continue
+      read -r when from _ < "$f"
+      echo "$id $when $from"
+    done
+    ;;
+
   show)
     if [ -f "$MARK" ]; then
       read -r id since after _ < "$MARK"
@@ -169,6 +266,6 @@ case "${1:-show}" in
     ;;
 
   *)
-    die "usage: agent-kit-oneshot start <id> <from> | finish | reap | show"
+    die "usage: agent-kit-oneshot start <id> <from> [--plan] | at <unix> <id> <from> [--plan] | unat <id> | due | list-at | finish | reap | show"
     ;;
 esac
