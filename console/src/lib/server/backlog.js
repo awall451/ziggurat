@@ -84,7 +84,23 @@ export function kitHasBacklog(version) {
  * time (epoch seconds). A refusal by the VM throws and keeps nothing. With no
  * clear answer the plan is kept as "not started" (it may be running).
  */
-export async function startPlan(user, project, { focus = '', at = null } = {}) {
+/**
+ * Give one start of the team's schedule to a backlog job (kit 0.14.1): that
+ * start is skipped once, with a line in the schedule log. `skip` is
+ * {slot: 'days@HH:MM', date: 'YYYY-MM-DD'} in the schedule's own time zone.
+ */
+async function skipStart(user, project, skip) {
+  if (!skip) return;
+  const slot = String(skip.slot || '');
+  const date = String(skip.date || '');
+  if (!/^[a-z,]{3,27}@[0-9]{2}:[0-9]{2}$/.test(slot) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Bad start time to skip');
+  const res = await kit(project, 'agent-kit-schedule', ['skip', slot, date]);
+  const ok = res.code === 0;
+  audit(user, project.id, 'schedule-skip', { slot, date }, { ok, detail: ok ? null : (res.stderr || '').trim().slice(-200) });
+  if (!ok) throw new Error(`The job is set, but that cycle could not be skipped: ${(res.stderr || `exit ${res.code}`).trim().slice(-200)}`);
+}
+
+export async function startPlan(user, project, { focus = '', at = null, skip = null } = {}) {
   const text = String(focus || '').trim();
   if (text.length > MAX_FOCUS) throw new Error('The focus text is too long');
   const id = `${stamp()}-p-${hex()}`;
@@ -103,6 +119,7 @@ export async function startPlan(user, project, { focus = '', at = null } = {}) {
     const status = await getStatus(project, { fresh: true }).catch(() => null);
     if (status?.oneshot?.id === id) started = true;
   }
+  if (started && epoch) await skipStart(user, project, skip);
   const plan = {
     id,
     focus: text,
@@ -159,7 +176,7 @@ export async function cancelAt(user, project, id) {
  * Move a job or a planning cycle that waits for its time: the VM forgets the
  * old time (unat) and gets the stored job again for the new one (at).
  */
-export async function moveAt(user, project, id, at) {
+export async function moveAt(user, project, id, at, skip = null) {
   const epoch = checkTime(at);
   if (PLAN_RE.test(id)) {
     const file = path.join(plansDir(project), `${id}.json`);
@@ -188,8 +205,9 @@ export async function moveAt(user, project, id, at) {
       if (d?.issueId) noteJob(project, d.issueId, { id, scheduledFor: epoch });
     }
   }
+  await skipStart(user, project, skip);
   invalidateStatus(project.id);
-  return { ok: true, detail: 'Moved.' };
+  return { ok: true, detail: skip ? 'Moved, and that cycle is skipped.' : 'Moved.' };
 }
 
 function checkTime(at) {
@@ -334,10 +352,11 @@ export async function runNow(user, project, pid, oneshot) {
 }
 
 /** Set an approved item for a time: the VM starts the job then (agent-kit-oneshot at). */
-export async function runAt(user, project, pid, at) {
+export async function runAt(user, project, pid, at, skip = null) {
   const { prop, issueId } = approvedProposal(project, pid);
   const epoch = checkTime(at);
   const out = await scheduleOneshot(project, user, { text: jobText(prop, issueId), epoch });
+  if (out.scheduled) await skipStart(user, project, skip);
   if (issueId && out.scheduled) noteJob(project, issueId, { id: out.id, scheduledFor: epoch });
   audit(user, project.id, 'job-at', { pid, id: out.id, at: new Date(epoch * 1000).toISOString() }, { ok: out.scheduled, detail: out.error });
   writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at: new Date().toISOString(), scheduledFor: out.scheduled ? epoch : null, minutes: prop.minutes });
@@ -389,6 +408,22 @@ function proposal(project, pid) {
   return parseProposal(path.join(outDir(project), `${pid}.md`), pid, knownPlans(project));
 }
 
+/** Ids of jobs set for a time that the VM dropped (`job:<id> <date> missed…` in schedule.log). */
+function missedJobs(project) {
+  const out = new Set();
+  let text = '';
+  try {
+    text = fs.readFileSync(path.join(project.paths?.fleet || '', 'schedule.log'), 'utf8');
+  } catch {
+    return out;
+  }
+  for (const line of text.split('\n').slice(-600)) {
+    const m = /^\S+ job:([0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}) \S+ missed/.exec(line);
+    if (m) out.add(m[1]);
+  }
+  return out;
+}
+
 function ledger(project) {
   const file = path.join(project.paths?.fleet || '', 'cycles.jsonl');
   try {
@@ -414,6 +449,7 @@ const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0 && v < 10_000
 /** Everything the Backlog tab shows, newest plan first. */
 export function list(project, status = null) {
   const plans = knownPlans(project);
+  const missed = missedJobs(project);
   const lines = ledger(project);
   const props = [];
   for (const pid of names(outDir(project), PID_RE, '.md')) {
@@ -434,7 +470,10 @@ export function list(project, status = null) {
       state,
       decidedRev: d?.rev ?? null,
       taken,
-      run: run && typeof run.jobId === 'string' ? { jobId: run.jobId, rev: run.rev, at: run.at, scheduledFor: run.scheduledFor || null, cancelled: !!run.cancelled } : null
+      run:
+        run && typeof run.jobId === 'string'
+          ? { jobId: run.jobId, rev: run.rev, at: run.at, scheduledFor: run.scheduledFor || null, cancelled: !!run.cancelled, missed: missed.has(run.jobId) }
+          : null
     });
   }
   const ids = [...plans].sort().reverse();
@@ -486,6 +525,7 @@ export function list(project, status = null) {
  */
 export function jobsFor(project, status = null, now = Date.now()) {
   const plans = knownPlans(project);
+  const missed = missedJobs(project);
   const lines = ledger(project);
   const atJobs = Array.isArray(status?.atJobs) ? status.atJobs : [];
   const atById = new Map(atJobs.map((j) => [j.id, j]));
@@ -521,6 +561,9 @@ export function jobsFor(project, status = null, now = Date.now()) {
       add({ ...base, state: 'running', start: Number.isFinite(runningSince) ? runningSince : Date.parse(run.at) });
     } else if (atById.has(run.jobId)) {
       add({ ...base, state: 'set', start: atById.get(run.jobId).at * 1000 });
+    } else if (run.scheduledFor && missed.has(run.jobId)) {
+      // The team was busy for hours after the set time: the VM dropped it.
+      add({ ...base, state: 'missed', start: run.scheduledFor * 1000 });
     } else if (!run.scheduledFor && Date.parse(run.at) > now - 15 * 60000) {
       // Just sent with Run now: the VM's status may not show it yet.
       add({ ...base, state: 'running', start: Date.parse(run.at) });

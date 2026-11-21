@@ -9,7 +9,7 @@ import path from 'node:path';
 import { CONFIG_DIR, listProjects, readJson, writeJson } from './config.js';
 import { kit } from './ssh.js';
 import { audit } from './audit.js';
-import { invalidateStatus, kitAtLeast } from './live.js';
+import { invalidateStatus, kitAtLeast, peekStatus } from './live.js';
 import { readCycles } from './aggregate.js';
 import { statusSoon } from './view.js';
 import { jobsFor } from './backlog.js';
@@ -148,6 +148,10 @@ export async function setSchedule(user, project, input) {
     schedule = validateSchedule(input);
   } catch (e) {
     throw fail(400, e.message);
+  }
+  // One-day changes (move or skip one start) need kit 0.14.1; an older kit refuses the whole schedule.
+  if (schedule.changes.length && !kitAtLeast(peekStatus(project.id)?.kitVersion, '0.14.1')) {
+    throw fail(400, `Changing one day only needs kit 0.14.1 on ${project.name}'s VM. Change every day instead, or upgrade the kit.`);
   }
   const res = await kit(project, 'agent-kit-schedule', ['set'], { input: formatScheduleText(schedule), timeout: 60000 });
   const ok = res.code === 0;

@@ -22,7 +22,7 @@ export async function POST({ request, locals }) {
     if (b.action === 'settings') return schedule.saveSettings(user, { timezone: b.timezone, quiet: b.quiet, clock: b.clock });
     const project = typeof b.project === 'string' ? getProject(b.project) : null;
     if (!project) error(404, 'No such project');
-    if (b.action === 'set') return schedule.setSchedule(user, project, { tz: b.tz, slots: b.slots });
+    if (b.action === 'set') return schedule.setSchedule(user, project, { tz: b.tz, slots: b.slots, changes: b.changes });
     if (b.action === 'clear') return schedule.clearSchedule(user, project);
     error(400, 'Unknown action');
   });

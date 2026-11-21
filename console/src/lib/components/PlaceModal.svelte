@@ -6,13 +6,15 @@
   import { onMount } from 'svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Timeline from '$lib/components/Timeline.svelte';
-  import { plan, quietIntervals, wallClock, clockLabel, zoneLabel, validTimeZone } from '$lib/schedule.js';
+  import ConflictChoice from '$lib/components/ConflictChoice.svelte';
+  import { plan, quietIntervals, wallClock, clockLabel, zoneLabel, validTimeZone, conflictsAt, placeAfter, dateString } from '$lib/schedule.js';
 
   let { project, title, minutes, busy = false, onclose = () => {}, onset = () => {} } = $props();
 
   let tl = $state(null);
   let error = $state('');
   let picked = $state(null); // ms
+  let hit = $state(null); // what the picked time runs into, when Set found something
   async function load(date = null) {
     error = '';
     try {
@@ -53,6 +55,28 @@
     }));
   });
   const quiet = $derived(tl ? quietIntervals(settings, range.from, range.to) : []);
+  const mine = $derived(rows.find((r) => r.id === project) || null);
+  const team = $derived(tl?.projects.find((x) => x.id === project) || null);
+  const clockAt = (ms) => {
+    const c = wallClock(settings.timezone, ms);
+    return clockLabel(`${String(c.H).padStart(2, '0')}:${String(c.M).padStart(2, '0')}`, settings.clock);
+  };
+  // Set: first look at what the job would run into on its row.
+  function set() {
+    const found = conflictsAt(mine?.planned, mine?.jobs, picked, minutes, null, tl.now);
+    if (found.length) return (hit = found);
+    onset(Math.round(picked / 1000), null);
+  }
+  function after() {
+    picked = placeAfter(mine?.planned, mine?.jobs, picked, minutes, null, tl.now);
+    hit = null;
+  }
+  // Skip that one cycle: only when the job runs into one planned cycle and nothing else.
+  const canSkip = $derived(!!hit && hit.length === 1 && hit[0].kind === 'cycle' && !!team?.schedule?.tz);
+  function skip() {
+    const c = hit[0];
+    onset(Math.round(picked / 1000), { slot: c.slot, date: dateString(wallClock(team.schedule.tz, c.at)) });
+  }
   const two = (n) => String(n).padStart(2, '0');
   function when(ms) {
     const c = wallClock(settings.timezone, ms);
@@ -79,8 +103,11 @@
       </div>
     </div>
     <div class="panel tlbox">
-      <Timeline {rows} {range} tz={settings.timezone} clock={settings.clock} {quiet} now={tl.now} ghost={{ project, minutes, at: picked }} onpick={(_, ms) => (picked = ms)} onzoom={() => {}} onpan={() => {}} />
+      <Timeline {rows} {range} tz={settings.timezone} clock={settings.clock} {quiet} now={tl.now} ghost={{ project, minutes, at: picked }} onpick={(_, ms) => ((picked = ms), (hit = null))} onzoom={() => {}} onpan={() => {}} />
     </div>
+    {#if hit}
+      <ConflictChoice conflicts={hit} team={team?.name} {clockAt} {busy} onafter={after} onskip={canSkip ? skip : null} oncancel={() => (hit = null)} />
+    {/if}
     <div class="actions">
       {#if picked}
         <span>Starts <b>{when(picked)}</b>, ends about <b>{when(picked + minutes * 60000)}</b> (estimate {minutes} min). <span class="dim small">Drag the bar, or click elsewhere in the row, to change it.</span></span>
@@ -89,7 +116,7 @@
       {/if}
       <span class="spacer"></span>
       <button class="btn quiet" onclick={onclose}>Cancel</button>
-      <button class="btn primary" disabled={!picked || busy} onclick={() => onset(Math.round(picked / 1000))}>Set</button>
+      <button class="btn primary" disabled={!picked || busy || !!hit} onclick={set}>Set</button>
     </div>
   {/if}
 </Modal>

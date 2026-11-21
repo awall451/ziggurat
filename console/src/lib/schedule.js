@@ -50,22 +50,47 @@ export function validateSchedule(input) {
     slots.push(slot);
   }
   slots.sort((a, b) => a.time.localeCompare(b.time) || slotId(a).localeCompare(slotId(b)));
-  return { tz: input.tz, slots };
+  // One-day changes (kit 0.14.1), like editing one event of a recurring entry:
+  // {kind: 'move', date, slot, time} or {kind: 'skip', date, slot}. Changes of
+  // slots that no longer exist are dropped; one change per slot and day.
+  const ids = new Set(slots.map(slotId));
+  const changes = [];
+  const seenChange = new Set();
+  for (const c of Array.isArray(input.changes) ? input.changes : []) {
+    if (!c || !['move', 'skip'].includes(c.kind) || !/^\d{4}-\d{2}-\d{2}$/.test(c.date || '') || !ids.has(c.slot)) continue;
+    if (c.kind === 'move' && !TIME_RE.test(c.time || '')) continue;
+    const key = `${c.date} ${c.slot}`;
+    if (seenChange.has(key)) continue;
+    seenChange.add(key);
+    changes.push(c.kind === 'move' ? { kind: 'move', date: c.date, slot: c.slot, time: c.time } : { kind: 'skip', date: c.date, slot: c.slot });
+  }
+  if (changes.length > 200) throw new Error('at most 200 one-day changes');
+  changes.sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot));
+  return { tz: input.tz, slots, changes };
 }
 
 /** The VM's text form. */
 export function formatScheduleText(schedule) {
   const s = validateSchedule(schedule);
-  return [`tz ${s.tz}`, ...s.slots.map((x) => `slot ${x.days.join(',')} ${x.time}`)].join('\n') + '\n';
+  return (
+    [
+      `tz ${s.tz}`,
+      ...s.slots.map((x) => `slot ${x.days.join(',')} ${x.time}`),
+      ...s.changes.map((c) => (c.kind === 'move' ? `move ${c.date} ${c.slot} ${c.time}` : `skip ${c.date} ${c.slot}`))
+    ].join('\n') + '\n'
+  );
 }
 
 /** Read the VM's text form. Anything that does not fit is left out; null when nothing usable is there. */
 export function parseScheduleText(text) {
   let tz = null;
   const slots = [];
+  const changes = [];
   for (const line of String(text || '').split('\n')) {
     const w = line.trim().split(/\s+/);
-    if (w[0] === 'tz' && w.length === 2 && validTimeZone(w[1])) tz = w[1];
+    if (w[0] === 'move' && w.length === 4) changes.push({ kind: 'move', date: w[1], slot: w[2], time: w[3] });
+    else if (w[0] === 'skip' && w.length === 3) changes.push({ kind: 'skip', date: w[1], slot: w[2] });
+    else if (w[0] === 'tz' && w.length === 2 && validTimeZone(w[1])) tz = w[1];
     else if (w[0] === 'slot' && w.length === 3 && TIME_RE.test(w[2])) {
       const days = cleanDays(w[1].split(','));
       if (days) slots.push({ days, time: w[2] });
@@ -73,7 +98,7 @@ export function parseScheduleText(text) {
   }
   if (!tz || !slots.length) return null;
   try {
-    return validateSchedule({ tz, slots: slots.slice(0, MAX_SLOTS) });
+    return validateSchedule({ tz, slots: slots.slice(0, MAX_SLOTS), changes: changes.slice(0, 200) });
   } catch {
     return null;
   }
@@ -211,11 +236,16 @@ export function occurrences(schedule, from, to) {
   for (let i = 0; i < days; i++) {
     const date = addDays(first, i);
     const name = dayName(date);
+    const ds = dateString(date);
     schedule.slots.forEach((slot, index) => {
       if (slot.days[0] !== 'daily' && !slot.days.includes(name)) return;
-      const [H, M] = slot.time.split(':').map(Number);
+      const id = slotId(slot);
+      const change = (schedule.changes || []).find((c) => c.date === ds && c.slot === id);
+      if (change?.kind === 'skip') return;
+      const time = change?.kind === 'move' ? change.time : slot.time;
+      const [H, M] = time.split(':').map(Number);
       const at = instantOf(schedule.tz, date.y, date.m, date.d, H, M);
-      if (at != null && at >= from && at < to) out.push({ at, slot: index, id: slotId(slot) });
+      if (at != null && at >= from && at < to) out.push({ at, slot: index, id, date: ds, moved: change?.kind === 'move' });
     });
   }
   return out.sort((a, b) => a.at - b.at);
@@ -423,4 +453,36 @@ export function plan(projects, settings, from, to) {
     }
   }
   return { planned, warnings };
+}
+
+/**
+ * What a job placed at [start, start + minutes) would run into on its team's
+ * row: planned cycle starts (with their typical length) and other backlog jobs
+ * that are set or running. `ignore` is the id of a job being moved.
+ * [{kind: 'cycle', at, end, slot} | {kind: 'job', at, end, title}]
+ */
+export function conflictsAt(planned = [], jobs = [], start, minutes, ignore = null, now = Date.now()) {
+  const end = start + minutes * 60000;
+  const out = [];
+  for (const b of planned) {
+    if (b.at < end && start < b.end) out.push({ kind: 'cycle', at: b.at, end: b.end, slot: b.id });
+  }
+  for (const j of jobs) {
+    if (j.id === ignore || (j.state !== 'set' && j.state !== 'running')) continue;
+    const e = j.state === 'running' ? Math.max(j.estEnd, now) : j.estEnd;
+    if (j.start < end && start < e) out.push({ kind: 'job', at: j.start, end: e, title: j.title });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/** The first start after `start` (on the quarter hour) where the job runs into nothing. */
+export function placeAfter(planned, jobs, start, minutes, ignore = null, now = Date.now()) {
+  const Q = 15 * 60000;
+  let t = start;
+  for (let i = 0; i < 50; i++) {
+    const hit = conflictsAt(planned, jobs, t, minutes, ignore, now);
+    if (!hit.length) return t;
+    t = Math.ceil(Math.max(...hit.map((h) => h.end)) / Q) * Q;
+  }
+  return t;
 }
