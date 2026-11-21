@@ -181,7 +181,7 @@
         <div class="row">
           <h2>{replyTo ? `Answer ${lead}'s question` : `Message to ${lead}`}</h2>
           {#if replyTo}
-            <button class="btn quiet small" onclick={() => (replyTo = null)}>Not an answer</button>
+            <button class="btn quiet sm" onclick={() => (replyTo = null)}>Not an answer</button>
           {/if}
         </div>
       <div class="panel block lit" class:drag={dragging} ondragover={(e) => { e.preventDefault(); dragging = true; }} ondragleave={() => (dragging = false)} ondrop={drop} role="group" aria-label="New message">
@@ -206,19 +206,18 @@
             {#each files as f, i (f.token)}
               <li class="well">
                 <span class="mono small">{f.name}</span><span class="dim small">{kb(f.size)}</span>
-                <button class="x" onclick={() => (files = files.filter((_, j) => j !== i))} aria-label="Remove {f.name}"><Icon name="x" size={12} /></button>
+                <button class="btn quiet icon sm" onclick={() => (files = files.filter((_, j) => j !== i))} aria-label="Remove {f.name}"><Icon name="x" size={12} /></button>
               </li>
             {/each}
           </ul>
         {/if}
 
-        <div class="row">
-          <div class="left">
-            <input bind:this={picker} type="file" multiple hidden onchange={(e) => { upload([...e.currentTarget.files]); e.currentTarget.value = ''; }} />
-            <button class="btn quiet" onclick={() => picker.click()}>Attach files</button>
-            <span class="dim small">Or paste a screenshot, or drop files here. Up to 8, 20 MB each.</span>
-          </div>
-          <button class="btn send" onclick={send} disabled={busy || !text.trim()}>{busy ? 'Sending…' : `Send ${tier}`}</button>
+        <div class="actions">
+          <input bind:this={picker} type="file" multiple hidden onchange={(e) => { upload([...e.currentTarget.files]); e.currentTarget.value = ''; }} />
+          <button class="btn quiet" onclick={() => picker.click()}>Attach files</button>
+          <span class="dim small">Or paste a screenshot, or drop files here. Up to 8, 20 MB each.</span>
+          <span class="spacer"></span>
+          <button class="btn primary send" onclick={send} disabled={busy || !text.trim()}>{busy ? 'Sending…' : `Send ${tier}`}</button>
         </div>
 
         {#if p.status.state === 'halted'}
@@ -285,10 +284,10 @@
             </div>
           {/if}
           {#if m.error || (m.open && m.delivered)}
-            <footer>
-              {#if m.error && m.tier !== 'oneshot'}<button class="btn quiet small" onclick={() => act('send', { retry: m.id })}>Retry</button>{/if}
-              {#if canStart(m)}<button class="btn quiet small" onclick={() => startJob(m)} disabled={busy}>{m.delivered ? 'Start it again…' : 'Start the job…'}</button>{/if}
-              {#if m.open && !m.closed}<button class="btn quiet small" onclick={() => act('close', { id: m.id })}>Close message</button>{/if}
+            <footer class="actions end">
+              {#if m.open && !m.closed}<button class="btn quiet sm" onclick={() => act('close', { id: m.id })}>Close message</button>{/if}
+              {#if m.error && m.tier !== 'oneshot'}<button class="btn sm" onclick={() => act('send', { retry: m.id })}>Retry</button>{/if}
+              {#if canStart(m)}<button class="btn sm" onclick={() => startJob(m)} disabled={busy}>{m.delivered ? 'Start it again…' : 'Start the job…'}</button>{/if}
             </footer>
           {/if}
         </article>
@@ -312,7 +311,7 @@
           <!-- sanitised by md() -->
           <div class="md">{@html md(a.text, { breaks: true })}</div>
           <div class="well default small"><span class="dim">If you do not answer, {lead} will:</span> {a.default}</div>
-          {#if a.open && p.canControl}<footer><button class="btn small" onclick={() => answer(a)}>Answer</button></footer>{/if}
+          {#if a.open && p.canControl}<footer class="actions end"><button class="btn primary sm" onclick={() => answer(a)}>Answer</button></footer>{/if}
         </article>
       {:else}
         <p class="dim">No questions. When {lead} is unsure about a decision it can ask here, and it carries on with a stated default meanwhile.</p>
@@ -444,28 +443,8 @@
     gap: 8px;
     padding: 4px 6px 4px 10px;
   }
-  .x {
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--ink-2);
-    cursor: pointer;
-  }
   .send {
     min-width: 140px;
-  }
-  .btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .btn.small {
-    min-height: 30px;
-    font-size: 13px;
   }
   .quote,
   .default {

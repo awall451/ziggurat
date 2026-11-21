@@ -300,7 +300,7 @@
         </p>
       {:else if st.state === 'halted' || !st.timerEnabled}
         <p>The team is stopped. Nothing spends tokens until you resume it{p.canOneshot ? ' or start a one-shot job' : ''}.</p>
-        <div><button class="btn go" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
+        <div class="actions"><button class="btn primary" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
       {/if}
       {#if st.schedule}
         <p class="small dim">
@@ -322,21 +322,21 @@
           {/if}
           No new cycle starts.{st.haltAfter.reason ? ` Reason: ${st.haltAfter.reason}.` : ''}
         </p>
-        <div><button class="btn quiet" onclick={() => act({ action: 'halt-after-clear' }, 'halt-after-clear')} disabled={!!busy}>Cancel: keep the team running</button></div>
+        <div class="actions"><button class="btn quiet" onclick={() => act({ action: 'halt-after-clear' }, 'halt-after-clear')} disabled={!!busy}>Cancel: keep the team running</button></div>
       {/if}
       {#if st.state !== 'halted'}
         <label class="stack">
           <span class="small dim">Reason (shown in the control file and the audit log)</span>
           <input class="field" bind:value={haltReason} placeholder="Weekly usage" maxlength="120" />
         </label>
-        <div class="halts">
-          <button class="btn stop" onclick={askHalt} disabled={!!busy}>Halt now…</button>
+        {#if p.canHaltAfter && !st.haltAfter && !st.oneshot && st.leadActive}
+          <label class="check small dim"><input type="checkbox" bind:checked={wrapUp} /> With "Halt after this cycle": also ask {lead} to wrap up</label>
+        {/if}
+        <div class="actions">
           {#if p.canHaltAfter && !st.haltAfter && !st.oneshot}
             <button class="btn" onclick={askHaltAfter} disabled={!!busy}>{st.leadActive ? 'Halt after this cycle…' : 'Halt after the gate…'}</button>
-            {#if st.leadActive}
-              <label class="check small dim"><input type="checkbox" bind:checked={wrapUp} /> also ask {lead} to wrap up</label>
-            {/if}
           {/if}
+          <button class="btn danger" onclick={askHalt} disabled={!!busy}>Halt now…</button>
         </div>
         {#if !p.canHaltAfter}
           <p class="dim small">Halting after the cycle needs kit 0.5 on the VM (it runs {st.kitVersion || 'an older kit'}).</p>
@@ -384,17 +384,17 @@
             {#each jobFiles as f, i (f.token)}
               <li class="well">
                 <span class="mono small">{f.name}</span>
-                <button class="x" onclick={() => (jobFiles = jobFiles.filter((_, j) => j !== i))} aria-label="Remove {f.name}">×</button>
+                <button class="btn quiet icon sm" onclick={() => (jobFiles = jobFiles.filter((_, j) => j !== i))} aria-label="Remove {f.name}">×</button>
               </li>
             {/each}
           </ul>
         {/if}
-        <div class="jobrow">
+        <div class="actions">
           <input bind:this={jobPicker} type="file" multiple hidden onchange={(e) => { attach([...e.currentTarget.files]); e.currentTarget.value = ''; }} />
           <button class="btn quiet" onclick={() => jobPicker.click()} disabled={!!busy}>Attach files</button>
           <span class="dim small">Or paste a screenshot. Up to 8, 20 MB each.</span>
-          <span class="grow"></span>
-          <button class="btn go" onclick={askJob} disabled={!!busy || !jobText.trim()}>Start one-shot job…</button>
+          <span class="spacer"></span>
+          <button class="btn primary" onclick={askJob} disabled={!!busy || !jobText.trim()}>Start one-shot job…</button>
         </div>
       {/if}
     </section>
@@ -404,13 +404,13 @@
       <p class="dim small">Halts the team at that moment, even mid-cycle. Survives a reboot of the VM.</p>
       {#if st.haltAt}
         <p>Scheduled for <b>{when(new Date(st.haltAt.epoch * 1000).toISOString())}</b>{st.haltAt.reason ? ` (${st.haltAt.reason})` : ''}.</p>
-        <div><button class="btn quiet" onclick={() => act({ action: 'halt-at-clear' }, 'clear')} disabled={!!busy}>Cancel the scheduled stop</button></div>
+        <div class="actions"><button class="btn quiet" onclick={() => act({ action: 'halt-at-clear' }, 'clear')} disabled={!!busy}>Cancel the scheduled stop</button></div>
       {:else}
         <div class="pair">
           <label class="stack"><span class="small dim">When (your local time)</span><input class="field" type="datetime-local" bind:value={stopAt} /></label>
           <label class="stack"><span class="small dim">Reason</span><input class="field" bind:value={stopWhy} placeholder="Overnight window" maxlength="120" /></label>
         </div>
-        <div><button class="btn" onclick={schedule} disabled={!!busy}>Schedule stop</button></div>
+        <div class="actions end"><button class="btn primary" onclick={schedule} disabled={!!busy || !stopAt}>Schedule stop</button></div>
       {/if}
     </section>
 
@@ -441,6 +441,7 @@
               <input class="field mono" value={edits[key] ?? c.caps[key] ?? ''} oninput={(e) => (edits = { ...edits, [key]: e.currentTarget.value })} />
               <button
                 class="btn quiet"
+                class:primary={edits[key] != null && edits[key] !== c.caps[key]}
                 disabled={!!busy || edits[key] == null || edits[key] === c.caps[key]}
                 onclick={() => act({ action: 'cap', key, value: edits[key] }, key).then(() => (edits = { ...edits, [key]: undefined }))}
               >Save</button>
@@ -456,10 +457,10 @@
       <p class="dim small">The gate tests submitted branches and moves main. It also pauses while the team is halted.</p>
       {#if st.gatePaused}
         <p>The gate is paused. Submitted branches wait.</p>
-        <div><button class="btn" onclick={() => act({ action: 'gate', on: true }, 'gate')} disabled={!!busy}>Resume the gate</button></div>
+        <div class="actions"><button class="btn" onclick={() => act({ action: 'gate', on: true }, 'gate')} disabled={!!busy}>Resume the gate</button></div>
       {:else}
         <p>The gate is running.</p>
-        <div><button class="btn quiet" onclick={() => act({ action: 'gate', on: false, reason: 'owner' }, 'gate')} disabled={!!busy}>Pause the gate</button></div>
+        <div class="actions"><button class="btn quiet" onclick={() => act({ action: 'gate', on: false, reason: 'owner' }, 'gate')} disabled={!!busy}>Pause the gate</button></div>
       {/if}
       <p class="dim small">Kit {st.kitVersion} · main {st.main?.sha || '–'} · {st.ready.length} branch{st.ready.length === 1 ? '' : 'es'} submitted · {st.worktrees ?? 0} worktrees</p>
     </section>
@@ -483,7 +484,7 @@
         {data.tokenSaved ? '' : 'No token is saved in the console (claude-token in its config folder).'}
       </p>
       {#if data.tokenSaved}
-        <div><button class="btn quiet" onclick={askToken} disabled={!!busy}>{c.auth.tokenStored ? 'Replace the token on the VM…' : 'Apply the saved token…'}</button></div>
+        <div class="actions"><button class="btn quiet" onclick={askToken} disabled={!!busy}>{c.auth.tokenStored ? 'Replace the token on the VM…' : 'Apply the saved token…'}</button></div>
       {/if}
     {:else}
       <p class="dim">This VM's kit cannot report its sign-in yet (needs kit 0.3 or later).</p>
@@ -523,12 +524,14 @@
     no CI files) and pushes. Nothing is ever fetched from the remote into the VM.
   </p>
   {#if !pub.remote || editRemote}
-    <div class="pair tight">
-      <input class="field mono" bind:value={remoteText} placeholder="git@github.com:owner/repo.git" aria-label="Remote address" maxlength="300" />
-      <button class="btn" onclick={() => saveRemote(remoteText.trim())} disabled={!!busy || !remoteText.trim()}>Save</button>
+    <label class="fieldrow">
+      <span class="small dim">Remote address (ssh). Create the repository empty (no README, no licence): the first publish brings the whole history.</span>
+      <input class="field mono" bind:value={remoteText} placeholder="git@github.com:owner/repo.git" maxlength="300" />
+    </label>
+    <div class="actions end">
+      {#if editRemote}<button class="btn quiet" onclick={() => (editRemote = false)}>Cancel</button>{/if}
+      <button class="btn primary" onclick={() => saveRemote(remoteText.trim())} disabled={!!busy || !remoteText.trim()}>Save</button>
     </div>
-    <p class="dim small">An ssh address. Create the repository empty (no README, no licence): the first publish brings the whole history.</p>
-    {#if editRemote}<div><button class="btn quiet" onclick={() => (editRemote = false)}>Cancel</button></div>{/if}
   {:else}
     <p>
       Remote: <span class="mono">{pub.remote}</span>
@@ -541,7 +544,7 @@
     <div class="stack">
       <span class="small dim">1. Add this key to the repository as a deploy key <strong>with write access</strong>. It works for this one repository only.</span>
       <pre class="mono pubkey">{pub.publicKey || 'The key is being made. Reload the page.'}</pre>
-      <div><button class="btn quiet" onclick={copyKey} disabled={!pub.publicKey}>{copied ? 'Copied' : 'Copy the key'}</button></div>
+      <div class="actions"><button class="btn quiet" onclick={copyKey} disabled={!pub.publicKey}>{copied ? 'Copied' : 'Copy the key'}</button></div>
     </div>
     <div class="stack small dim">
       <span>2. Protect <span class="mono">main</span> on the remote (a ruleset or branch protection): block force pushes, block deletion, and let only this deploy key push.</span>
@@ -553,9 +556,9 @@
         <p>The host <span class="mono">{hostAsk.host}</span> shows this key ({hostAsk.type}):</p>
         <p class="mono">{hostAsk.fingerprint}</p>
         <p class="small dim">Compare it with the fingerprints your git host publishes. Confirm only if it matches: from then on the console accepts no other key for this host.</p>
-        <div class="halts">
-          <button class="btn" onclick={() => verifyRemote(hostAsk.fingerprint)} disabled={!!busy}>It matches: trust this host</button>
+        <div class="actions end">
           <button class="btn quiet" onclick={() => (hostAsk = null)}>Cancel</button>
+          <button class="btn primary" onclick={() => verifyRemote(hostAsk.fingerprint)} disabled={!!busy}>It matches: trust this host</button>
         </div>
       </div>
     {/if}
@@ -582,9 +585,8 @@
         {lead}'s request ({when(pub.request.date)}): {pub.request.publish === 'yes' ? 'publish' : 'do not publish'}{pub.request.summary ? `. ${pub.request.summary}` : ''}
       </p>
     {/if}
-    <div class="halts">
-      <button class="btn" onclick={() => verifyRemote()} disabled={!!busy}>{busy === 'verify' ? 'Checking…' : pub.verified ? 'Verify again' : 'Verify'}</button>
-      <button class="btn" onclick={askPublish} disabled={!!busy || !pub.verified || !p.canPublish || pub.busy}>{busy === 'publish' || pub.busy ? 'Publishing…' : 'Publish now…'}</button>
+    <div class="actions">
+      <button class="btn danger" onclick={() => saveRemote('')} disabled={!!busy}>Turn off</button>
       <button
         class="btn quiet"
         onclick={() => {
@@ -593,7 +595,9 @@
         }}
         disabled={!!busy}>Change the remote</button
       >
-      <button class="btn quiet" onclick={() => saveRemote('')} disabled={!!busy}>Turn off</button>
+      <span class="spacer"></span>
+      <button class="btn" onclick={() => verifyRemote()} disabled={!!busy}>{busy === 'verify' ? 'Checking…' : pub.verified ? 'Verify again' : 'Verify'}</button>
+      <button class="btn primary" onclick={askPublish} disabled={!!busy || !pub.verified || !p.canPublish || pub.busy}>{busy === 'publish' || pub.busy ? 'Publishing…' : 'Publish now…'}</button>
     </div>
     {#if data.publishHistory.length}
       <div class="scroll-x">
@@ -707,34 +711,10 @@
     gap: 8px;
     padding: 4px 8px;
   }
-  .x {
-    background: none;
-    border: 0;
-    color: inherit;
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 0 2px;
-  }
-  .halts {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
   .check {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-  }
-  .jobrow {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .grow {
-    flex: 1;
   }
   textarea.field {
     resize: vertical;

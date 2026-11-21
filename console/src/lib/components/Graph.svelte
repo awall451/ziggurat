@@ -153,9 +153,9 @@
   </div>
 
   <div class="tools">
-    <button class="tool" onclick={() => zoomButton(1.2)} aria-label="Zoom in"><Icon name="plus" size={16} /></button>
-    <button class="tool" onclick={() => zoomButton(1 / 1.2)} aria-label="Zoom out"><Icon name="minus" size={16} /></button>
-    <button class="tool" onclick={() => { touched = false; fit(); }} aria-label="Fit to view"><Icon name="fit" size={16} /></button>
+    <button class="btn quiet icon tool" onclick={() => zoomButton(1.2)} aria-label="Zoom in"><Icon name="plus" size={16} /></button>
+    <button class="btn quiet icon tool" onclick={() => zoomButton(1 / 1.2)} aria-label="Zoom out"><Icon name="minus" size={16} /></button>
+    <button class="btn quiet icon tool" onclick={() => { touched = false; fit(); }} aria-label="Fit to view"><Icon name="fit" size={16} /></button>
   </div>
 </div>
 
@@ -378,20 +378,8 @@
     flex-direction: column;
     gap: 6px;
   }
+  /* Over the map: a solid face so the graph does not show through. */
   .tool {
-    width: 36px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 8px;
-    border: 1px solid var(--line);
     background: var(--panel-solid);
-    color: var(--ink-2);
-    cursor: pointer;
-  }
-  .tool:hover {
-    color: var(--ink);
-    border-color: var(--line-strong);
   }
 </style>

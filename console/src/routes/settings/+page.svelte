@@ -284,12 +284,12 @@
           {/if}
 
           <div class="actions">
-            {#if original}<button class="btn stop" onclick={askRemove} disabled={!!busy}>Remove entry…</button>{/if}
+            {#if original}<button class="btn danger" onclick={askRemove} disabled={!!busy}>Remove entry…</button>{/if}
             <span class="grow"></span>
             {#if original && tab === 'targets'}
               <button class="btn quiet" onclick={runCheck} disabled={!!busy}>{busy === 'check' ? 'Checking…' : 'Check target'}</button>
             {/if}
-            <button class="btn go" onclick={save} disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
+            <button class="btn primary" onclick={save} disabled={!!busy}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
           </div>
 
           {#if check}

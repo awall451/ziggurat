@@ -201,14 +201,6 @@
   .sync {
     padding-right: 8px;
   }
-  .icon {
-    min-height: 32px;
-    width: 32px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
   .body {
     flex: 1;
     min-height: 0;

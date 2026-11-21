@@ -263,22 +263,25 @@
     </div>
     <span class="grow"></span>
     <div class="seg" aria-label="Clock">
-      <button class="btn quiet" class:on={clock === '24'} aria-pressed={clock === '24'} onclick={() => setClock('24')} disabled={!!busy}>24 h</button>
-      <button class="btn quiet" class:on={clock === '12'} aria-pressed={clock === '12'} onclick={() => setClock('12')} disabled={!!busy}>12 h</button>
+      <button class="btn quiet sm" class:on={clock === '24'} aria-pressed={clock === '24'} onclick={() => setClock('24')} disabled={!!busy}>24 h</button>
+      <button class="btn quiet sm" class:on={clock === '12'} aria-pressed={clock === '12'} onclick={() => setClock('12')} disabled={!!busy}>12 h</button>
     </div>
     <div class="seg" aria-label="How much time to show">
       {#each ['day', 'week', 'month'] as v (v)}
-        <a class="btn quiet" class:on={tl.view === v && !tl.custom && !win} aria-current={tl.view === v && !tl.custom && !win ? 'page' : undefined} href={link(v, range.date)}>{v[0].toUpperCase() + v.slice(1)}</a>
+        <a class="btn quiet sm" class:on={tl.view === v && !tl.custom && !win} aria-current={tl.view === v && !tl.custom && !win ? 'page' : undefined} href={link(v, range.date)}>{v[0].toUpperCase() + v.slice(1)}</a>
       {/each}
-      <a class="btn quiet" href={link('day', null)} title="Today, as a day">Today</a>
     </div>
     <div class="seg" aria-label="Move through time">
       {#if isMonth}
-        <a class="btn quiet" href={link('month', tl.range.prev)} aria-label="Earlier" title="The month before">‹</a>
-        <a class="btn quiet" href={link('month', tl.range.next)} aria-label="Later" title="The month after">›</a>
+        <a class="btn quiet sm icon" href={link('month', tl.range.prev)} aria-label="Earlier" title="The month before">‹</a>
       {:else}
-        <button class="btn quiet" onclick={() => pan(-stride)} aria-label="Earlier" title="{strideText} earlier">‹</button>
-        <button class="btn quiet" onclick={() => pan(stride)} aria-label="Later" title="{strideText} later">›</button>
+        <button class="btn quiet sm icon" onclick={() => pan(-stride)} aria-label="Earlier" title="{strideText} earlier">‹</button>
+      {/if}
+      <a class="btn quiet sm" href={link('day', null)} title="Today, as a day">Today</a>
+      {#if isMonth}
+        <a class="btn quiet sm icon" href={link('month', tl.range.next)} aria-label="Later" title="The month after">›</a>
+      {:else}
+        <button class="btn quiet sm icon" onclick={() => pan(stride)} aria-label="Later" title="{strideText} later">›</button>
       {/if}
     </div>
   </div>
@@ -331,10 +334,11 @@
       <h2>Not active yet</h2>
       <p class="small">You changed start times here. A team keeps its old times until you apply the change, which sends the new times to that team's VM.</p>
       {#each changed as p (p.id)}
-        <div class="row wrap">
-          <span class="grow"><b>{p.name}</b>: {scheduleOf(p).slots.length ? scheduleOf(p).slots.map((s) => `${clockLabel(s.time, clock)} ${daysText(s)}`).join(' · ') : 'no start times left'}</span>
-          <button class="btn go" onclick={() => apply(p)} disabled={!!busy || !usable(scheduleOf(p))}>{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
+        <div class="actions">
+          <span><b>{p.name}</b>: {scheduleOf(p).slots.length ? scheduleOf(p).slots.map((s) => `${clockLabel(s.time, clock)} ${daysText(s)}`).join(' · ') : 'no start times left'}</span>
+          <span class="spacer"></span>
           <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Undo changes</button>
+          <button class="btn primary" onclick={() => apply(p)} disabled={!!busy || !usable(scheduleOf(p))}>{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
         </div>
       {/each}
     </section>
@@ -345,7 +349,7 @@
       <div class="row">
         <h2>{sel.p.name}: starts at {clockLabel(sel.slot.time, clock)}, {daysText(sel.slot)}</h2>
         <span class="grow"></span>
-        <button class="btn quiet" onclick={() => (selected = null)}>Close</button>
+        <button class="btn quiet icon" onclick={() => (selected = null)} aria-label="Close" title="Close">×</button>
       </div>
       <div class="row wrap">
         <label class="stack"
@@ -356,12 +360,13 @@
           <span class="small dim">On</span>
           <div class="days">
             {#each DAYS as day (day)}
-              <button class="btn quiet day" class:on={has(sel.slot, day)} aria-pressed={has(sel.slot, day)} onclick={() => toggleDay(day)}>{day[0].toUpperCase() + day.slice(1)}</button>
+              <button class="btn quiet sm" class:on={has(sel.slot, day)} aria-pressed={has(sel.slot, day)} onclick={() => toggleDay(day)}>{day[0].toUpperCase() + day.slice(1)}</button>
             {/each}
           </div>
         </div>
-        <span class="grow"></span>
-        <button class="btn stop" onclick={removeSlot}>Remove this start time</button>
+      </div>
+      <div class="actions">
+        <button class="btn danger sm" onclick={removeSlot}>Remove this start time</button>
       </div>
       <p class="dim small">
         Time zone: {zoneLabel(scheduleOf(sel.p).tz, tl.now)}. A cycle of {sel.p.name} typically takes {lengthText(sel.p.typicalSecs)}. If its previous cycle is still running at a
@@ -400,7 +405,7 @@
           {#if s}
             <div class="chips">
               {#each s.slots as slot, i (slotId(slot) + i)}
-                <button class="btn quiet chipbtn mono" class:on={selected?.project === p.id && selected.slot === i} onclick={() => select(p.id, i)} disabled={!editable} title="Change or remove this start time">
+                <button class="btn quiet sm mono" class:on={selected?.project === p.id && selected.slot === i} onclick={() => select(p.id, i)} disabled={!editable} title="Change or remove this start time">
                   {clockLabel(slot.time, clock)} <span class="dim">{daysText(slot)}</span>
                 </button>
               {/each}
@@ -420,14 +425,14 @@
               </select></label
             >
           {/if}
-          <div class="row wrap">
-            <button class="btn quiet" onclick={() => add(p.id, '00:00', range.days[0].name)} disabled={!editable || !!busy} title="Adds a start time at midnight; then set its time and days">+ Start time</button>
+          <div class="actions">
+            {#if p.schedule}<button class="btn danger sm" onclick={() => askClear(p)} disabled={!!busy}>Remove all…</button>{/if}
+            <button class="btn quiet sm" onclick={() => add(p.id, '00:00', range.days[0].name)} disabled={!editable || !!busy} title="Adds a start time at midnight; then set its time and days">+ Start time</button>
             {#if drafts[p.id] !== undefined}
-              <button class="btn go" onclick={() => apply(p)} disabled={!!busy || !usable(s)} title="Send these start times to {p.name}'s VM">{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
-              <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Undo changes</button>
+              <span class="spacer"></span>
+              <button class="btn quiet sm" onclick={() => discard(p.id)} disabled={!!busy}>Undo</button>
+              <button class="btn primary sm" onclick={() => apply(p)} disabled={!!busy || !usable(s)} title="Send these start times to {p.name}'s VM">{busy === `apply-${p.id}` ? 'Applying…' : 'Apply'}</button>
             {/if}
-            <span class="grow"></span>
-            {#if p.schedule}<button class="btn quiet" onclick={() => askClear(p)} disabled={!!busy}>Remove all…</button>{/if}
           </div>
         {/if}
       </section>
@@ -438,7 +443,7 @@
     <div class="row">
       <h2>Your hours</h2>
       <span class="grow"></span>
-      {#if !quietDraft}<button class="btn quiet" onclick={editSettings}>Change</button>{/if}
+      {#if !quietDraft}<button class="btn quiet sm" onclick={editSettings}>Change</button>{/if}
     </div>
     {#if !quietDraft}
       <p class="small dim">
@@ -461,19 +466,20 @@
         <div class="row wrap">
           <div class="days">
             {#each DAYS as day (day)}
-              <button class="btn quiet day" class:on={has(q, day)} aria-pressed={has(q, day)} onclick={() => toggleQuietDay(q, day)}>{day[0].toUpperCase() + day.slice(1)}</button>
+              <button class="btn quiet sm" class:on={has(q, day)} aria-pressed={has(q, day)} onclick={() => toggleQuietDay(q, day)}>{day[0].toUpperCase() + day.slice(1)}</button>
             {/each}
           </div>
           <input class="field mono" type="time" bind:value={q.from} aria-label="From" />
           <span class="dim">to</span>
           <input class="field mono" type="time" bind:value={q.to} aria-label="To" />
-          <button class="btn quiet" onclick={() => quietDraft.quiet.splice(i, 1)}>Remove</button>
+          <button class="btn danger sm" onclick={() => quietDraft.quiet.splice(i, 1)}>Remove</button>
         </div>
       {/each}
-      <div class="row wrap">
+      <div class="actions">
         <button class="btn quiet" onclick={addQuiet}>+ Quiet hours</button>
-        <button class="btn go" onclick={saveSettings} disabled={!!busy}>{busy === 'settings' ? 'Saving…' : 'Save'}</button>
+        <span class="spacer"></span>
         <button class="btn quiet" onclick={() => (quietDraft = null)} disabled={!!busy}>Cancel</button>
+        <button class="btn primary" onclick={saveSettings} disabled={!!busy}>{busy === 'settings' ? 'Saving…' : 'Save'}</button>
       </div>
     {/if}
   </section>
@@ -520,20 +526,6 @@
   .grow {
     flex: 1;
   }
-  .seg {
-    display: flex;
-    gap: 4px;
-  }
-  .seg a {
-    display: inline-flex;
-    align-items: center;
-    text-decoration: none;
-  }
-  .btn.on {
-    border-color: var(--line-strong);
-    background: rgba(var(--glow), 0.2);
-    color: var(--ink-strong);
-  }
   .block {
     padding: 18px;
     margin-bottom: 16px;
@@ -577,16 +569,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-  }
-  .btn.day {
-    min-height: 30px;
-    padding: 0 9px;
-    font-size: 12px;
-  }
-  .chipbtn {
-    min-height: 30px;
-    padding: 0 10px;
-    font-size: 12px;
   }
   .dot {
     display: inline-block;

@@ -126,7 +126,7 @@
   <div class="lightbox" role="dialog" aria-modal="true" aria-label="Screenshot">
     <button class="shade" onclick={() => (big = null)} aria-label="Close"></button>
     <img src={big} alt="Enlarged screenshot" />
-    <button class="close btn" onclick={() => (big = null)}><Icon name="x" size={14} /> Close</button>
+    <button class="close btn quiet" onclick={() => (big = null)}><Icon name="x" size={14} /> Close</button>
   </div>
 {/if}
 

@@ -39,7 +39,7 @@
       </div>
     </div>
     <span class="pill {node.status}">{STATUS_WORD[node.status]}</span>
-    <button class="close" onclick={onclose} aria-label="Close details"><Icon name="x" size={14} /></button>
+    <button class="btn quiet icon" onclick={onclose} aria-label="Close details"><Icon name="x" size={14} /></button>
   </header>
 
   <dl>
@@ -150,19 +150,6 @@
   .title {
     flex: 1;
     min-width: 0;
-  }
-  .close {
-    width: 36px;
-    height: 36px;
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 8px;
-    border: 1px solid var(--line);
-    background: transparent;
-    color: var(--ink-2);
-    cursor: pointer;
   }
   dl {
     display: grid;

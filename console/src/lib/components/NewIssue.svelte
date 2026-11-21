@@ -166,7 +166,7 @@
   <div class="box panel lit" onpaste={paste}>
     <header>
       <h2>{editing ? 'Mark up the picture' : 'New issue'}</h2>
-      <button class="btn quiet" onclick={editing ? () => (editing = null) : onclose} aria-label="Cancel"><Icon name="x" size={14} /></button>
+      <button class="btn quiet icon" onclick={editing ? () => (editing = null) : onclose} aria-label="Cancel"><Icon name="x" size={14} /></button>
     </header>
 
     {#if editing}
@@ -175,8 +175,8 @@
         <MarkupCanvas bind:this={drawing} src={f.url} bind:shapes={editShapes} maxHeight="calc(100vh - 220px)" />
         <div class="foot">
           <span class="dim small">Draw boxes, ellipses or freehand on {f.name}. Ctrl+Z undoes.</span>
-          <button class="btn" onclick={() => (editing = null)}>Cancel</button>
-          <button class="btn go" onclick={doneMarkup}>Done</button>
+          <button class="btn quiet" onclick={() => (editing = null)}>Cancel</button>
+          <button class="btn primary" onclick={doneMarkup}>Done</button>
         </div>
       {/if}
     {:else}
@@ -220,9 +220,9 @@
                 <span class="name small mono" title={f.name}>{f.name}</span>
                 <span class="dim small">{kb(f.size)}{f === main ? ' · main picture' : ''}</span>
                 <span class="row">
-                  {#if f.image}<button class="btn quiet small" onclick={() => startMarkup(f)}>{f.shapes.length ? 'Edit markup' : 'Mark up'}</button>{/if}
-                  {#if f.image && f !== main && canFiles}<button class="btn quiet small" onclick={() => makeMain(f)}>Make main</button>{/if}
-                  <button class="x" onclick={() => remove(f)} aria-label="Remove {f.name}">×</button>
+                  {#if f.image}<button class="btn quiet sm" onclick={() => startMarkup(f)}>{f.shapes.length ? 'Edit markup' : 'Mark up'}</button>{/if}
+                  {#if f.image && f !== main && canFiles}<button class="btn quiet sm" onclick={() => makeMain(f)}>Make main</button>{/if}
+                  <button class="btn quiet icon sm" onclick={() => remove(f)} aria-label="Remove {f.name}">×</button>
                 </span>
               </div>
             {/each}
@@ -239,8 +239,8 @@
       {#if err}<div class="s-failed small">{err}</div>{/if}
       <div class="foot">
         <span class="dim small">Goes to the New column. The lead picks it up at the start of its next cycle and moves it as the team works on it.</span>
-        <button class="btn" onclick={onclose}>Cancel</button>
-        <button class="btn go" onclick={save} disabled={saving}>{saving ? 'Sending…' : 'Raise issue'}</button>
+        <button class="btn quiet" onclick={onclose}>Cancel</button>
+        <button class="btn primary" onclick={save} disabled={saving}>{saving ? 'Sending…' : 'Raise issue'}</button>
       </div>
     {/if}
   </div>
@@ -358,14 +358,6 @@
     align-items: center;
     flex-wrap: wrap;
   }
-  .x {
-    margin-left: auto;
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    font-size: 18px;
-    cursor: pointer;
-  }
   .link {
     border: 0;
     background: none;
@@ -382,9 +374,5 @@
   }
   .foot .dim {
     flex: 1;
-  }
-  .go {
-    border-color: var(--accent);
-    background: rgba(var(--glow), 0.25);
   }
 </style>
