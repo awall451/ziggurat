@@ -19,6 +19,9 @@ control=$(head -c 300 "$STATE/control" 2>/dev/null)
 lead=$(systemctl is-active "$UNIT.service" 2>/dev/null)
 timer=$(systemctl is-enabled "$UNIT.timer" 2>/dev/null)
 since=$(systemctl show "$UNIT.service" -p ActiveEnterTimestamp --value 2>/dev/null)
+# The lead unit is Type=oneshot: it stays "activating" while a cycle runs and
+# never sets ActiveEnterTimestamp. The start is when it left "inactive".
+[ -n "$since" ] || since=$(systemctl show "$UNIT.service" -p InactiveExitTimestamp --value 2>/dev/null)
 head=$(g log -1 --format='%h%x09%cI%x09%s' main)
 ready=$(g for-each-ref --format='%(refname:short)' 'refs/heads/ready/*' | paste -sd, -)
 remote=$(g config --get remote.origin.url)

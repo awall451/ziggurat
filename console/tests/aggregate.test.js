@@ -134,3 +134,21 @@ describe('briefs', () => {
     expect(mediaFile(project, `briefs/${A}.spoken.txt`)).toBeNull();
   });
 });
+
+describe('ledger kinds (kit 0.10)', () => {
+  it('counts the cost of chat turns, but not the turns as cycles', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-kinds-'));
+    const at = (min) => new Date(Date.now() - min * 60000).toISOString();
+    const lines = [
+      { start: at(300), end: at(200), secs: 6000, cost_usd: 10, counted: true },
+      { start: at(100), end: at(98), secs: 90, cost_usd: 1, counted: true, kind: 'plan', plan: '20260101T000000Z-p-x' },
+      { start: at(90), end: at(89), secs: 20, cost_usd: 0.25, counted: false, kind: 'chat', plan: '20260101T000000Z-p-x' },
+      { start: at(80), end: at(79), secs: 20, cost_usd: 0.25, counted: false, kind: 'chat', plan: '20260101T000000Z-p-x' }
+    ];
+    fs.writeFileSync(path.join(root, 'cycles.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const s = summary({ paths: { fleet: root } });
+    expect(s.last24.cycles).toBe(2);
+    expect(s.last24.costUsd).toBe(11.5);
+    expect(s.lastCycle.kind).toBe('plan');
+  });
+});

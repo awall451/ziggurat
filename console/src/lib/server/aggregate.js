@@ -53,7 +53,11 @@ export function readCycles(fleet) {
         halted: !!c.halted,
         counted: c.counted !== false,
         isError: !!c.is_error,
-        summary: c.summary || ''
+        summary: c.summary || '',
+        // Kit 0.10: normal, oneshot, plan or chat. Older lines have no kind.
+        kind: ['normal', 'oneshot', 'plan', 'chat'].includes(c.kind) ? c.kind : c.oneshot ? 'oneshot' : 'normal',
+        oneshot: typeof c.oneshot === 'string' ? c.oneshot : null,
+        plan: typeof c.plan === 'string' ? c.plan : null
       });
     } catch {
       /* skip a bad line */
@@ -126,7 +130,9 @@ export function summary(project) {
   const cycles = readCycles(fleet);
   const gate = parseGateLog(readText(path.join(fleet, 'history.log')));
   const since = Date.now() - DAY;
-  const recentCycles = cycles.filter((c) => isRecent(c.start, since));
+  // A chat turn with the lead is not a cycle: its cost counts, the turn does not.
+  const recent = cycles.filter((c) => isRecent(c.start, since));
+  const recentCycles = recent.filter((c) => c.kind !== 'chat');
   // The team's own results only: a gate proof's refused branch is the gate
   // working, and must not read as a failure of the team.
   const recentGate = gate.filter((g) => !g.canary && !g.proof && isRecent(g.at, since));
@@ -137,11 +143,11 @@ export function summary(project) {
     .filter((d) => d.isFile() && d.name.endsWith('.md'))
     .map((d) => parseIssue(d.name, readText(path.join(issuesDir, d.name), 20000)));
   const esc = readText(path.join(fleet, 'notes', 'agents', 'ESCALATIONS.md'));
-  const last = cycles[cycles.length - 1] || null;
+  const last = cycles.findLast((c) => c.kind !== 'chat') || null;
   return {
     last24: {
       cycles: recentCycles.length,
-      costUsd: Math.round(recentCycles.reduce((t, c) => t + (c.costUsd || 0), 0) * 100) / 100,
+      costUsd: Math.round(recent.reduce((t, c) => t + (c.costUsd || 0), 0) * 100) / 100,
       merged: recentGate.filter((g) => g.status === 'merged' && !g.detail.includes('contained')).length,
       failed: recentGate.filter((g) => g.status === 'failed' || g.status === 'rejected').length,
       minutes: Math.round(recentCycles.reduce((t, c) => t + (c.secs || 0), 0) / 60)
@@ -156,7 +162,7 @@ export function summary(project) {
 
 export function progress(project) {
   const fleet = project.paths.fleet;
-  const cycles = readCycles(fleet);
+  const cycles = readCycles(fleet).filter((c) => c.kind !== 'chat');
   const gate = parseGateLog(readText(path.join(fleet, 'history.log')));
   return {
     cycles,
