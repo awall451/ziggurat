@@ -6,7 +6,7 @@
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
   import { conflictsAt, placeAfter, dateString } from '$lib/schedule.js';
-  import { DAYS, plan, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
+  import { DAYS, plan, occurrences, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
 
   let { data } = $props();
   const tl = $derived(data.timeline);
@@ -41,7 +41,7 @@
 
   // Changes are kept here, per project, until they are applied to the VM.
   let drafts = $state({});
-  let selected = $state(null); // {project, slot}
+  let selected = $state(null); // {project, slot, date, at}: date and at when one start on the timeline was picked
   let busy = $state('');
   let problem = $state('');
   let done = $state('');
@@ -84,6 +84,10 @@
       past: p.past,
       running: p.running,
       planned: planning.planned[p.id] || [],
+      // Starts skipped for one day: drawn struck through, they do not run.
+      skipped: occurrences(scheduleOf(p), range.from, range.to, { skipped: true })
+        .filter((o) => o.skipped)
+        .map((o) => ({ ...o, end: o.at + (p.typicalSecs || 3600) * 1000 })),
       jobs: p.jobs || [],
       log: p.log
     }))
@@ -207,8 +211,8 @@
     d.slots.push(slot);
     selected = { project: id, slot: d.slots.length - 1 };
   }
-  function select(id, index) {
-    selected = { project: id, slot: index };
+  function select(id, index, bar = null) {
+    selected = { project: id, slot: index, date: bar?.date || null, at: bar?.at ?? null };
   }
   const sel = $derived(selected && scheduleOf(project(selected.project))?.slots[selected.slot] ? { p: project(selected.project), slot: scheduleOf(project(selected.project)).slots[selected.slot] } : null);
 
@@ -230,6 +234,41 @@
     const d = draftOf(selected.project);
     d.slots.splice(selected.slot, 1);
     selected = null;
+  }
+  // Deleting one start of a repeating slot asks, like a calendar: that day only, or every day.
+  let del = $state(null); // {project, slot, date}
+  const delSlot = $derived(del ? scheduleOf(project(del.project))?.slots[del.slot] : null);
+  function askDelete() {
+    // Picked from the list of times, or a start that has passed: there is no one day to skip.
+    if (selected.date && selected.at > tl.now) del = { ...selected };
+    else removeSlot();
+  }
+  function deleteOnce() {
+    const { project: id, slot: index, date } = del;
+    del = null;
+    const d = draftOf(id);
+    const key = slotId(d.slots[index]);
+    d.changes = (d.changes || []).filter((c) => !(c.date === date && c.slot === key));
+    d.changes.push({ kind: 'skip', date, slot: key });
+    problem = '';
+    selected = null;
+  }
+  function deleteAll() {
+    selected = { project: del.project, slot: del.slot };
+    del = null;
+    removeSlot();
+  }
+  // One-day skips that are still to come, for the team's panel.
+  const skipsOf = (p) => {
+    const s = scheduleOf(p);
+    if (!s) return [];
+    const from = todayIn(validTimeZone(s.tz) ? s.tz : settings.timezone, tl.now);
+    return (s.changes || []).filter((c) => c.kind === 'skip' && c.date >= from);
+  };
+  function undoSkip(id, c) {
+    const d = draftOf(id);
+    d.changes = (d.changes || []).filter((x) => !(x.kind === 'skip' && x.date === c.date && x.slot === c.slot));
+    problem = '';
   }
   function discard(id) {
     delete drafts[id];
@@ -478,7 +517,7 @@
         </div>
       </div>
       <div class="actions">
-        <button class="btn danger sm" onclick={removeSlot}>Remove this start time</button>
+        <button class="btn danger sm" onclick={askDelete}>{selected.date && selected.at > tl.now ? 'Delete…' : 'Remove this start time'}</button>
       </div>
       <p class="dim small">
         Time zone: {zoneLabel(scheduleOf(sel.p).tz, tl.now)}. A cycle of {sel.p.name} typically takes {lengthText(sel.p.typicalSecs)}. If its previous cycle is still running at a
@@ -523,6 +562,12 @@
               {/each}
               {#if !s.slots.length}<span class="dim small">None yet.</span>{/if}
             </div>
+            {#each skipsOf(p) as c (c.date + c.slot)}
+              <div class="actions">
+                <span class="small">{dateText(c.date, { weekday: 'short', day: 'numeric', month: 'short' })} only: {clockLabel(c.slot.split('@')[1], clock)} skipped</span>
+                {#if editable}<button class="btn quiet sm" onclick={() => undoSkip(p.id, c)} title="Run this start again on that day. Active once you apply it.">Undo</button>{/if}
+              </div>
+            {/each}
             <label class="stack"
               ><span class="small dim">These times are in</span>
               <select
@@ -599,6 +644,23 @@
 </div>
 
 <ConfirmDialog {confirm} busy={!!busy} oncancel={() => (confirm = null)} />
+
+{#if del && delSlot}
+  {@const dp = project(del.project)}
+  <Modal title="Delete a repeating start time" onclose={() => (del = null)}>
+    <p class="small">
+      {dp?.name}'s {clockLabel(delSlot.time, clock)} start ({daysText(delSlot)}). Delete it for:
+    </p>
+    <div class="actions end">
+      <button class="btn quiet" onclick={() => (del = null)}>Cancel</button>
+      <button class="btn" onclick={deleteOnce}>Only {dateText(del.date, { weekday: 'short', day: 'numeric', month: 'short' })}</button>
+      <button class="btn danger" onclick={deleteAll}>This and every later day</button>
+    </div>
+    <p class="small dim">
+      "Only that day" keeps the start time and skips that one start; you can undo it in the team's panel. Like any change here, it is active once you apply it.
+    </p>
+  </Modal>
+{/if}
 
 {#if scope}
   {@const sp = project(scope.id)}

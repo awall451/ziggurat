@@ -14,7 +14,7 @@
   import { wallClock, timeOfDay, hourLabel, clockLabel, DAYS } from '$lib/schedule.js';
 
   let {
-    rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, log}]
+    rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, skipped, log}]
     range, // {from, to, days}
     tz, // the time zone the axis is drawn in
     clock = '24',
@@ -23,7 +23,7 @@
     selected = null, // {project, slot}
     onmove = () => {}, // (project, slot index, 'HH:MM', the bar that was dragged)
     onadd = () => {}, // (project, 'HH:MM', day name)
-    onselect = () => {}, // (project, slot index)
+    onselect = () => {}, // (project, slot index, the bar that was picked)
     onzoom = () => {}, // (from, to)
     onpan = () => {}, // (milliseconds, positive is later)
     onjob = null, // (project, job): a backlog job was clicked
@@ -93,7 +93,7 @@
     if (!drag) return;
     const d = drag;
     drag = null;
-    if (!d.moved) return onselect(d.project, d.slot);
+    if (!d.moved) return onselect(d.project, d.slot, d.bar);
     onmove(d.project, d.slot, timeOfDay(d.tz, d.at + (d.dx / track) * span), d.bar);
   }
   // Only the dragged bar moves: one day of a slot can be changed on its own.
@@ -101,7 +101,7 @@
   function key(e, row, bar) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      onselect(row.id, bar.slot);
+      onselect(row.id, bar.slot, bar);
     }
   }
 
@@ -311,6 +311,18 @@
                 <rect x={x(bar.at)} y={y + 8} width={Math.max(6, x(bar.end) - x(bar.at))} height={ROW - 16} rx="4" />
                 {#if inside(bar.at)}<line class="start" x1={x(bar.at)} x2={x(bar.at)} y1={y + 5} y2={y + ROW - 5} />{/if}
                 <title>{row.name}: starts {clockText(bar.at)}, typical length {lengthText(bar.end - bar.at)}{bar.flags.includes('overlap') ? '. Likely overlaps another team' : ''}{bar.flags.includes('quiet') ? '. In your quiet hours' : ''}{row.editable ? '. Drag to move, click to change' : ''}</title>
+              </g>
+            {/if}
+          {/each}
+
+          <!-- a start that is skipped for that one day: shown, struck through -->
+          {#each row.skipped || [] as bar (bar.at + bar.id)}
+            {#if visible(bar.at, bar.end)}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <g class="skipped" onpointerdown={(e) => e.stopPropagation()}>
+                <rect x={x(bar.at)} y={y + 8} width={Math.max(6, x(bar.end) - x(bar.at))} height={ROW - 16} rx="4" />
+                <line x1={x(bar.at)} x2={Math.max(x(bar.at) + 6, x(bar.end))} y1={y + ROW - 8} y2={y + 8} />
+                <title>{row.name}: the {clockText(bar.at)} start is skipped on this day only</title>
               </g>
             {/if}
           {/each}
@@ -574,6 +586,16 @@
     fill: var(--muted);
     font-size: 12px;
     cursor: default;
+  }
+  .skipped rect {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
+  }
+  .skipped line {
+    stroke: var(--muted);
+    stroke-width: 1.2;
   }
   .slot rect {
     fill: var(--row);

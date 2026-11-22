@@ -85,6 +85,10 @@ describe('one-day changes (kit 0.12.1)', () => {
     expect(lib.formatScheduleText(s)).toContain('move 2026-01-26 daily@09:30 11:15\nskip 2026-01-27 daily@09:30\n');
     expect(lib.parseScheduleText(lib.formatScheduleText(s))).toEqual(s);
     const r = lib.rangeFor('week', '2026-01-25', NY);
+    // A skipped start does not run, but can be asked for, to be shown struck through.
+    const shown = lib.occurrences(s, r.from, r.to, { skipped: true });
+    expect(shown.filter((o) => o.skipped).map((o) => o.date)).toEqual(['2026-01-27']);
+    expect(shown.filter((o) => !o.skipped)).toEqual(lib.occurrences(s, r.from, r.to));
     const at = lib.occurrences(s, r.from, r.to).map((o) => `${o.date} ${iso(o.at)}${o.moved ? ' moved' : ''}`);
     expect(at).toContain('2026-01-26 2026-01-26T16:15 moved');
     expect(at.some((x) => x.startsWith('2026-01-27'))).toBe(false);
