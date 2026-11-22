@@ -114,6 +114,7 @@
           {tree.session.agents} agents · {num(tree.session.total.toolCalls)} tool calls · {usd(tree.session.total.costUsd)} estimate
           {#if tree.session.ended}· {dur(between(tree.session.started, tree.session.ended))}{/if}
           {#if tree.session.claudeVersion}· Claude Code {tree.session.claudeVersion}{/if}
+          {#if tree.session.chat}· <a href="/p/{p.id}/backlog">{tree.session.chat.turns} chat turn{tree.session.chat.turns > 1 ? 's' : ''} since, {usd(tree.session.chat.costUsd)}</a>{/if}
         </div>
       </div>
     </section>
@@ -141,6 +142,8 @@
           nodes={tree.nodes}
           tiers={p.tiers}
           live={tree.session.live}
+          chat={tree.session.chat}
+          chatHref="/p/{p.id}/backlog"
           onselect={(id) => (selectedId = id)}
           onclose={() => (selectedId = null)}
         />

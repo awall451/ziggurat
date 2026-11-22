@@ -5,7 +5,7 @@
   import { md } from '$lib/md.js';
   import Icon from './Icon.svelte';
 
-  let { node, nodes, tiers = [], live = false, onselect = () => {}, onclose = () => {} } = $props();
+  let { node, nodes, tiers = [], live = false, chat = null, chatHref = null, onselect = () => {}, onclose = () => {} } = $props();
 
   const parent = $derived(nodes.find((n) => n.id === node.parent) || null);
   const children = $derived(nodes.filter((n) => n.parent === node.id));
@@ -125,6 +125,11 @@
       <h3>Final report</h3>
       <!-- sanitised by md(): agent-written text is untrusted -->
       <div class="well md text">{@html md(node.report)}</div>
+      {#if chat && node.id === 'lead'}
+        <p class="small dim">
+          {chat.turns} chat turn{chat.turns > 1 ? 's' : ''} since, {usd(chat.costUsd)}: {#if chatHref}<a href={chatHref}>see Backlog</a>{:else}see Backlog{/if}
+        </p>
+      {/if}
     </section>
   {/if}
 </aside>

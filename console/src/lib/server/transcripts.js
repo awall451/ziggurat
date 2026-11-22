@@ -30,9 +30,16 @@ function newFold() {
     results: new Set(), // tool_use ids that have a result
     errors: new Set(), // tool_use ids whose result is an error
     lastText: '',
-    lastTextMsg: null
+    lastTextMsg: null,
+    // Owner chat turns that resumed this session after it ended (a planning
+    // cycle): folded apart, so the cycle's report and figures stop where it ended.
+    chat: null,
+    chatTurns: 0
   };
 }
+
+// How the kit opens every chat message it hands to a resumed planning session.
+const CHAT_NOTICE = '[agent-kit owner chat]';
 
 function textOf(content) {
   if (typeof content === 'string') return maskSecrets(content);
@@ -55,6 +62,14 @@ function feedLine(f, line) {
     return;
   }
   if (!o || typeof o !== 'object') return;
+  if (o.type === 'user' && textOf(o.message?.content).trimStart().startsWith(CHAT_NOTICE)) {
+    f.chat ??= newFold();
+    f.chatTurns++;
+  }
+  feed(f.chat || f, o);
+}
+
+function feed(f, o) {
   if (typeof o.timestamp === 'string') {
     f.first ??= o.timestamp;
     f.last = o.timestamp;
@@ -453,6 +468,8 @@ export function sessionTree(project, sid, { status = null, pricing, labeler, led
     report: live ? null : main.lastText.slice(0, TEXT_CAP) || null,
     ...leadSum
   });
+  // Chat turns after the cycle: counted here, shown on the Backlog tab.
+  const chat = main.chat ? { turns: main.chatTurns, costUsd: Math.round(summarize(main.chat, pricing).costUsd * 100) / 100 } : null;
 
   for (const { id, meta, fold } of raw) {
     const sum = summarize(fold, pricing);
@@ -517,7 +534,8 @@ export function sessionTree(project, sid, { status = null, pricing, labeler, led
         : null,
       claudeVersion: main.version,
       agents: nodes.length,
-      total
+      total,
+      chat
     },
     nodes
   };
