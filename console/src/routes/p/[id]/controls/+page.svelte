@@ -578,6 +578,18 @@
       {#if pub.sha}Published: <span class="mono">{pub.sha.slice(0, 9)}</span> <span class="dim">{when(pub.at)}</span>{:else}Nothing has been published yet.{/if}
       {#if st.main?.sha && pub.sha && !pub.sha.startsWith(st.main.sha)}<span class="dim"> · gate main is {st.main.sha}</span>{/if}
     </p>
+    {#if pub.notes?.length}
+      <details class="small">
+        <summary>Published with {pub.notes.length} note{pub.notes.length > 1 ? 's' : ''} from the secret scan</summary>
+        <p class="dim">
+          These come from a rule that only guesses (a name like "key" next to a string that looks random). They do not hold a publish back. A secret in a known format, or
+          the Claude token, still does.
+        </p>
+        <ul>
+          {#each pub.notes as n (n)}<li class="mono">{n}</li>{/each}
+        </ul>
+      </details>
+    {/if}
     {#if pub.blocked}
       <div class="panel note bad">
         <p>The last publish was refused {when(pub.blocked.at)}: {pub.blocked.reason}</p>
@@ -615,7 +627,7 @@
                 <td class="mono">{h.sha ? h.sha.slice(0, 9) : '–'}</td>
                 <td class="num mono">{h.commits ?? '–'}</td>
                 <td>{h.by === 'request' ? lead : h.by}</td>
-                <td class="small">{h.detail || h.summary || ''}</td>
+                <td class="small">{h.detail || h.summary || ''}{h.notes?.length ? `${h.detail || h.summary ? ' · ' : ''}${h.notes.length} scan note${h.notes.length > 1 ? 's' : ''}` : ''}</td>
               </tr>
             {/each}
           </tbody>

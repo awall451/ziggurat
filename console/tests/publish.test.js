@@ -14,7 +14,8 @@ fs.mkdirSync(process.env.CONSOLE_CONFIG_DIR, { recursive: true });
 const TOKEN = 'tok-' + 'Zq9'.repeat(12);
 fs.writeFileSync(path.join(T, 'config', 'claude-token'), TOKEN + '\n');
 
-// Stand-in for gitleaks: a commit that adds the word FAKESECRET is a finding.
+// Stand-in for gitleaks: a commit that adds the word FAKESECRET is a finding of a
+// rule for a known format, FAKEGUESS one of the rule that only guesses.
 const SCANNER = path.join(T, 'gitleaks');
 fs.writeFileSync(
   SCANNER,
@@ -32,11 +33,16 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+found=
 if git -C "$repo" log -p $opts | grep -q FAKESECRET; then
-  echo '[{"RuleID":"generic-api-key","File":"config.py","Commit":"abcdef0123456789","Secret":"FAKESECRET-raw","Match":"FAKESECRET-raw"}]' > "$report"
-  exit 9
+  found='{"RuleID":"github-pat","File":"config.py","Commit":"abcdef0123456789","Secret":"FAKESECRET-raw","Match":"FAKESECRET-raw"}'
 fi
-exit 0
+if git -C "$repo" log -p $opts | grep -q FAKEGUESS; then
+  found="\${found:+$found,}"'{"RuleID":"generic-api-key","File":"keymap.test.js","Commit":"1234567890abcdef","Secret":"FAKEGUESS-raw","Match":"key: FAKEGUESS-raw"}'
+fi
+[ -n "$found" ] || exit 0
+echo "[$found]" > "$report"
+exit 9
 `,
   { mode: 0o755 }
 );
@@ -264,13 +270,40 @@ describe('what is refused', () => {
     await publish.publish(user, s.project(), { manual: true });
     const good = remoteMain(s);
     commit(s, 'config.py', 'KEY = "FAKESECRET-raw"\n');
-    const out = await refused(s, /Possible secret.*rule generic-api-key in config\.py/);
+    const out = await refused(s, /Possible secret.*rule github-pat in config\.py/);
     expect(JSON.stringify([out, publish.publishView(s.project()), publish.history(s.project()), s.calls])).not.toContain('FAKESECRET');
     // Deleting the file later does not help: the commit is still in what would be pushed.
     sh(s.work, 'rm', '-q', 'config.py');
     commit(s, 'ok2.txt', 'fine\n', 'remove the key');
     await refused(s, /Possible secret/);
     expect(remoteMain(s)).toBe(good);
+  });
+
+  it('a finding of a rule that only guesses is shown and does not hold the publish back', async () => {
+    const s = await scenario();
+    commit(s, 'keymap.test.js', "key: 'FAKEGUESS-raw'\n");
+    const out = await publish.publish(user, s.project(), { manual: true });
+    expect(out.outcome).toBe('published');
+    expect(out.detail).toMatch(/1 note/);
+    expect(remoteMain(s)).toBe(sh(s.bare, 'rev-parse', 'main'));
+    const view = publish.publishView(s.project());
+    expect(view.blocked).toBe(null);
+    expect(view.notes).toEqual(['rule generic-api-key in keymap.test.js, commit 123456789']);
+    expect(publish.history(s.project())[0].notes).toEqual(view.notes);
+    expect(s.calls.filter((c) => c.argv[0] === 'blocked')).toEqual([]);
+    expect(JSON.stringify([out, view, publish.history(s.project()), s.calls])).not.toContain('FAKEGUESS');
+    // The next clean publish has no notes left.
+    commit(s, 'ok.txt', 'fine\n');
+    await publish.publish(user, s.project(), { manual: true });
+    expect(publish.publishView(s.project()).notes).toEqual([]);
+  });
+
+  it('a guess beside a finding of a known format: refused, and only for the known format', async () => {
+    const s = await scenario();
+    commit(s, 'keymap.test.js', "key: 'FAKEGUESS-raw'\n");
+    commit(s, 'config.py', 'KEY = "FAKESECRET-raw"\n');
+    const out = await refused(s, /Possible secret.*rule github-pat in config\.py/);
+    expect(out.detail).not.toMatch(/generic-api-key/);
   });
 
   it('the Claude token, found by exact match, and never shows it', async () => {
