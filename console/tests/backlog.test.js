@@ -198,10 +198,30 @@ describe('chat with the lead', () => {
     expect(plan.waiting).toBe(false);
   });
 
+  it('counts an answer the owner has not opened, until the chat is opened or the next message is sent', async () => {
+    // The answer of the test above is there and nobody has looked.
+    expect(bl.chatUnread(project)).toBe(1);
+    // Not while a chat turn is running on the VM.
+    expect(bl.chatUnread(project, { chat: { plan: PLAN } })).toBe(0);
+    bl.chatSeen(project, PLAN);
+    expect(bl.chatUnread(project)).toBe(0);
+    expect(() => bl.chatSeen(project, '../x')).toThrow('Bad plan id');
+    // The next message: nothing to read while its answer is on the way, then one again.
+    vm(0);
+    const next = await bl.chatSay(user, project, PLAN, 'And the second one?');
+    expect(bl.chatUnread(project)).toBe(0);
+    fs.writeFileSync(path.join(out, 'chat', PLAN, `${next.id}.md`), `Re: ${next.id}\nStatus: ok\nDate: 2026-01-02T13:00:00Z\n---\nIt stays.\n`);
+    expect(bl.chatUnread(project)).toBe(1);
+    // The seen mark is not a message of the chat.
+    expect(bl.list(project).plans[0].chat).toHaveLength(2);
+    bl.chatSeen(project, PLAN);
+    expect(bl.chatUnread(project)).toBe(0);
+  });
+
   it('passes a refusal on and keeps nothing', async () => {
     vm(2, 'agent-kit-chat: a cycle is running. Try again when it has ended');
     await expect(bl.chatSay(user, project, PLAN, 'hello')).rejects.toThrow('a cycle is running');
-    expect(bl.list(project).plans[0].chat).toHaveLength(1);
+    expect(bl.list(project).plans[0].chat).toHaveLength(2);
     vm(0);
   });
 

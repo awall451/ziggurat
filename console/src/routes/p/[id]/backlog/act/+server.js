@@ -1,6 +1,6 @@
 import { error, json } from '@sveltejs/kit';
 import { getProject } from '$lib/server/config.js';
-import { startPlan, cancelAt, moveAt, decide, runNow, runAt, chatSay, chatEnd, syncBacklog } from '$lib/server/backlog.js';
+import { startPlan, cancelAt, moveAt, decide, runNow, runAt, chatSay, chatEnd, chatSeen, syncBacklog } from '$lib/server/backlog.js';
 import { oneshot } from '$lib/server/controls.js';
 
 /** Every owner action on the Backlog tab: one JSON body {action, ...}. */
@@ -28,6 +28,8 @@ export async function POST({ params, request, locals }) {
         const out = await chatSay(locals.user, project, s(b.plan), s(b.text));
         return json(out);
       }
+      case 'chat-seen':
+        return json(chatSeen(project, s(b.plan)));
       case 'chat-end':
         return json(await chatEnd(locals.user, project, s(b.plan)));
       case 'sync':

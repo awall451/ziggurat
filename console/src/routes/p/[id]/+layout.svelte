@@ -100,7 +100,7 @@
   <div class="tabs">
     {#each TABS as [slug, label] (slug)}
       <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
-        {label}{#if slug === 'inbox' && wait.inbox}<span class="count">{wait.inbox}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{/if}
+        {label}{#if slug === 'inbox' && wait.inbox}<span class="count">{wait.inbox}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{:else if slug === 'backlog' && wait.backlog}<span class="count">{wait.backlog}</span>{/if}
       </a>
     {/each}
     <span class="grow"></span>
