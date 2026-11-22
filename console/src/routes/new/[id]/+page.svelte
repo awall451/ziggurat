@@ -350,7 +350,8 @@
         <h3>Publishing</h3>
         <p>
           Remote: <span class="mono">{r.remote}</span>. One step is left, and it is yours: the console made a key for this project. Add it to the
-          repository as a deploy key with write access, then press Verify.
+          repository as a deploy key with write access. Publishing will start once the key works: the console checks by itself every 15 minutes, and tells
+          you on the Inbox if it still fails after an hour.
           <a href="/p/{d.id}/controls#publishing">Show the key</a>
         </p>
       {/if}

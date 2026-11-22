@@ -21,7 +21,7 @@ import { pull, sshArgs, q } from './ssh.js';
 import { getStatus, peekStatus, kitAtLeast, UUID_RE } from './live.js';
 import { listProjects } from './config.js';
 import { syncOutbox } from './feedback.js';
-import { syncRequest, maybePublish } from './publish.js';
+import { syncRequest, maybePublish, maybeVerify } from './publish.js';
 
 const SLOW_EVERY = 15 * 60_000;
 export const SHOTS_KIT = '0.13.0'; // screenshots of every merged build, by sha
@@ -236,6 +236,8 @@ export function startScheduler() {
       // Publishing waits for the gate after a cycle, so it is looked at on every
       // tick; it does nothing unless the lead's request is still open.
       if (!s.slow) maybePublish(p);
+      // A remote that is not verified yet is checked by the console itself, now and then.
+      if (!s.slow) maybeVerify(p);
       if (watchEnd(p, peekStatus(p.id))) continue;
       if (Date.now() - s.slowAt > SLOW_EVERY) runSlow(p);
       else if (Date.now() - s.viewedAt < VIEW_WINDOW) {

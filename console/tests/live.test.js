@@ -26,6 +26,7 @@ describe('what waits for the owner', () => {
     expect(waitingParts({ asks: 1, escalations: 0, packages: 2, held: 1 })).toEqual({ total: 4, inbox: 4, backlog: 0, text: '1 question · 2 package requests · 1 check change' });
     expect(waitingParts({ asks: 0, escalations: 2, packages: 0, held: 0 })).toEqual({ total: 2, inbox: 0, backlog: 0, text: '2 escalations' });
     expect(waitingParts({ chat: 1 })).toEqual({ total: 1, inbox: 0, backlog: 1, text: '1 chat answer' });
+    expect(waitingParts({ asks: 1, publishing: 1 })).toEqual({ total: 2, inbox: 2, backlog: 0, text: '1 question · publishing is not working' });
     expect(waitingParts(undefined)).toEqual({ total: 0, inbox: 0, backlog: 0, text: 'Nothing' });
   });
 });

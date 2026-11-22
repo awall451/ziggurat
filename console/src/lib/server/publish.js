@@ -44,6 +44,14 @@ const gitleaksBin = () => process.env.GITLEAKS_BIN || 'gitleaks';
 const MAX_BUNDLE = 2 * 1024 ** 3;
 const CHECK_EVERY = 60_000; // how often a waiting request looks at the VM
 const RETRY_BLOCKED = 15 * 60_000;
+// The console checks a remote that is not verified yet by itself: often on the
+// first day (the owner is adding the deploy key), then hourly. A check that
+// still fails after QUIET_FOR is shown to the owner; before that the key is
+// probably just not there yet.
+const AUTO_EVERY = 15 * 60_000;
+const AUTO_EVERY_LATER = 60 * 60_000;
+const AUTO_FIRST_DAY = 24 * 60 * 60_000;
+const AUTO_QUIET_FOR = 60 * 60_000;
 
 let localRemotes = false; // tests publish to a folder on disk
 
@@ -137,7 +145,16 @@ function run(cmd, argv, { env, input, timeout = 60000, maxBytes = 4 * 1024 * 102
   });
 }
 
-const tail = (res, n = 300) => maskSecrets((res.stderr || res.stdout || `exit ${res.code}`).trim().split('\n').slice(-3).join(' · ').slice(-n));
+/**
+ * The end of a command's answer, for showing. A forge says why it refused in a
+ * line of its own ("ERROR: The key ... is read only"), above git's general
+ * "Could not read from remote repository" text: those lines come first.
+ */
+function tail(res, n = 300) {
+  const lines = (res.stderr || res.stdout || `exit ${res.code}`).split('\n').map((l) => l.trim()).filter(Boolean);
+  const said = lines.filter((l) => /^(ERROR|remote: error|remote: ERROR|fatal):/i.test(l)).slice(0, 3);
+  return maskSecrets((said.length ? said : lines.slice(-3)).join(' · ').slice(-n));
+}
 
 // ---- the project's own key and the forge's host key ------------------------
 
@@ -254,8 +271,9 @@ export async function setRemote(user, project, remote) {
   if (value) next.publish = { remote: value };
   else delete next.publish;
   saveProject(next, { replace: true });
-  // A new address has to be verified again before anything is pushed to it.
-  writeState(project.id, { verified: null, blocked: null, attemptAt: 0 });
+  // A new address has to be verified again before anything is pushed to it,
+  // and the console's own checks of it start over.
+  writeState(project.id, { verified: null, blocked: null, attemptAt: 0, auto: null });
   audit(user, project.id, value ? 'publish-remote' : 'publish-off', { remote: value || null });
   if (!value) {
     const status = peekStatus(project.id);
@@ -290,10 +308,23 @@ export async function verify(user, project, { fingerprint = null } = {}) {
     writeKnownHosts(project.id, where, state.hostKey.line);
   }
 
+  const checks = await accessChecks(project);
+  const ok = checks.every((c) => c.ok);
+  let note = null;
+  if (ok) {
+    writeState(project.id, { verified: { remote, at: new Date().toISOString() }, auto: null });
+    note = await tellVm(project, remote);
+  }
+  audit(user, project.id, 'publish-verify', { remote }, { ok, detail: checks.map((c) => `${c.name}: ${c.ok ? 'ok' : c.detail}`).join('; ') });
+  return { ok, checks, note, fingerprint: readState(project.id).hostKey?.fingerprint || null };
+}
+
+/** Read access and write access (a dry run) with the project's key: [{name, ok, detail}]. */
+async function accessChecks(project) {
+  const remote = project.publish.remote;
   const checks = [];
-  let main = '';
   try {
-    main = await remoteMain(project);
+    const main = await remoteMain(project);
     checks.push({ name: 'read', ok: true, detail: main ? `remote main is ${main.slice(0, 9)}` : 'the remote has no main yet' });
   } catch (e) {
     checks.push({ name: 'read', ok: false, detail: e.message });
@@ -305,19 +336,98 @@ export async function verify(user, project, { fingerprint = null } = {}) {
     const ok = res.code === 0 || /remote ref does not exist/.test(res.stderr);
     checks.push({ name: 'write', ok, detail: ok ? 'the key may push' : tail(res) });
   }
-  const ok = checks.every((c) => c.ok);
-  let note = null;
-  if (ok) {
-    writeState(project.id, { verified: { remote, at: new Date().toISOString() } });
-    const status = await getStatus(project);
-    if (status.reachable && kitAtLeast(status.kitVersion, PUBLISH_KIT)) {
-      const res = await kit(project, 'agent-kit-publish', ['enable', remote]);
-      if (res.code !== 0) note = `The VM did not take the setting: ${tail(res)}`;
-    } else if (!status.reachable) note = 'The VM did not answer, so its lead has not been told yet. Verify again when it is reachable.';
-    else note = `The VM runs a kit older than ${PUBLISH_KIT}. Upgrade it, then verify again: publishing needs it.`;
+  return checks;
+}
+
+/** Turn publishing on for the team (its lead learns the remote). Returns a note when that did not happen, else null. */
+async function tellVm(project, remote) {
+  const status = await getStatus(project);
+  if (status.reachable && kitAtLeast(status.kitVersion, PUBLISH_KIT)) {
+    const res = await kit(project, 'agent-kit-publish', ['enable', remote]);
+    return res.code !== 0 ? `The VM did not take the setting: ${tail(res)}` : null;
   }
-  audit(user, project.id, 'publish-verify', { remote }, { ok, detail: checks.map((c) => `${c.name}: ${c.ok ? 'ok' : c.detail}`).join('; ') });
-  return { ok, checks, note, fingerprint: readState(project.id).hostKey?.fingerprint || null };
+  if (!status.reachable) return 'The VM did not answer, so its lead has not been told yet. Verify again when it is reachable.';
+  return `The VM runs a kit older than ${PUBLISH_KIT}. Upgrade it, then verify again: publishing needs it.`;
+}
+
+// ---- the console verifies by itself ---------------------------------------
+
+const verifying = new Set(); // project ids with a check in progress
+
+/** A host key the owner already confirmed for this host and port, in any project of this console. */
+function confirmedHostKey(where) {
+  for (const entry of rawProjects()) {
+    const k = readState(entry.id).hostKey;
+    if (k && k.host === where.host && k.port === where.port && KEYLINE_RE.test(k.line || '') && FP_RE.test(k.fingerprint || '')) return k;
+  }
+  return null;
+}
+
+/**
+ * Called on every scheduler tick. For a project whose remote is not verified,
+ * runs the same check as the Verify button, now and then, until it works: the
+ * owner adds the deploy key on the forge and nothing else is needed. Never
+ * accepts a host key by itself: it uses one the owner confirmed (here or for
+ * another project on the same host), or waits for that confirmation.
+ * Does nothing, without touching the network, when no check is due.
+ */
+export function maybeVerify(project, now = Date.now()) {
+  const remote = project.publish?.remote;
+  if (!remote || verifying.has(project.id)) return null;
+  const state = readState(project.id);
+  if (state.verified?.remote === remote) return null;
+  const auto = state.auto?.remote === remote ? state.auto : { remote, since: now, lastAt: 0, error: null, need: null };
+  const every = now - auto.since < AUTO_FIRST_DAY ? AUTO_EVERY : AUTO_EVERY_LATER;
+  if (auto.lastAt && now - auto.lastAt < every) return null;
+  // The team has to be told on success: wait for a VM that answers, with a kit that publishes.
+  const status = peekStatus(project.id);
+  if (!status?.reachable || !kitAtLeast(status.kitVersion, PUBLISH_KIT)) return null;
+  verifying.add(project.id);
+  writeState(project.id, { auto: { ...auto, lastAt: now } });
+  return autoVerify(project, remote, auto, now)
+    .catch((e) => ({ ok: false, error: maskSecrets(String(e.message || e)).slice(0, 300) }))
+    .then((out) => {
+      // The address may have been changed, or verified by hand, while the check ran.
+      const s = readState(project.id);
+      if (s.verified?.remote !== remote && s.auto?.remote === remote) writeState(project.id, { auto: { ...s.auto, error: out.ok ? null : out.error, need: out.need || null } });
+      return out;
+    })
+    .finally(() => verifying.delete(project.id));
+}
+
+async function autoVerify(project, remote, auto, now) {
+  const where = parseRemote(remote);
+  if (!where) return { ok: false, error: 'The remote address is not one the console accepts.' };
+  const user = { name: 'console' };
+  await ensureKey(project);
+  await ensureMirror(project.id);
+  if (!where.local) {
+    let state = readState(project.id);
+    const pinned = state.hostKey && state.hostKey.host === where.host && state.hostKey.port === where.port ? state.hostKey : null;
+    if (!pinned) {
+      const known = confirmedHostKey(where);
+      if (!known) return { ok: false, need: 'hostkey', error: `The console has not seen ${where.host} before. Confirm its key once: Controls, Publishing, Verify.` };
+      state = writeState(project.id, { hostKey: { host: known.host, port: known.port, line: known.line, fingerprint: known.fingerprint, at: new Date().toISOString(), reused: true } });
+      audit(user, project.id, 'publish-hostkey', { host: where.host, fingerprint: known.fingerprint, reused: true });
+    }
+    writeKnownHosts(project.id, where, state.hostKey.line);
+  }
+  const checks = await accessChecks(project);
+  const bad = checks.find((c) => !c.ok);
+  const wasFailing = !!auto.error;
+  if (bad) {
+    // One audit line when it starts to fail, not one per try.
+    if (!wasFailing) audit(user, project.id, 'publish-verify', { remote, auto: true }, { ok: false, detail: `${bad.name}: ${bad.detail}` });
+    return { ok: false, error: bad.detail };
+  }
+  // Someone changed the address or verified by hand meanwhile: leave it to them.
+  const fresh = readState(project.id);
+  if (project.publish?.remote !== remote || fresh.verified?.remote === remote || fresh.auto?.remote !== remote) return { ok: true };
+  const note = await tellVm(project, remote);
+  if (note) return { ok: false, error: note };
+  writeState(project.id, { verified: { remote, at: new Date().toISOString(), by: 'console' }, auto: null });
+  audit(user, project.id, 'publish-verify', { remote, auto: true }, { ok: true, detail: checks.map((c) => `${c.name}: ok`).join('; ') });
+  return { ok: true, verified: true };
 }
 
 // ---- the lead's request -----------------------------------------------------
@@ -578,6 +688,14 @@ export function maybePublish(project) {
   return publish({ name: 'console' }, project).catch(() => null);
 }
 
+function autoView(state, remote, now = Date.now()) {
+  if (state.verified?.remote === remote) return null;
+  const a = state.auto?.remote === remote ? state.auto : null;
+  if (!a) return { checking: true, lastAt: null, error: null, need: null, waiting: false };
+  const waiting = !!a.error && (a.need === 'hostkey' || now - a.since > AUTO_QUIET_FOR);
+  return { checking: true, lastAt: a.lastAt ? new Date(a.lastAt).toISOString() : null, error: a.error || null, need: a.need || null, waiting };
+}
+
 /** What the pages show. Nothing here touches the network. */
 export function publishView(project) {
   const remote = project.publish?.remote || null;
@@ -589,6 +707,10 @@ export function publishView(project) {
     publicKey: publicKey(project),
     fingerprint: state.hostKey?.fingerprint || null,
     verified: state.verified?.remote === remote ? state.verified.at : null,
+    // The console's own checks of a remote that is not verified yet. `waiting`:
+    // it still fails after the first hour, or needs the owner's one confirmation
+    // of the host key: shown on the Inbox and under "Waiting on you".
+    auto: autoView(state, remote),
     sha: state.publishedSha || null,
     at: state.publishedAt || null,
     blocked: state.blocked ? { at: state.blocked.at, reason: state.blocked.reason, sha: state.blocked.sha } : null,
@@ -604,5 +726,7 @@ export const _test = {
     localRemotes = on;
   },
   readState,
+  writeState,
+  tail,
   CI_PATHS
 };
