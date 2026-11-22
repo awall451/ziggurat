@@ -1,7 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { invalidateAll } from '$app/navigation';
-  import { num, usd, dur, between, ago, idleText } from '$lib/format.js';
+  import { num, usd, dur, between, ago, idleText, waitingParts } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
 
   let { data, children } = $props();
@@ -20,13 +20,11 @@
     ['usage', 'Usage'],
     ['controls', 'Controls']
   ];
-  // What needs the owner: questions from the lead plus escalations in the repo.
-  const waiting = $derived(p.asks + p.summary.escalations);
-  const waitingText = $derived(
-    [p.asks ? `${p.asks} question${p.asks > 1 ? 's' : ''}` : '', p.summary.escalations ? `${p.summary.escalations} escalation${p.summary.escalations > 1 ? 's' : ''}` : '']
-      .filter(Boolean)
-      .join(' · ') || 'Nothing'
-  );
+  // What needs the owner: the lead's questions, escalations in the repo, package
+  // requests and changes to the checks that the gate holds.
+  const wait = $derived(waitingParts(p.waiting));
+  const waiting = $derived(wait.total);
+  const waitingText = $derived(wait.text);
   const current = $derived(page.url.pathname.split('/')[3] || 'topology');
 
   const STATE_WORD = { running: 'Running', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
@@ -102,7 +100,7 @@
   <div class="tabs">
     {#each TABS as [slug, label] (slug)}
       <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
-        {label}{#if slug === 'inbox' && p.asks}<span class="count">{p.asks}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{/if}
+        {label}{#if slug === 'inbox' && wait.inbox}<span class="count">{wait.inbox}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{/if}
       </a>
     {/each}
     <span class="grow"></span>
