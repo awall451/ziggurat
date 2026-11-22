@@ -12,10 +12,11 @@
   // of that length along its row and a click calls onpick with the start; the
   // parent passes the picked start back as ghost.at, which stays drawn and can
   // be dragged, or picked again with another click.
-  import { wallClock, timeOfDay, hourLabel, clockLabel, draggedStart, DAYS } from '$lib/schedule.js';
+  import { wallClock, timeOfDay, hourLabel, clockLabel, draggedStart, waitText, DAYS } from '$lib/schedule.js';
 
   let {
-    rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, skipped, log}]
+    rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, skipped, log, expected}]
+    // expected: {job id: ms}, where a waiting job is likely to start when that is later than set
     range, // {from, to, days}
     tz, // the time zone the axis is drawn in
     clock = '24',
@@ -386,11 +387,21 @@
           {#each row.jobs || [] as job (job.id)}
             {@const end = job.state === 'done' ? job.end : job.state === 'running' ? Math.max(now, job.start) : job.start}
             {@const mv = dragOf(row, job)}
-            {#if visible(job.start, Math.max(job.estEnd, end)) || mv}
+            {@const late = job.state === 'set' && !mv ? row.expected?.[job.id] ?? null : null}
+            {#if late && visible(late, late + job.minutes * 60000)}
+              <!-- where it is likely to start: the team is busy, or it waits for the job it builds on -->
+              <g class="expect">
+                <rect x={x(late)} y={y + 6} width={Math.max(6, x(late + job.minutes * 60000) - x(late))} height={ROW - 12} rx="4" />
+                <text x={x(late) + 4} y={y + ROW - 8}>~{clockText(late)}</text>
+              </g>
+            {/if}
+            {#if visible(job.start, Math.max(job.estEnd, end, late ?? 0)) || mv}
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <g
                 class="job {job.state}"
                 class:plan={job.kind === 'plan'}
+                class:late={!!late || !!job.wait}
+                class:stopped={!!job.stopped}
                 class:clickable={!!onjob}
                 class:movable={movable(job)}
                 class:moving={!!mv}
@@ -412,6 +423,10 @@
                 <rect class="est" x={x(job.start)} y={y + 6} width={Math.max(6, x(job.estEnd) - x(job.start))} height={ROW - 12} rx="4" />
                 {#if end > job.start}
                   <rect class="did" fill="url(#{uid}-job)" x={x(job.start)} y={y + 10} width={Math.max(3, x(end) - x(job.start))} height={ROW - 20} rx="3" />
+                {/if}
+                {#if end > job.estEnd && job.state !== 'set'}
+                  <!-- past its estimate: the part beyond it, in the warning colour -->
+                  <rect class="over" x={x(job.estEnd)} y={y + 10} width={Math.max(3, x(end) - x(job.estEnd))} height={ROW - 20} rx="3" />
                 {/if}
                 {#if inside(job.start)}
                   <line class="start" x1={x(job.start)} x2={x(job.start)} y1={y + 3} y2={y + ROW - 3} />
@@ -468,6 +483,14 @@
       <div class="small">
         est {lengthText(tip.job.estEnd - tip.job.start)}{tip.job.cost != null ? ` · $${tip.job.cost.toFixed(2)}` : ''}{tip.job.state === 'done' ? ` · took ${lengthText(tip.job.end - tip.job.start)}` : ''}
       </div>
+      {#if tip.job.state === 'running' && now > tip.job.estEnd}
+        <div class="small warnline">{lengthText(now - tip.job.estEnd)} past its estimate{tip.job.noBrake ? ' (no time limit)' : ''}</div>
+      {/if}
+      {#if tip.job.stopped}<div class="small warnline">stopped: it ran to twice its estimate</div>{/if}
+      {#if tip.job.state === 'set' && tip.row.expected?.[tip.job.id]}
+        <div class="small warnline">expected about {clockText(tip.row.expected[tip.job.id])} instead of {clockText(tip.job.start)}</div>
+      {/if}
+      {#if tip.job.wait}<div class="small warnline">{waitText(tip.job.wait)}</div>{/if}
       {#if onjob}<div class="small dim">Click for details{movable(tip.job) ? '. Drag to move it' : ''}</div>{/if}
     </div>
   {/if}
@@ -554,6 +577,38 @@
   }
   .job.done .est {
     stroke-opacity: 0.6;
+  }
+  .job .over {
+    fill: var(--warn);
+    fill-opacity: 0.55;
+    pointer-events: none;
+  }
+  .job.running .over {
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .job.late .est {
+    stroke: var(--warn);
+  }
+  .job.stopped .est {
+    stroke: var(--critical);
+    stroke-opacity: 1;
+  }
+  .expect {
+    pointer-events: none;
+  }
+  .expect rect {
+    fill: none;
+    stroke: var(--warn);
+    stroke-width: 1.2;
+    stroke-dasharray: 2 4;
+  }
+  .expect text {
+    fill: var(--warn);
+    font-size: 11px;
+    font-family: var(--mono, monospace);
+  }
+  .warnline {
+    color: var(--warn);
   }
   .job.running .did {
     animation: pulse 1.6s ease-in-out infinite;

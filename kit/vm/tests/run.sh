@@ -1240,13 +1240,112 @@ shot finish > /dev/null
 tar -c -C "$T/work/j" . | shot at $((now + 3600)) $JB owner > /dev/null
 echo "$((now - 2400)) owner" > "$S/oneshot-at/$JB"
 FAKE_ACTIVE=active shot due
-check "a job waits more than 30 minutes for a cycle that started at the same time" '[ -f "$S/oneshot-at/$JB" ] && ! grep -q "job:$JB .* missed" "$S/schedule.log"'
+check "a job waits (up to 4 hours) for a cycle that started at the same time" '[ -f "$S/oneshot-at/$JB" ] && ! grep -q "job:$JB .* missed" "$S/schedule.log"'
 echo "$((now - 15000)) owner" > "$S/oneshot-at/$JB"
 shot due
 check "a job the team was too busy for is dropped and logged" '[ ! -e "$S/oneshot-at/$JB" ] && [ ! -e "$S/inbox/$JB" ] && grep -q "job:$JB .* missed" "$S/schedule.log"'
 echo "Plan later." | shot at $((now + 600)) 20260103T110000Z-p-later owner --plan > /dev/null
 shot unat 20260103T110000Z-p-later > /dev/null
 check "a timed job can be cancelled" '[ ! -e "$S/oneshot-at/20260103T110000Z-p-later" ]'
+
+echo "== jobs that build on each other, and the overrun brake (kit 0.18)"
+JD=20260105T100000Z-o-first JE=20260105T100100Z-o-second JF=20260105T100200Z-o-orphan JG=20260105T100300Z-o-free
+now=$(date +%s)
+rm -f "$S/oneshot" "$S/oneshot.meta" "$S/halt-after"; echo "run 2026-01-05T00:00:00+00:00" > "$S/control"
+atjob() { tar -c -C "$T/work/j" . | shot at "$@" > /dev/null; }
+for bad in "--minutes 0" "--minutes 1441" "--minutes x" "--after not-a-job" "--after $JE" "--speed fast"; do
+  refuse "a timed job with $bad" sh -c "tar -c -C $T/work/j . | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-oneshot at $((now + 3600)) $JE owner $bad"
+done
+atjob $((now + 3600)) $JE owner --minutes 30 --after "$JD"
+check "a timed job keeps its estimate and what it builds on" 'grep -qx "minutes=30" "$S/oneshot-at/$JE.meta" && grep -qx "after=$JD" "$S/oneshot-at/$JE.meta" && grep -q "^$JE [0-9]* owner - -$" <<< "$(shot list-at)"'
+due_at() { echo "$((now - ${2:-30})) owner" > "$S/oneshot-at/$1"; }
+due_at $JE; shot due
+check "it does not start when the job it builds on never ran" '[ -f "$S/oneshot-at/$JE" ] && [ ! -e "$S/oneshot" ] && grep -q "^$JE [0-9]* owner failed $JD$" <<< "$(shot list-at)"'
+atjob $((now + 3600)) $JD owner --minutes 20
+shot due
+check "nor while that job is itself still set for a time" 'grep -q "^pending $JD " "$S/oneshot-at/$JE.wait"'
+# A job with nothing to wait for is not held up by one that waits.
+atjob $((now + 3600)) $JG owner; due_at $JG
+: > "$FAKE_LOG"; shot due
+check "a job behind a waiting one starts" 'grep -q "^run oneshot $JG " "$S/control" && [ -f "$S/oneshot-at/$JE" ]'
+check "a job without an estimate has no brake" '[ "$(cat "$S/oneshot.meta")" = "id=$JG" ]'
+shot finish > /dev/null
+shot unat $JD > /dev/null
+echo "$JD 2026-01-05T10:00:00+00:00 run" > "$S/oneshot"; shot due
+check "nor while that job runs" 'grep -q "^running $JD " "$S/oneshot-at/$JE.wait"'
+rm -f "$S/oneshot"
+ledger() { jq -nc --arg id "$1" --arg end "$(date -Is -d "${3:-5 minutes ago}")" --argjson o "$2" '{oneshot:$id, kind:"oneshot", rc:0, halted:false, limited:false, is_error:false, end:$end} + $o' >> "$S/ledger/cycles.jsonl"; }
+mkdir -p "$S/ledger" "$S/gate/results"; rm -f "$S"/gate/results/*.json "$S/gate/paused"
+git -C "$T/ws" for-each-ref --format='%(refname)' refs/heads/ready/ 2> /dev/null | xargs -r -n1 git -C "$T/ws" update-ref -d
+ledger $JD '{"halted":true}'; shot due
+check "a job that was halted is not built on" 'grep -q "^failed $JD " "$S/oneshot-at/$JE.wait"'
+ledger $JD '{"overrun":true,"halted":true}'; shot due
+check "nor one the brake stopped" 'grep -q "^failed $JD " "$S/oneshot-at/$JE.wait"'
+ledger $JD '{}'
+echo $((now - 3600)) > "$S/gate/pass-started"; shot due
+check "it ended well, but the gate has not made a pass since: it waits for the merge" 'grep -q "^merge $JD " "$S/oneshot-at/$JE.wait" && [ ! -e "$S/oneshot" ]'
+echo "$now" > "$S/gate/pass-started"
+git -C "$T/ws" branch ready/from-first 2> /dev/null; shot due
+check "a branch the gate has not judged yet: it still waits" 'grep -q "^merge $JD " "$S/oneshot-at/$JE.wait"'
+fsha=$(git -C "$T/ws" rev-parse ready/from-first)
+jq -nc --arg sha "$fsha" '{topic:"from-first", sha:$sha, status:"held", detail:"changes what done means", at:"x"}' | sed 's/"status":"held"/"status": "held"/' > "$S/gate/results/from-first.json"
+shot due
+check "a change held for the owner: it waits for the approval" 'grep -q "^held $JD " "$S/oneshot-at/$JE.wait"'
+# Hours pass while it waits for the owner: they do not count against the job.
+due_at $JE 15000; echo "held $JD $((now - 14900)) 0" > "$S/oneshot-at/$JE.wait"; shot due
+check "time spent waiting for the owner does not get it dropped" '[ -f "$S/oneshot-at/$JE" ] && ! grep -q "job:$JE .* missed" "$S/schedule.log" && [ "$(cut -d" " -f4 "$S/oneshot-at/$JE.wait")" -ge 14900 ]'
+jq -c '.status = "merged"' "$S/gate/results/from-first.json" > "$S/gate/results/from-first.json.n" && mv "$S/gate/results/from-first.json.n" "$S/gate/results/from-first.json"
+: > "$FAKE_LOG"; shot due
+check "merged, gate quiet, nothing held: it starts, with its estimate" 'grep -q "^run oneshot $JE " "$S/control" && grep -qx "minutes=30" "$S/oneshot.meta" && grep -qx "id=$JE" "$S/oneshot.meta" && [ ! -e "$S/oneshot-at/$JE.meta" ] && [ ! -e "$S/oneshot-at/$JE.wait" ] && grep -q "job:$JE .* started" "$S/schedule.log"'
+atjob $((now + 3600)) $JF owner --after 20260105T090000Z-o-never; due_at $JF 15000; shot due
+check "a job whose base never comes is dropped after four hours, with the reason" '[ ! -e "$S/oneshot-at/$JF" ] && [ ! -e "$S/oneshot-at/$JF.meta" ] && grep -q "job:$JF .* missed: the job it builds on (20260105T090000Z-o-never) did not finish" "$S/schedule.log"'
+
+# The brake. $JE runs with an estimate of 30 minutes: wrap up at 45, stop at 60.
+running_since() { echo "$JE $(date -Is -d "$1") run" > "$S/oneshot"; }
+running_since "40 minutes ago"; : > "$FAKE_LOG"; FAKE_ACTIVE=active shot brake
+check "within its estimate and a half: nothing" '[ ! -e "$S/oneshot.wrap" ] && ! grep -q "stop agent-kit-lead.service" "$FAKE_LOG"'
+running_since "46 minutes ago"; FAKE_ACTIVE=active shot brake > /dev/null
+check "at one and a half times the estimate the lead is to be told" '[ "$(cat "$S/oneshot.wrap")" = "$JE 30 46 60" ] && ! grep -q "stop agent-kit-lead.service" "$FAKE_LOG"'
+rm -rf "$S/outbox/.seen"/overrun-*
+note=$(hook LEAD null)
+check "the lead gets the wrap-up notice once, with the numbers" 'grep -q "\[agent-kit owner notice\] This job has run 46 minutes against an estimate of 30" <<< "$note" && grep -q "At 60 minutes" <<< "$note" && [ -z "$(hook LEAD null)" ]'
+check "each agent gets a short one, once" 'grep -q "well past its estimate" <<< "$(hook LEAD \"agentx\")" && [ -z "$(hook LEAD \"agentx\")" ]'
+check "nobody outside the lead session gets it" '[ -z "$(hook OTHER null)" ]'
+running_since "61 minutes ago"; FAKE_ACTIVE=active shot brake > /dev/null
+check "at twice the estimate the cycle is stopped, and it is written down" 'grep -qx "stop agent-kit-lead.service" "$FAKE_LOG" && [ "$(cat "$S/oneshot.overrun")" = "$JE" ] && grep -q "job:$JE .* stopped: it ran 61 minutes against an estimate of 30" "$S/schedule.log"'
+# The cycle's own end writes the ledger line and puts the team back.
+shot finish > /dev/null
+check "ending the job clears what the brake left" '[ ! -e "$S/oneshot.meta" ] && [ ! -e "$S/oneshot.wrap" ] && [ ! -e "$S/oneshot.overrun" ] && grep -q "^run after one-shot job $JE ended" "$S/control"'
+# A short job: never told sooner than its estimate plus 10 minutes, never stopped sooner than plus 20.
+JS=20260105T110000Z-o-short
+tar -c -C "$T/work/j" . | shot start $JS owner --minutes 5 > /dev/null
+echo "$JS $(date -Is -d "9 minutes ago") run" > "$S/oneshot"; : > "$FAKE_LOG"; FAKE_ACTIVE=active shot brake
+check "a 5 minute job is left alone at 9 minutes" '[ ! -e "$S/oneshot.wrap" ]'
+echo "$JS $(date -Is -d "16 minutes ago") run" > "$S/oneshot"; FAKE_ACTIVE=active shot brake > /dev/null
+check "told to wrap up at 15" '[ "$(cat "$S/oneshot.wrap")" = "$JS 5 16 25" ] && ! grep -q "stop agent-kit-lead.service" "$FAKE_LOG"'
+echo "$JS $(date -Is -d "26 minutes ago") run" > "$S/oneshot"; FAKE_ACTIVE=active shot brake > /dev/null
+check "stopped at 25" 'grep -qx "stop agent-kit-lead.service" "$FAKE_LOG"'
+shot finish > /dev/null
+JN=20260105T120000Z-o-nobrake
+tar -c -C "$T/work/j" . | shot start $JN owner --minutes 5 --no-brake > /dev/null
+echo "$JN $(date -Is -d "5 hours ago") run" > "$S/oneshot"; : > "$FAKE_LOG"; FAKE_ACTIVE=active shot brake
+check "the owner switched the brake off for a job: it runs on" 'grep -qx "brake=off" "$S/oneshot.meta" && [ ! -e "$S/oneshot.wrap" ] && ! grep -q "stop agent-kit-lead.service" "$FAKE_LOG"'
+shot finish > /dev/null
+# A marker without the kit 0.18 file (a job started by an older kit) is left alone.
+echo "$JN $(date -Is -d "5 hours ago") run" > "$S/oneshot"; : > "$FAKE_LOG"; FAKE_ACTIVE=active shot brake
+check "a job without an estimate on the VM is never braked" '! grep -q "stop agent-kit-lead.service" "$FAKE_LOG"'
+rm -f "$S/oneshot"
+# The ledger says which job the brake stopped: nothing may be built on it.
+JO=20260105T130000Z-o-ledger
+echo "stop owner halt 2026-01-05T05:00:00+00:00" > "$S/control"
+tar -c -C "$T/work/j" . | shot start $JO owner --minutes 10 > /dev/null
+out=$(cycle 2>&1)
+check "a job that ended by itself is not marked as overrun" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -c "[.oneshot, .overrun]")" = "[\"$JO\",false]" ]'
+echo "$JO" > "$S/oneshot.overrun"; out=$(cycle 2>&1)
+check "a job the brake stopped is" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -c "[.oneshot, .overrun]")" = "[\"$JO\",true]" ]'
+shot finish > /dev/null
+check "the tick runs the brake" 'grep -q "agent-kit-oneshot brake" "$HERE/../systemd/agent-kit-tick.service"'
+git -C "$T/ws" update-ref -d refs/heads/ready/from-first 2> /dev/null; rm -f "$S"/gate/results/from-first.json
 
 echo "== the owner's cap on proposals (kit 0.15)"
 PL3=20260104T100000Z-p-capped

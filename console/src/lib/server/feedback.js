@@ -100,6 +100,33 @@ export async function send(project, user, { tier, text, attachments = [], inRepl
   return deliver(project, store(project, user, { tier, text, attachments, inReplyTo }));
 }
 
+// What the console knows about a backlog job, for the VM (kit 0.18): its
+// estimate (the overrun brake goes by it), the jobs it builds on, and whether
+// the owner switched the brake off. Kept with the job, so a move or a second
+// start sends the same. Only these forms ever reach the command line.
+function jobFlags(flags, { start = false } = {}) {
+  const out = [];
+  const list = Array.isArray(flags) ? flags : [];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === '--minutes' && /^[0-9]{1,4}$/.test(list[i + 1] || '')) out.push('--minutes', list[++i]);
+    else if (list[i] === '--no-brake') out.push('--no-brake');
+    else if (list[i] === '--after' && /^[0-9TZa-z,-]{1,600}$/.test(list[i + 1] || '')) {
+      i++;
+      if (!start) out.push('--after', list[i]);
+    }
+  }
+  return out;
+}
+function keepFlags(project, id, flags) {
+  const f = jobFlags(flags);
+  if (!f.length) return;
+  const file = path.join(sentDir(project), id, 'meta.json');
+  const meta = readJson(file);
+  if (!meta) return;
+  meta.flags = f;
+  fs.writeFileSync(file, JSON.stringify(meta, null, 2));
+}
+
 /**
  * A new one-shot job on a halted team: the text becomes an owner message and
  * the VM runs one cycle for it, then halts again.
@@ -112,8 +139,9 @@ export async function send(project, user, { tier, text, attachments = [], inRepl
  * - no clear answer (the line dropped): the job is kept as "not started",
  *   since it may have reached the VM. Returns {started: false}.
  */
-export async function sendOneshot(project, user, { text, attachments = [] }) {
+export async function sendOneshot(project, user, { text, attachments = [], flags = [] }) {
   const id = store(project, user, { tier: ONESHOT, text, attachments, inReplyTo: null }, { keepDrafts: true });
+  keepFlags(project, id, flags);
   const out = await startOneshot(project, id);
   if (out.refused) {
     fs.rmSync(path.join(sentDir(project), id), { recursive: true, force: true });
@@ -129,11 +157,12 @@ export async function sendOneshot(project, user, { text, attachments = [] }) {
  * then (agent-kit-oneshot at). A refusal throws and keeps nothing here; with
  * no clear answer the job is kept, marked with the error.
  */
-export async function scheduleOneshot(project, user, { text, epoch }) {
+export async function scheduleOneshot(project, user, { text, epoch, flags = [] }) {
   const id = store(project, user, { tier: ONESHOT, text, attachments: [], inReplyTo: null });
   const dir = path.join(sentDir(project), id);
   const file = path.join(dir, 'meta.json');
-  const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, user.name && /^[A-Za-z0-9._@-]{1,80}$/.test(user.name) ? user.name : 'owner'], {
+  keepFlags(project, id, flags);
+  const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, user.name && /^[A-Za-z0-9._@-]{1,80}$/.test(user.name) ? user.name : 'owner', ...jobFlags(flags)], {
     inputStream: tarStream(dir),
     timeout: 300000
   });
@@ -163,7 +192,7 @@ export async function rescheduleOneshot(project, id, epoch) {
   if (meta.delivered) throw new Error('That job has already started');
   const un = await kit(project, 'agent-kit-oneshot', ['unat', id]);
   if (un.code !== 0) return { ok: false, error: (un.stderr || 'could not move it on the VM').trim().slice(-200) };
-  const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, senderOf(meta)], { inputStream: tarStream(dir), timeout: 300000 });
+  const res = await kit(project, 'agent-kit-oneshot', ['at', String(epoch), id, senderOf(meta), ...jobFlags(meta.flags)], { inputStream: tarStream(dir), timeout: 300000 });
   const ok = res.code === 0;
   meta.scheduledFor = ok ? epoch : null;
   meta.error = ok ? null : `the old time is cancelled, but the new one was not set: ${(res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-200)}`;
@@ -192,7 +221,8 @@ export async function startOneshot(project, id) {
   if (!meta || meta.tier !== ONESHOT) throw new Error('No such one-shot job');
   if (meta.closed) throw new Error('That job is closed');
   if (/^(done|declined)$/.test(replyStatus(project, id) || '')) throw new Error('That job is already answered');
-  const res = await kit(project, 'agent-kit-oneshot', ['start', id, senderOf(meta)], { inputStream: tarStream(dir), timeout: 300000 });
+  // Started now, a job waits for nothing: what it comes after is for a set time only.
+  const res = await kit(project, 'agent-kit-oneshot', ['start', id, senderOf(meta), ...jobFlags(meta.flags, { start: true })], { inputStream: tarStream(dir), timeout: 300000 });
   const started = res.code === 0;
   const error = started ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-300);
   if (started) markStarted(project, id);

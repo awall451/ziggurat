@@ -352,9 +352,43 @@ the full rate, so the first answer after a long pause costs more than the next o
 From kit 0.10. `agent-kit-oneshot at <unix> <id> <from> [--plan]` keeps a job (or a planning request) in
 `oneshot-at/` (root, 700), not in the inbox, until its time: from 30 seconds to 31 days ahead. `unat <id>`
 cancels it, `list-at` lists them. Every minute `agent-kit-tick` runs `agent-kit-oneshot due`, after the
-slots: a job whose time has come goes through the normal `start`. If the team is busy (a cycle, another job,
-a chat turn) it tries again each minute; after 30 minutes it drops the job and writes `missed` to
-`schedule.log` (`job:<id>` in the slot field), so nothing starts hours late. One start per tick.
+slots: a job whose time has come goes through the normal `start`. If the team is busy (a cycle, another job)
+it tries again each minute; after 4 hours it drops the job and writes `missed` to `schedule.log` (`job:<id>`
+in the slot field), so nothing starts half a day late. One start per tick.
+
+### Jobs that build on each other, and the overrun brake (kit 0.18)
+
+A timed job used to be a time and a sender. The console now also passes what it knows about a backlog job:
+`--minutes N` (the proposal's estimate), `--after <job>,…` (the jobs of the items it `Depends` on, for those
+that have a job) and `--no-brake` (the owner's "No time limit"). They are kept beside the job
+(`oneshot-at/<id>.meta`) and, while it runs, in `$STATE/oneshot.meta`.
+
+**Waiting for what it builds on.** `due` does not start a job with `--after` before each of those jobs has a
+ledger line that ended well (not halted, not stopped, no error), the gate has started a pass since that end
+with no submitted branch left unjudged, and no change is held for the owner. Until then it writes why it
+waits to `oneshot-at/<id>.wait` (`pending`, `running`, `failed`, `held`, `merge`; `busy` when only the team
+is busy), `list-at` prints it, and the console shows it ("waiting for #1 to merge", "waiting for your
+approval"). A job that waits for another does not hold up the next due job. It is dropped as `missed` four
+hours after its time, with the reason; time spent waiting for the owner's approval does not count. "Merged"
+is judged for the team, not per branch: the VM has no link from a job to its branches, so a job may wait a
+little longer than needed, never start too early. A dependency without a job cannot be waited for; the
+console says so when such a job is set.
+
+**The brake.** Every minute `agent-kit-oneshot brake` looks at the running job. With an estimate and the
+brake on: at max(1.5 × estimate, estimate + 10 min) it writes `$STATE/oneshot.wrap`, which
+`owner-inbox-hook` delivers to the lead and each agent once (the same way as the wrap-up of a halt after the
+cycle): start nothing new, submit what is ready, say what is left. At max(2 × estimate, estimate + 20 min)
+it stops the lead's unit. The cycle ends as with a halt (the ledger line has `halted` and `overrun: true`),
+`finish` puts the team back to what it was before the job, and `schedule.log` gets `job:<id> … stopped`.
+Work that was not submitted stays on its branches. Normal cycles, planning cycles and jobs set by an older
+kit carry no estimate and are never braked; the budget and the unit's 12 hours stay their limits.
+
+**On the timeline.** A running job past its estimate grows in the warning colour. A waiting job whose team
+is busy, or which builds on a job that has not merged, shows a second outline where it is likely to start
+(`expectedStarts`). Placing or moving a job close behind another of its team (less than half that job's
+estimate, at least 15 minutes, plus 5 for the gate), or before the job it builds on would be merged, gives a
+note with a start that leaves room (`gapNote`): a note, never a refusal. Jobs of different teams at the same
+time are pointed out, since every team draws on the same usage limit.
 
 ### Planned issues and jobs on the timeline
 

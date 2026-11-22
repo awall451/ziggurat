@@ -21,9 +21,9 @@ export async function POST({ params, request, locals }) {
       case 'decide':
         return json(await decide(locals.user, project, s(b.pid), s(b.status)));
       case 'run':
-        return json(await runNow(locals.user, project, s(b.pid), oneshot));
+        return json(await runNow(locals.user, project, s(b.pid), oneshot, { noBrake: b.noBrake === true }));
       case 'run-at':
-        return json(await runAt(locals.user, project, s(b.pid), Number(b.at), b.skip || null));
+        return json(await runAt(locals.user, project, s(b.pid), Number(b.at), b.skip || null, { noBrake: b.noBrake === true }));
       case 'chat': {
         const out = await chatSay(locals.user, project, s(b.plan), s(b.text));
         return json(out);

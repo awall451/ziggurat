@@ -7,9 +7,11 @@
   import Modal from '$lib/components/Modal.svelte';
   import Timeline from '$lib/components/Timeline.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
-  import { plan, quietIntervals, wallClock, clockLabel, zoneLabel, validTimeZone, conflictsAt, placeAfter, dateString } from '$lib/schedule.js';
+  import { plan, quietIntervals, wallClock, clockLabel, zoneLabel, validTimeZone, conflictsAt, placeAfter, dateString, gapNote, expectedStarts } from '$lib/schedule.js';
 
-  let { project, title, minutes, busy = false, onclose = () => {}, onset = () => {} } = $props();
+  // builds: proposal ids this job builds on. canBrake: the VM's kit can limit a job's time (0.18).
+  let { project, title, minutes, builds = [], canBrake = false, busy = false, onclose = () => {}, onset = () => {} } = $props();
+  let noBrake = $state(false);
 
   let tl = $state(null);
   let error = $state('');
@@ -51,9 +53,13 @@
       running: p.running,
       planned: planning.planned[p.id] || [],
       jobs: p.jobs || [],
+      expected: expectedStarts(p.jobs || [], tl.now, p.running ? Math.max(p.running.start + (p.typicalSecs || 3600) * 1000, tl.now) : null),
       log: p.log
     }));
   });
+  // The jobs of the items this one builds on, and a note when it is placed too close behind one.
+  const afterIds = $derived((mine?.jobs || []).filter((j) => j.pid && builds.includes(j.pid)).map((j) => j.id));
+  const note = $derived(picked && !hit ? gapNote(mine?.jobs, picked, minutes, { after: afterIds, now: tl.now }) : null);
   const quiet = $derived(tl ? quietIntervals(settings, range.from, range.to) : []);
   const mine = $derived(rows.find((r) => r.id === project) || null);
   const team = $derived(tl?.projects.find((x) => x.id === project) || null);
@@ -65,7 +71,7 @@
   function set() {
     const found = conflictsAt(mine?.planned, mine?.jobs, picked, minutes, null, tl.now);
     if (found.length) return (hit = found);
-    onset(Math.round(picked / 1000), null);
+    onset(Math.round(picked / 1000), null, { noBrake });
   }
   function after() {
     picked = placeAfter(mine?.planned, mine?.jobs, picked, minutes, null, tl.now);
@@ -75,7 +81,7 @@
   const canSkip = $derived(!!hit && hit.length === 1 && hit[0].kind === 'cycle' && !!team?.schedule?.tz);
   function skip() {
     const c = hit[0];
-    onset(Math.round(picked / 1000), { slot: c.slot, date: dateString(wallClock(team.schedule.tz, c.at)) });
+    onset(Math.round(picked / 1000), { slot: c.slot, date: dateString(wallClock(team.schedule.tz, c.at)) }, { noBrake });
   }
   const two = (n) => String(n).padStart(2, '0');
   function when(ms) {
@@ -108,6 +114,21 @@
     {#if hit}
       <ConflictChoice conflicts={hit} team={team?.name} {clockAt} {busy} onafter={after} onskip={canSkip ? skip : null} oncancel={() => (hit = null)} />
     {/if}
+    {#if note}
+      <div class="actions gapnote small">
+        <span>
+          {#if note.kind === 'builds'}It builds on {note.order != null ? `#${note.order} ` : ''}“{note.title}”, which would not be merged by then: it would wait.{:else}That is close behind {note.order != null ? `#${note.order} ` : ''}“{note.title}”. Jobs run over, and the gate needs a few minutes to merge.{/if}
+          Leaving room: <b>{when(note.at)}</b>.
+        </span>
+        <span class="spacer"></span>
+        <button class="btn sm" onclick={() => (picked = note.at)} disabled={busy}>Place it there</button>
+      </div>
+    {/if}
+    {#if canBrake}
+      <label class="small limit" title="Without this, the lead is told to wrap up at one and a half times the estimate, and the job is stopped at twice the estimate (never sooner than the estimate plus 20 minutes).">
+        <input type="checkbox" bind:checked={noBrake} /> No time limit for this job
+      </label>
+    {/if}
     <div class="actions">
       {#if picked}
         <span>Starts <b>{when(picked)}</b>, ends about <b>{when(picked + minutes * 60000)}</b> (estimate {minutes} min). <span class="dim small">Drag the bar, or click elsewhere in the row, to change it.</span></span>
@@ -124,5 +145,16 @@
 <style>
   .tlbox {
     padding: 8px 4px;
+  }
+  .gapnote {
+    padding: 8px 12px;
+    border: 1px solid var(--warn);
+    border-radius: 10px;
+    background: rgba(251, 191, 36, 0.08);
+  }
+  .limit {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 </style>

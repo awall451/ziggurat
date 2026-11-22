@@ -30,7 +30,9 @@
   let atFor = $state(null); // pid whose time picker is open
   let atValue = $state('');
   let atMode = $state('menu'); // the Schedule pop-over: 'menu', then 'time'
-  let placing = $state(null); // {pid | null (a planning cycle), title, minutes}
+  let placing = $state(null); // {pid | null (a planning cycle), title, minutes, builds}
+  // Per item: the owner switched the time limit off for its job (kit 0.18).
+  let noLimit = $state({});
   let openPlan = $state(null);
   let chatBox = $state(null);
 
@@ -106,10 +108,10 @@
     });
   }
 
-  function runAt(pid, epoch = null, skip = null) {
+  function runAt(pid, epoch = null, skip = null, noBrake = !!noLimit[pid]) {
     const at = epoch ?? epochOf(atValue);
     if (!at) return (flash = { ok: false, text: 'Pick a date and time' });
-    post({ action: 'run-at', pid, at, skip }, `at-${pid}`).then((out) => {
+    post({ action: 'run-at', pid, at, skip, noBrake }, `at-${pid}`).then((out) => {
       if (out) {
         atFor = null;
         placing = null;
@@ -123,10 +125,10 @@
   }
   function place(prop) {
     atFor = null;
-    placing = { pid: prop.pid, title: prop.title, minutes: prop.minutes };
+    placing = { pid: prop.pid, title: prop.title, minutes: prop.minutes, builds: prop.depends };
   }
-  function placed(epoch, skip = null) {
-    if (placing?.pid) return runAt(placing.pid, epoch, skip);
+  function placed(epoch, skip = null, opts = {}) {
+    if (placing?.pid) return runAt(placing.pid, epoch, skip, !!opts.noBrake || !!noLimit[placing.pid]);
     post({ action: 'plan', focus, at: epoch, skip, maxProposals }, 'plan').then((out) => {
       if (out) {
         focus = '';
@@ -260,6 +262,7 @@
                   <span class="small">Set for {whenText(job.at)}</span>
                   <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'cancel-at', id: job.id }, 'cancel')}>Cancel it</button>
                 {:else if prop.run && prop.run.rev === prop.rev && !prop.run.cancelled && !prop.run.missed}
+                  {#if prop.run.stopped != null}<span class="small s-failed" title="The time limit: a job is stopped at twice its estimate. What it had not submitted is still on its branches.">Stopped after {prop.run.stopped} min (estimate {prop.minutes})</span>{/if}
                   <a class="small" href="{base}/inbox">Job sent {ago(prop.run.at, p.now)}: see the Inbox</a>
                 {:else}
                   {#if prop.run?.missed}<span class="small s-failed" title="The team was busy for hours after the set time">Missed</span>{/if}
@@ -281,7 +284,12 @@
                       </div>
                     {/if}
                   </Popover>
-                  <button class="btn primary sm" disabled={!!busy || busyTeam} onclick={() => post({ action: 'run', pid: prop.pid }, `run-${prop.pid}`)}>Run now</button>
+                  {#if data.canBrake}
+                    <label class="small dim nolimit" title="Without this, the lead is told to wrap up at one and a half times the estimate, and the job is stopped at twice the estimate (never sooner than the estimate plus 20 minutes).">
+                      <input type="checkbox" bind:checked={noLimit[prop.pid]} /> No time limit
+                    </label>
+                  {/if}
+                  <button class="btn primary sm" disabled={!!busy || busyTeam} onclick={() => post({ action: 'run', pid: prop.pid, noBrake: !!noLimit[prop.pid] }, `run-${prop.pid}`)}>Run now</button>
                 {/if}
               {/snippet}
             </ProposalCard>
@@ -335,10 +343,15 @@
 {/if}
 
 {#if placing}
-  <PlaceModal project={p.id} title={placing.title} minutes={placing.minutes} busy={!!busy} onclose={() => (placing = null)} onset={placed} />
+  <PlaceModal project={p.id} title={placing.title} minutes={placing.minutes} builds={placing.builds || []} canBrake={data.canBrake && !!placing.pid} busy={!!busy} onclose={() => (placing = null)} onset={placed} />
 {/if}
 
 <style>
+  .nolimit {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
   .cap {
     display: flex;
     align-items: center;

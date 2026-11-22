@@ -31,6 +31,21 @@ describe('what waits for the owner', () => {
   });
 });
 
+describe('jobs set for a time', () => {
+  it('reads why a job whose time has come waits (kit 0.18), and ignores what it does not know', () => {
+    const A = '20261122T100000Z-o-first';
+    const B = '20261122T100100Z-o-second';
+    const st = _test.shape(raw({ atjobs: `${A} 1795140000 owner - -\n${B} 1795143600 owner merge ${A}\n20261122T100200Z-p-plan 1795147200 owner held -\n20261122T100300Z-o-odd 1795150800 owner rm-rf ;id\n20261122T100400Z-o-old 1795154400 owner` }));
+    expect(st.atJobs.map((j) => [j.id.slice(-5), j.wait])).toEqual([
+      ['first', null],
+      ['econd', { reason: 'merge', job: A }],
+      ['-plan', { reason: 'held', job: null }],
+      ['o-odd', null],
+      ['o-old', null]
+    ]);
+  });
+});
+
 describe('status of an idle team', () => {
   it('says the daily cap is used up, and when the VM day ends', () => {
     const st = _test.shape(raw());

@@ -62,8 +62,8 @@ export function resume(user, project) {
  * team back as it was (halted, or running). The job travels as an owner message, so it shows in the Inbox with
  * the lead's reply. A refusal by the VM throws (the caller reports it).
  */
-export async function oneshot(user, project, { text, attachments }) {
-  const out = await sendOneshot(project, user, { text, attachments: Array.isArray(attachments) ? attachments.map(String) : [] });
+export async function oneshot(user, project, { text, attachments, flags = [] }) {
+  const out = await sendOneshot(project, user, { text, attachments: Array.isArray(attachments) ? attachments.map(String) : [], flags });
   return settle(user, project, out);
 }
 
