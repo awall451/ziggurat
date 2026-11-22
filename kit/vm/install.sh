@@ -115,6 +115,8 @@ install -d -m 755 -o agent -g agent "$STATE/gate-out"
 # Package requests (kit 0.16): the owner's decisions, results and logs are
 # root-owned; the lead's requests go to packages-out.
 install -d -m 755 "$STATE/packages" "$STATE/packages/.owner" "$STATE/packages/results" "$STATE/packages/logs"
+# Files the console fetches for a recipe (kit 0.17): what is asked for, and the files themselves.
+install -d -m 755 "$STATE/packages/needs" "$STATE/packages/files"
 install -d -m 755 -o agent -g agent "$STATE/packages-out"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"

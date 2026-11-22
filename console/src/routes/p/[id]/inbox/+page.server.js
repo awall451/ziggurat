@@ -5,7 +5,7 @@ import { peekStatus } from '$lib/server/live.js';
 import { notes } from '$lib/server/aggregate.js';
 import { list as backlog } from '$lib/server/backlog.js';
 import { heldChanges, kitHasGateHold } from '$lib/server/gatehold.js';
-import { requests as packageRequests, kitHasPackages } from '$lib/server/packages.js';
+import { requests as packageRequests, extraDomains, kitHasPackages } from '$lib/server/packages.js';
 import { publishView } from '$lib/server/publish.js';
 
 export async function load({ params, parent }) {
@@ -29,6 +29,10 @@ export async function load({ params, parent }) {
   let packages = null;
   if (status?.reachable && kitHasPackages(status.kitVersion)) {
     packages = await Promise.race([packageRequests(project), new Promise((r) => setTimeout(() => r({ requests: [], error: 'the VM took too long to answer', gateway: null }), 12000))]);
+  }
+  // Domains the owner added on the gateway for earlier requests: they can be taken back.
+  if (packages?.requests.length && !packages.extra) {
+    packages.extra = await Promise.race([extraDomains(project).catch(() => null), new Promise((r) => setTimeout(() => r(null), 6000))]);
   }
   // Publishing the console could not get to work by itself (a key without write access, a new host).
   const pub = publishView(project);

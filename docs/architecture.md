@@ -446,6 +446,40 @@ order, through the proxy (`packages/results/<rid>`, `packages/logs/<rid>.log`). 
 requests and the end of a failed install's log. New VMs also get `python3-venv` and `python3-pip` from
 cloud-init.
 
+### Files the console fetches for a recipe (kit 0.17)
+
+Some downloads come from a domain the gateway must not allow. Playwright's Chromium is Chrome for Testing:
+`cdn.playwright.dev` redirects to `storage.googleapis.com`, the proxy can only allow whole domains, and any
+Google Cloud bucket can be set up to take uploads, so allowing it would be a way out of the sandbox. A recipe
+with such downloads has a `# Fetch:` header naming where the console may fetch from, as `host` or
+`host/path/` entries (`storage.googleapis.com/chrome-for-testing-public/`), and two steps:
+
+1. After the approval, `agent-kit-packages due` runs `<recipe> needs <version>`. The recipe prints the files
+   it wants, one `<https url> <name>` per line (for Playwright: its own `install --dry-run`, inside the
+   sandbox). The kit checks the shape of each line and keeps the list in `packages/needs/<rid>`; the request
+   is `fetching`.
+2. The console sees it (the status counts fetching requests; after an approval or a retry it also looks every
+   half minute for a while). The list comes from inside the sandbox and is treated as hostile: every address,
+   and every redirect on the way, must be https on the standard port, with no login and no query, on a host
+   and under a path the header of the **console's own copy** of the recipe names. Without that check a team
+   could make the console fetch from the home network, or carry data out in an address. No code from outside
+   runs on the console: it downloads the named files (600 MB a file, 1.5 GB a request, 10 files) into
+   `console-data/packages-cache/<recipe>/<version>/`, keeping the newest three versions.
+3. It hands them to the VM as a tar on stdin: `agent-kit-packages files <rid>`. The kit takes plain files
+   only (no links, no hard links), exactly the names that were asked for, each matching the `SHA256SUMS` the
+   console sent, into the root-owned `packages/files/<rid>/`.
+4. The next tick runs `<recipe> install <version>` with `AGENT_KIT_FILES` set to that folder, then removes it.
+   The Playwright recipe serves the folder on localhost to Playwright's own installer
+   (`PLAYWRIGHT_DOWNLOAD_HOST`), so each build lands where Playwright expects it; the system libraries still
+   come from the Ubuntu archives through the proxy.
+
+A second VM on the same version is served from the cache. When the files cannot be had (an address off the
+list, a file too large), the console says why with `agent-kit-packages fetch-failed <rid>` and the request
+fails with that reason. A failed request shows the end of its log on the Inbox and has **Try again**
+(`agent-kit-packages retry <rid>`: it starts over on the next tick). `agent-allow remove <domain>` takes a
+domain the owner added back off the gateway (never one of the playbook's base list); the Inbox lists those
+domains with **Remove**.
+
 ### One VM, one project
 
 A deleted VM's id and address can be given to the next VM. The console therefore checks, for every project,

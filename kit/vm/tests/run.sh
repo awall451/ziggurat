@@ -1317,6 +1317,76 @@ kp approve "$R5" > /dev/null
 APT_FAIL=1 kp due
 check "a failed install is recorded, and the lead sees the end of its log" 'grep -q "^failed " "$S/packages/results/$R5" && grep -q "$R5 failed" <<< "$(op prompt)" && grep -q "Unable to locate" <<< "$(op prompt)"'
 check "the status shows results" '[ "$(kp status | jq -r "select(.rid == \"$R1\") | .result")" = ok ] && [ "$(kp status | jq -r "select(.rid == \"$R1\") | .request")" = apt:libsdl2-dev ]'
+
+echo "== files the console fetches for a recipe (kit 0.17)"
+cat > "$T/opt/recipes/fetchy.sh" <<'EOF'
+#!/bin/bash
+# Domains: example.org
+# Fetch: files.example.org cdn.example.org/builds/
+# Version: required (any)
+# A test recipe whose files the console brings.
+set -euo pipefail
+case "$1" in
+  needs) [ -z "${NEEDS_FAIL:-}" ] || exit 3; printf '%s\n' "${NEEDS_OUT:-https://files.example.org/a/tool-$2.zip tool.zip
+https://cdn.example.org/builds/$2/lib.zip builds/lib.zip}" ;;
+  install) cat "$AGENT_KIT_FILES/tool.zip" "$AGENT_KIT_FILES/builds/lib.zip" > "$HELLO_OUT"; echo "installed $2 proxy=$https_proxy" ;;
+esac
+EOF
+# The console's side: a tar with the files and their checksums.
+drop() { # dir -> tar on stdout
+  (cd "$1" && find . -type f ! -name SHA256SUMS -printf '%P\n' | LC_ALL=C sort | xargs -r sha256sum > SHA256SUMS && tar -c --owner=0 --group=0 .)
+}
+mkdir -p "$T/drop/builds"; echo TOOL > "$T/drop/tool.zip"; echo LIB > "$T/drop/builds/lib.zip"
+F1=$(rid_of "$(echo "The emulator needs it." | op request recipe:fetchy@2.0)")
+kp approve "$F1" > /dev/null
+refuse "files for a request that is not waiting for any" sh -c "tar -c -C $T/drop . | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+: > "$HELLO_OUT"; kp due
+check "first the recipe says which files it needs; nothing is installed yet" 'grep -q "^fetching " "$S/packages/results/$F1" && [ "$(cat "$S/packages/needs/$F1")" = "https://files.example.org/a/tool-2.0.zip tool.zip
+https://cdn.example.org/builds/2.0/lib.zip builds/lib.zip" ] && [ ! -s "$HELLO_OUT" ]'
+check "the status carries what a fetching request waits for" '[ "$(kp status | jq -c "select(.rid == \"$F1\") | [.result, .ready, (.needs | length), .needs[1].name]")" = "[\"fetching\",false,2,\"builds/lib.zip\"]" ]'
+check "the lead sees it as installing" 'grep -q "$F1  installing" <<< "$(op list)"'
+kp due
+check "it waits for the console: no install without the files" 'grep -q "^fetching " "$S/packages/results/$F1" && [ ! -s "$HELLO_OUT" ]'
+# A later request is not held up by one that waits for files.
+R6=$(rid_of "$(echo "Unrelated." | op request apt:libbaz-dev)"); kp approve "$R6" > /dev/null; kp due
+check "a request behind it is installed meanwhile" 'grep -q "^ok " "$S/packages/results/$R6"'
+mkdir -p "$T/bad"; cp -r "$T/drop/." "$T/bad/"; echo EXTRA > "$T/bad/extra.sh"
+refuse "an archive with a file nobody asked for" sh -c "$(declare -f drop); drop $T/bad | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+rm "$T/bad/extra.sh" "$T/bad/builds/lib.zip"
+refuse "an archive with a file missing" sh -c "$(declare -f drop); drop $T/bad | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+rm -rf "$T/bad"; cp -r "$T/drop" "$T/bad"; (cd "$T/bad" && sha256sum tool.zip builds/lib.zip > SHA256SUMS && echo CHANGED > tool.zip)
+refuse "a file that does not match its checksum" sh -c "tar -c -C $T/bad . | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+rm -rf "$T/bad"; cp -r "$T/drop" "$T/bad"; rm "$T/bad/tool.zip"; ln -s /etc/passwd "$T/bad/tool.zip"; (cd "$T/bad" && echo "$(sha256sum < /etc/passwd | cut -d' ' -f1)  tool.zip" > SHA256SUMS && sha256sum builds/lib.zip >> SHA256SUMS)
+refuse "an archive with a link" sh -c "tar -c -C $T/bad . | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+rm -rf "$T/bad"; cp -r "$T/drop" "$T/bad"; ln "$T/bad/tool.zip" "$T/bad/builds/lib.zip.2"; rm "$T/bad/builds/lib.zip"; mv "$T/bad/builds/lib.zip.2" "$T/bad/builds/lib.zip"; (cd "$T/bad" && sha256sum tool.zip builds/lib.zip > SHA256SUMS)
+refuse "an archive with a hard link" sh -c "tar -c -C $T/bad . | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+check "a refused archive leaves nothing behind" '[ ! -e "$S/packages/files/$F1" ] && [ -z "$(ls -A "$S/packages/files")" ]'
+drop "$T/drop" | kp files "$F1" > /dev/null
+check "the files are taken, root-owned and checked" '[ -e "$S/packages/files/$F1/.ready" ] && [ "$(cat "$S/packages/files/$F1/builds/lib.zip")" = LIB ] && [ "$(kp status | jq -r "select(.rid == \"$F1\") | .ready")" = true ]'
+refuse "the files a second time" sh -c "$(declare -f drop); drop $T/drop | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages files $F1"
+FAKE_ACTIVE=active kp due
+check "the install still waits for the cycle to end" 'grep -q "^fetching " "$S/packages/results/$F1"'
+kp due
+check "then the recipe installs from the folder, and the folder is cleared" 'grep -q "^ok " "$S/packages/results/$F1" && [ "$(cat "$HELLO_OUT")" = "TOOL
+LIB" ] && grep -q "installed 2.0 proxy=http://10.66.0.1:3128" "$S/packages/logs/$F1.log" && [ ! -e "$S/packages/files/$F1" ]'
+# What a recipe may ask for.
+nbad=0
+for bad in "http://files.example.org/x.zip x.zip" "https://files.example.org/x.zip ../x.zip" "https://files.example.org/x.zip /etc/x" "https://files.example.org/x.zip .hidden" "https://user@files.example.org/x.zip x.zip" "https://files.example.org/x.zip a b"; do
+  Fb=$(rid_of "$(echo "why" | op request "recipe:fetchy@9.$((++nbad))")"); kp approve "$Fb" > /dev/null
+  NEEDS_OUT=$bad kp due
+  check "a recipe may not ask for: $bad" 'grep -q "^failed " "$S/packages/results/$Fb" && [ ! -e "$S/packages/needs/$Fb" ]'
+done
+F2=$(rid_of "$(echo "why" | op request recipe:fetchy@3.0)"); kp approve "$F2" > /dev/null
+NEEDS_FAIL=1 kp due
+check "a recipe that cannot say what it needs fails" 'grep -q "^failed " "$S/packages/results/$F2" && [ "$(kp status | jq -r "select(.rid == \"$F2\") | .log" | grep -c "could not say")" = 1 ]'
+refuse "a retry of a request that was installed" kp retry "$F1"
+refuse "a retry of a request that was declined" kp retry "$R4"
+kp retry "$F2" > /dev/null; kp due
+check "a failed request is tried again from the start" 'grep -q "^fetching " "$S/packages/results/$F2" && [ -f "$S/packages/needs/$F2" ]'
+echo "the address storage.example.org is not on the recipe's list" | kp fetch-failed "$F2" > /dev/null
+check "the console can say it could not bring the files" 'grep -q "^failed " "$S/packages/results/$F2" && grep -q "not on the recipe" <<< "$(kp status | jq -r "select(.rid == \"$F2\") | .log")" && grep -q "$F2 failed" <<< "$(op prompt)"'
+refuse "fetch-failed for a request that is not fetching" sh -c "echo x | AGENT_KIT_PATH=$FB:$PATH $BIN/agent-kit-packages fetch-failed $F1"
+check "the Playwright recipe has the console fetch its browsers, and asks the proxy for npm only" 'grep -q "^# Fetch: .*storage.googleapis.com/chrome-for-testing-public/" "$HERE/../recipes/playwright-browsers.sh" && grep -qx "# Domains: registry.npmjs.org" "$HERE/../recipes/playwright-browsers.sh"'
 check "the tick starts installs in their own unit" 'grep -q "systemctl start --no-block agent-kit-packages.service" "$HERE/../systemd/agent-kit-tick.service" && grep -q "env -i" "$HERE/../systemd/agent-kit-packages.service"'
 sed -i '/AGENT_PROXY_URL/d' "$T/etc/project.env"
 

@@ -2,18 +2,33 @@
 # agent-kit-packages: the owner's side of package requests (kit 0.16). Run with
 # sudo (the console calls it over ssh); `due` runs from the tick every minute.
 #
-#   agent-kit-packages status            every request: JSON lines {rid, request, decision, decidedAt, result, resultAt}
+#   agent-kit-packages status            every request: JSON lines {rid, request, decision, decidedAt, result, resultAt,
+#                                        needs, ready, log}
 #   agent-kit-packages approve <rid>     the owner approved it: installed between cycles
 #   agent-kit-packages deny <rid>        the owner declined it
-#   agent-kit-packages due               install one approved request, if no cycle is running
+#   agent-kit-packages due               take one approved request a step further, if no cycle is running
 #                                        (agent-kit-packages.service, started by the tick)
+#   agent-kit-packages files <rid>       the files a request waits for, as a tar on stdin (kit 0.17)
+#   agent-kit-packages fetch-failed <rid>   the console could not bring them; the reason on stdin
+#   agent-kit-packages retry <rid>       try a failed request again (or one stuck waiting for files)
+#
+# Files the console fetches (kit 0.17). A recipe with a "# Fetch:" header gets
+# its downloads from the console, not through the proxy: some come from domains
+# the gateway must not allow (any Google Cloud bucket takes uploads). Such a
+# recipe has two steps. `needs <version>` prints the files it wants, one
+# "<https url> <name>" per line; the request is then "fetching". The console
+# checks each address against the recipe's own list, downloads, and hands the
+# files over with `files`. `install <version>` then runs with AGENT_KIT_FILES
+# set to the folder. The VM never reaches out and holds no credentials.
 #
 # Layout:
 #   $STATE/packages-out/<rid>.md         agent: the lead's request (owner-packages)
 #   $STATE/packages/.owner/<rid>         root: "<approved|denied> <utc> <request>"; the request is
 #                                        copied here, checked, when the owner decides
-#   $STATE/packages/results/<rid>        root: "<installing|ok|failed> <utc>"
+#   $STATE/packages/results/<rid>        root: "<fetching|installing|ok|failed> <utc>"
 #   $STATE/packages/logs/<rid>.log       root: the install's output
+#   $STATE/packages/needs/<rid>          root: "<url> <name>" lines, what a fetching request waits for
+#   $STATE/packages/files/<rid>/         root: those files, checked; .ready when they are all there
 #
 # What is installed is the request as the owner approved it, checked again
 # here; the agent's file is never run. Domains are not added here: the console
@@ -34,6 +49,12 @@ RID_RE='^[0-9]{8}T[0-9]{6}Z-k-[a-f0-9]{6}$'
 APT_RE='^apt:[a-z0-9][a-z0-9+.-]{1,62}$'
 RECIPE_RE='^recipe:([a-z0-9][a-z0-9-]{0,39})(@([0-9][0-9A-Za-z.+-]{0,30}))?$'
 DOMAIN_RE='^domain:\.?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+# What a recipe may ask the console for: plain https addresses, and names that
+# are paths inside the request's own folder (every part starts with a letter or digit).
+URL_RE='^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?/[A-Za-z0-9._~%+/-]{1,400}$'
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$'
+MAX_NEEDS=10
+MAX_DROP=$((1600 * 1024 * 1024))
 shopt -s nullglob
 umask 022
 
@@ -54,9 +75,38 @@ cycle_alive() {
   # A one-shot job or planning cycle about to start.
   [ -e "$STATE/oneshot" ]
 }
-install_one() { # rid request
+# A recipe whose downloads the console fetches (a "# Fetch:" header).
+fetches() { [[ $1 =~ $RECIPE_RE ]] && grep -q '^# Fetch: ' "$RECIPES/${BASH_REMATCH[1]}.sh" 2>/dev/null; }
+stamp() { date -u +%FT%TZ; }
+set_result() { printf '%s %s\n' "$2" "$(stamp)" > "$P/results/.$1.tmp" && mv "$P/results/.$1.tmp" "$P/results/$1" && chmod 644 "$P/results/$1"; }
+# The first step of a fetching recipe: ask it which files it wants, and keep the checked list.
+needs_one() { # rid request
+  local what=$2 log=$P/logs/$1.log proxy=${AGENT_PROXY_URL:-} out n=0 url name rest
+  local -a env=(DEBIAN_FRONTEND=noninteractive http_proxy="$proxy" https_proxy="$proxy" HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" PATH="$PATH" HOME=/root)
+  [[ $what =~ $RECIPE_RE ]] || return 1
+  out=$(env "${env[@]}" timeout 900 bash "$RECIPES/${BASH_REMATCH[1]}.sh" needs ${BASH_REMATCH[3]:+"${BASH_REMATCH[3]}"} 2> "$log") || { echo "the recipe could not say which files it needs" >> "$log"; return 1; }
+  : > "$P/needs/.$1.tmp"
+  while read -r url name rest; do
+    [ -n "$url" ] || continue
+    n=$((n + 1))
+    if [ "$n" -gt $MAX_NEEDS ] || [ -n "$rest" ] || ! [[ $url =~ $URL_RE ]] || ! [[ $name =~ $NAME_RE ]] || grep -q " $name\$" "$P/needs/.$1.tmp"; then
+      echo "the recipe asked for something that is not a plain file to fetch: $url $name" >> "$log"
+      rm -f "$P/needs/.$1.tmp"; return 1
+    fi
+    printf '%s %s\n' "$url" "$name" >> "$P/needs/.$1.tmp"
+  done <<< "$out"
+  [ "$n" -gt 0 ] || { echo "the recipe asked for no files" >> "$log"; rm -f "$P/needs/.$1.tmp"; return 1; }
+  mv "$P/needs/.$1.tmp" "$P/needs/$1" && chmod 644 "$P/needs/$1"
+  echo "waiting for the console to bring $n file(s)" >> "$log"
+}
+install_one() { # rid request [files folder]
   local what=$2 log=$P/logs/$1.log proxy=${AGENT_PROXY_URL:-}
   local -a env=(DEBIAN_FRONTEND=noninteractive http_proxy="$proxy" https_proxy="$proxy" HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy" PATH="$PATH" HOME=/root)
+  if [ -n "${3:-}" ]; then
+    [[ $what =~ $RECIPE_RE ]] || return 1
+    env "${env[@]}" AGENT_KIT_FILES="$3" timeout 1800 bash "$RECIPES/${BASH_REMATCH[1]}.sh" install ${BASH_REMATCH[3]:+"${BASH_REMATCH[3]}"} >> "$log" 2>&1
+    return
+  fi
   case "$what" in
     apt:*)
       env "${env[@]}" timeout 1200 apt-get update -q > "$log" 2>&1
@@ -79,11 +129,17 @@ case "${1:-status}" in
       rid=$(basename "$f" .md)
       [[ $rid =~ $RID_RE ]] || continue
       what=$(request_of "$rid") || continue
-      dec="" dat="" dreq="" res="" rat=""
+      dec="" dat="" dreq="" res="" rat="" needs='[]' ready=false log=""
       read -r dec dat dreq 2>/dev/null < "$P/.owner/$rid"
       read -r res rat 2>/dev/null < "$P/results/$rid"
-      jq -nc --arg rid "$rid" --arg r "${dreq:-$what}" --arg d "$dec" --arg da "$dat" --arg s "$res" --arg sa "$rat" \
-        '{rid:$rid, request:$r, decision:(if $d == "" then null else $d end), decidedAt:(if $da == "" then null else $da end), result:(if $s == "" then null else $s end), resultAt:(if $sa == "" then null else $sa end)}'
+      # What a fetching request waits for, and why a failed one failed.
+      if [ "$res" = fetching ] && [ -f "$P/needs/$rid" ]; then
+        needs=$(jq -Rnc '[inputs | select(length > 0) | split(" ") | {url: .[0], name: .[1]}]' < "$P/needs/$rid" 2>/dev/null) || needs='[]'
+        [ -e "$P/files/$rid/.ready" ] && ready=true
+      fi
+      [ "$res" = failed ] && log=$(tail -c 1500 "$P/logs/$rid.log" 2>/dev/null | tail -8)
+      jq -nc --arg rid "$rid" --arg r "${dreq:-$what}" --arg d "$dec" --arg da "$dat" --arg s "$res" --arg sa "$rat" --argjson needs "${needs:-[]}" --argjson ready "$ready" --arg log "$log" \
+        '{rid:$rid, request:$r, decision:(if $d == "" then null else $d end), decidedAt:(if $da == "" then null else $da end), result:(if $s == "" then null else $s end), resultAt:(if $sa == "" then null else $sa end), needs:$needs, ready:$ready, log:(if $log == "" then null else $log end)}'
     done | tail -200
     ;;
 
@@ -93,7 +149,7 @@ case "${1:-status}" in
     what=$(request_of "$rid") || die "no such request: $rid"
     valid "$what" || die "the request is not one the kit can install: $what"
     [ ! -e "$P/.owner/$rid" ] || die "already decided: $(cat "$P/.owner/$rid")"
-    install -d -m 755 "$P" "$P/.owner" "$P/results" "$P/logs"
+    install -d -m 755 "$P" "$P/.owner" "$P/results" "$P/logs" "$P/needs" "$P/files"
     st=approved; [ "$1" = deny ] && st=denied
     printf '%s %s %s\n' "$st" "$(date -u +%FT%TZ)" "$what" > "$P/.owner/.$rid.tmp" && mv "$P/.owner/.$rid.tmp" "$P/.owner/$rid"
     echo "$st $rid: $what"
@@ -105,24 +161,104 @@ case "${1:-status}" in
     flock -n 8 || exit 0
     cycle_alive && exit 0
     # In the order the owner approved them.
+    install -d -m 755 "$P/needs" "$P/files"
     while read -r _ rid; do
       f=$P/.owner/$rid
       [[ $rid =~ $RID_RE ]] || continue
       read -r dec _ what < "$f"
-      [ "$dec" = approved ] && [ ! -e "$P/results/$rid" ] || continue
-      valid "$what" || { printf 'failed %s\n' "$(date -u +%FT%TZ)" > "$P/results/$rid"; echo "not installable: $what" > "$P/logs/$rid.log"; continue; }
-      printf 'installing %s\n' "$(date -u +%FT%TZ)" > "$P/results/$rid"
+      [ "$dec" = approved ] || continue
+      res=""; read -r res _ 2>/dev/null < "$P/results/$rid"
+      drop=""
+      case "$res" in
+        "") ;;
+        # Its files are here: install. Still waiting for the console: look at the next request.
+        fetching) [ -e "$P/files/$rid/.ready" ] && drop=$P/files/$rid || continue ;;
+        *) continue ;;
+      esac
+      valid "$what" || { printf 'failed %s\n' "$(stamp)" > "$P/results/$rid"; echo "not installable: $what" > "$P/logs/$rid.log"; continue; }
+      if [ -z "$res" ] && fetches "$what"; then
+        # First step: which files? The console brings them; a later tick installs.
+        set_result "$rid" fetching
+        flock -u 8
+        if ! needs_one "$rid" "$what"; then
+          set_result "$rid" failed
+          printf '%s package:%s %s failed\n' "$(stamp)" "$rid" "$what" >> "$STATE/schedule.log"
+        fi
+        chmod 644 "$P/logs/$rid.log" 2>/dev/null
+        break
+      fi
+      set_result "$rid" installing
       # The lock only guards the choice: halts, resumes and jobs must not wait for an install.
       flock -u 8
-      if install_one "$rid" "$what"; then r=ok; else r=failed; fi
-      printf '%s %s\n' "$r" "$(date -u +%FT%TZ)" > "$P/results/.$rid.tmp" && mv "$P/results/.$rid.tmp" "$P/results/$rid"
-      chmod 644 "$P/results/$rid" "$P/logs/$rid.log" 2>/dev/null
-      printf '%s package:%s %s %s\n' "$(date -u +%FT%TZ)" "$rid" "$what" "$r" >> "$STATE/schedule.log"
+      if install_one "$rid" "$what" "$drop"; then r=ok; else r=failed; fi
+      set_result "$rid" "$r"
+      chmod 644 "$P/logs/$rid.log" 2>/dev/null
+      # The fetched files are large and the console keeps its own copy.
+      [ -z "$drop" ] || rm -rf -- "$drop"
+      printf '%s package:%s %s %s\n' "$(stamp)" "$rid" "$what" "$r" >> "$STATE/schedule.log"
       break # one per tick
     done < <(find "$P/.owner" -maxdepth 1 -type f ! -name '.*' -printf '%T@ %f\n' | sort -n)
     ;;
 
+  files)
+    rid=${2:-}
+    [[ $rid =~ $RID_RE ]] || die "usage: agent-kit-packages files <rid> < tar"
+    res=""; read -r res _ 2>/dev/null < "$P/results/$rid"
+    [ "$res" = fetching ] && [ -f "$P/needs/$rid" ] || die "$rid is not waiting for files"
+    [ ! -e "$P/files/$rid/.ready" ] || die "$rid has its files already"
+    install -d -m 755 "$P/files"
+    tmp=$P/files/.$rid.tmp
+    rm -rf -- "$tmp"; install -d -m 700 "$tmp"
+    trap 'rm -rf -- "$tmp"' EXIT
+    # Capped, and nothing but plain files: no links, no devices, no owners from the archive.
+    head -c $((MAX_DROP + 1)) | tar -x --no-same-owner --no-same-permissions --no-overwrite-dir -C "$tmp" 2> /dev/null || die "the archive could not be read (or is larger than $((MAX_DROP / 1024 / 1024)) MB)"
+    [ -z "$(find "$tmp" -mindepth 1 ! -type f ! -type d -print -quit)" ] || die "the archive holds something that is not a plain file"
+    [ -z "$(find "$tmp" -type f -links +1 -print -quit)" ] || die "the archive holds a hard link"
+    want=$(cut -d' ' -f2 "$P/needs/$rid" | LC_ALL=C sort)
+    have=$(cd "$tmp" && find . -type f ! -path ./SHA256SUMS -printf '%P\n' | LC_ALL=C sort)
+    [ "$want" = "$have" ] || die "the archive does not hold exactly the files that were asked for"
+    [ -f "$tmp/SHA256SUMS" ] || die "the archive has no SHA256SUMS"
+    while read -r name; do
+      grep -q "^[0-9a-f]\{64\}  $name\$" "$tmp/SHA256SUMS" || die "no checksum for $name"
+    done <<< "$want"
+    (cd "$tmp" && sha256sum --quiet --strict -c SHA256SUMS > /dev/null 2>&1) || die "a file does not match its checksum"
+    chmod -R u=rwX,go=rX "$tmp"
+    rm -rf -- "$P/files/$rid"
+    mv "$tmp" "$P/files/$rid" && touch "$P/files/$rid/.ready"
+    trap - EXIT
+    echo "files for $rid: $(wc -l <<< "$want") taken"
+    ;;
+
+  fetch-failed)
+    rid=${2:-}
+    [[ $rid =~ $RID_RE ]] || die "usage: agent-kit-packages fetch-failed <rid> < reason"
+    res=""; read -r res _ 2>/dev/null < "$P/results/$rid"
+    [ "$res" = fetching ] || die "$rid is not waiting for files"
+    why=$(head -c 600 | tr -d '\r' | tr '\n' ' ')
+    echo "the console could not bring the files: ${why:-no reason given}" >> "$P/logs/$rid.log"
+    set_result "$rid" failed
+    read -r _ _ what < "$P/.owner/$rid"
+    printf '%s package:%s %s failed\n' "$(stamp)" "$rid" "$what" >> "$STATE/schedule.log"
+    echo "failed $rid"
+    ;;
+
+  retry)
+    rid=${2:-}
+    [[ $rid =~ $RID_RE ]] || die "usage: agent-kit-packages retry <rid>"
+    dec=""; read -r dec _ 2>/dev/null < "$P/.owner/$rid"
+    [ "$dec" = approved ] || die "$rid was not approved"
+    res=""; read -r res _ 2>/dev/null < "$P/results/$rid"
+    [[ $res =~ ^(failed|fetching)$ ]] || die "$rid is ${res:-not started yet}: only a failed request is tried again"
+    exec 8> "$LOCK"
+    flock 8
+    rm -rf -- "$P/results/$rid" "$P/needs/$rid" "$P/files/$rid" "$P/files/.$rid.tmp"
+    echo "--- tried again $(stamp) ---" >> "$P/logs/$rid.log"
+    # Newest decisions go last: a retry does not jump the queue.
+    touch "$P/.owner/$rid"
+    echo "retry $rid"
+    ;;
+
   *)
-    die "usage: agent-kit-packages status | approve <rid> | deny <rid> | due"
+    die "usage: agent-kit-packages status | approve <rid> | deny <rid> | due | files <rid> | fetch-failed <rid> | retry <rid>"
     ;;
 esac

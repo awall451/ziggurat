@@ -17,6 +17,26 @@ export function allowScript(target, domains) {
   return ['set -e', ...list.map((d) => `pct exec ${target.gatewayVmid} -- /usr/local/sbin/agent-allow add ${d}`)].join('\n');
 }
 
+/** The script that takes domains back. Only the owner's extra list is touched, never the base list. */
+export function removeScript(target, domains) {
+  if (!Number.isInteger(target?.gatewayVmid)) throw new Error('The target has no gateway');
+  const list = [...new Set(domains.map((d) => String(d).toLowerCase()))];
+  if (!list.length || list.length > 10 || !list.every((d) => DOMAIN_RE.test(d) && d.length <= 253)) throw new Error('Not a list of domain names');
+  return ['set -e', ...list.map((d) => `pct exec ${target.gatewayVmid} -- /usr/local/sbin/agent-allow remove ${d}`)].join('\n');
+}
+
+/** Remove domains the owner added from the target's gateway. Throws with the gateway's answer when it refuses. */
+export async function removeDomains(user, target, domains, { project = null } = {}) {
+  const script = removeScript(target, domains);
+  const res = await hostScript({ host: target.pveHost, user: target.pveUser, jump: target.bastion || null }, script, { timeout: 60000 });
+  const ok = res.code === 0;
+  const detail = ok ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-300);
+  audit(user, project, 'gateway-remove', { target: target.id, domains }, { ok, detail });
+  forgetInspect(target.id);
+  if (!ok) throw new Error(`The gateway did not remove ${domains.join(', ')}: ${detail}`);
+  return { ok: true, removed: domains };
+}
+
 /** Add domains on the target's gateway. Throws with the gateway's answer when it refuses. */
 export async function allowDomains(user, target, domains, { project = null } = {}) {
   const script = allowScript(target, domains);
