@@ -7,6 +7,7 @@ import { listSessions } from './transcripts.js';
 import { openAskCount } from './feedback.js';
 import { openCount as openIssueCount } from './issues.js';
 import { publishView, PUBLISH_KIT } from './publish.js';
+import { chatUnread } from './backlog.js';
 import { parseScheduleText, nextStart } from '../schedule.js';
 
 const CHECKING = { reachable: null, state: 'checking', leadActive: false };
@@ -69,7 +70,9 @@ export async function projectView(project, { wait = 3500 } = {}) {
       asks: openAskCount(project),
       escalations: sum.escalations || 0,
       packages: status.packageRequests || 0,
-      held: status.heldChanges || 0
+      held: status.heldChanges || 0,
+      // Answers of the lead in the Backlog chat that the owner has not opened.
+      chat: chatUnread(project, status)
     },
     // Owner issues not yet done or declined.
     issues: openIssueCount(project),

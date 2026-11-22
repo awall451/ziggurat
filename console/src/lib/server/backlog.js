@@ -395,6 +395,8 @@ export async function chatSay(user, project, plan, text) {
   audit(user, project.id, 'chat-say', { plan, msg }, { ok, detail: error });
   if (!ok && vmSaidNo(res.code)) throw new Error(error);
   writeJson(path.join(chatDir(project, plan), `${msg}.json`), { id: msg, by: senderName(user), at: new Date().toISOString(), text: body, delivered: ok, error });
+  // Whoever writes the next message has read the answers before it.
+  chatSeen(project, plan);
   invalidateStatus(project.id);
   return { ok: true, id: msg, delivered: ok, detail: ok ? 'Sent. The lead answers in a minute or two.' : `No clear answer from the VM (${error}).` };
 }
@@ -410,6 +412,58 @@ export async function chatEnd(user, project, plan) {
   if (!ok) throw new Error((res.stderr || 'could not end the chat on the VM').trim().slice(-200));
   writeJson(file, { ...p, ended: true, endedAt: new Date().toISOString() });
   return { ok: true };
+}
+
+// ---- answers the owner has not read yet -----------------------------------
+
+const seenFile = (project, plan) => path.join(chatDir(project, plan), 'seen.json');
+
+/** Ids of the messages of a plan's chat that the lead has answered, oldest first. */
+function answered(project, plan) {
+  return names(chatDir(project, plan), MSG_RE).filter((msg) => {
+    const r = parseHeaderFile(path.join(outDir(project), 'chat', plan, `${msg}.md`), 40_000);
+    return !!r && r.fields.re === msg && /^(ok|error)$/.test(r.fields.status || '');
+  });
+}
+
+/** The newest planning session, if its chat is still open: its id, or null. */
+function openChatPlan(project) {
+  const newest = names(plansDir(project), PLAN_RE).sort().at(-1);
+  if (!newest) return null;
+  return readJson(path.join(plansDir(project), `${newest}.json`))?.ended ? null : newest;
+}
+
+/** Answers the owner has seen: the ids kept in the plan's seen mark. */
+function seenIds(project, plan) {
+  const ids = readJson(seenFile(project, plan))?.ids;
+  return new Set(Array.isArray(ids) ? ids.filter((id) => MSG_RE.test(id)) : []);
+}
+
+/** The owner has seen every answer the chat of this plan has now. */
+export function chatSeen(project, plan) {
+  if (!PLAN_RE.test(plan)) throw new Error('Bad plan id');
+  const done = answered(project, plan);
+  const seen = seenIds(project, plan);
+  if (done.some((id) => !seen.has(id))) writeJson(seenFile(project, plan), { ids: done, at: new Date().toISOString() });
+  return { ok: true };
+}
+
+/**
+ * How many answers of the lead in the newest plan's chat the owner has not
+ * seen. 0 while an answer is still on its way: the lead is not waiting then.
+ * Reads only what the console already pulled.
+ */
+export function chatUnread(project, status = null) {
+  if (status?.chat) return 0;
+  const plan = openChatPlan(project);
+  if (!plan) return 0;
+  const done = answered(project, plan);
+  if (!done.length) return 0;
+  // A message that was delivered and has no answer yet: a turn is running or about to.
+  const open = names(chatDir(project, plan), MSG_RE).some((msg) => !done.includes(msg) && readJson(path.join(chatDir(project, plan), `${msg}.json`))?.delivered);
+  if (open) return 0;
+  const seen = seenIds(project, plan);
+  return done.filter((msg) => !seen.has(msg)).length;
 }
 
 // ---- reading ---------------------------------------------------------------

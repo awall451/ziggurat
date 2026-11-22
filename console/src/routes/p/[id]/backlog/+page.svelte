@@ -47,6 +47,16 @@
     return () => clearInterval(t);
   });
 
+  // The newest plan's chat is on this page: answers shown here are read. The
+  // mark lives on the console, so the count on the tab and the project card clears.
+  let seenSent = '';
+  $effect(() => {
+    const last = newest?.chat.findLast((c) => c.reply)?.id;
+    if (!last || !p.waiting?.chat || seenSent === last) return;
+    seenSent = last;
+    post({ action: 'chat-seen', plan: newest.id }, '', { quiet: true });
+  });
+
   async function post(body, key, { quiet = false } = {}) {
     if (busy && !quiet) return null;
     if (!quiet) {
