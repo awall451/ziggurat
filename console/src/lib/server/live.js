@@ -49,6 +49,17 @@ today=$(jq -s --arg d "$(date +%F)" '[.[] | select(.date == $d and .counted != f
 next=$(systemctl show "$UNIT.timer" -p NextElapseUSecRealtime --value 2>/dev/null)
 next=$([ -n "$next" ] && date -d "$next" +%s 2>/dev/null)
 dayend=$(date -d 'tomorrow 00:00' +%s 2>/dev/null)
+# What waits for the owner besides the lead's questions: changes to the checks that
+# the gate holds (kit 0.14), and package or domain requests without a decision
+# (kit 0.16). Counted from files anyone may read; an older kit has none.
+held=$(grep -l '"status": *"held"' "$STATE"/gate/results/*.json 2>/dev/null | wc -l)
+pkgwait=0
+for r in "$STATE"/packages-out/*.md; do
+  [ -f "$r" ] && [ ! -L "$r" ] || continue
+  r=$(basename "$r" .md)
+  [[ $r =~ ^[0-9]{8}T[0-9]{6}Z-k-[a-f0-9]{6}$ ]] || continue
+  [ -e "$STATE/packages/.owner/$r" ] || pkgwait=$((pkgwait + 1))
+done
 f=$(grep -l '"status": *"merged"' "$STATE"/gate/results/*.json 2>/dev/null | xargs -r grep -l "all checks passed" | xargs -r ls -t | head -1)
 shots=$([ -n "$f" ] && jq -r '.shots // empty' "$f" 2>/dev/null)
 jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg since "$since" \\
@@ -58,12 +69,13 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
   --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" --arg chat "$chat" --arg atjobs "$atjobs" --arg vmproject "$vmproject" \\
   --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" \\
   --arg cap "$cap" --arg today "$today" --arg next "$next" --arg dayend "$dayend" \\
-  --arg schedule "$schedule" \\
+  --arg schedule "$schedule" --arg held "$held" --arg pkgwait "$pkgwait" \\
   --arg host "$(hostname)" --arg now "$(date +%s)" \\
   '{control:$control, lead:$lead, timer:$timer, since:$since, head:$head, ready:$ready, remote:$remote,
     current:$current, newest:$newest, worktrees:($worktrees|tonumber? // 0), haltat:$haltat,
     gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot, chat:$chat, atjobs:$atjobs, vmproject:$vmproject,
     haltafter:$haltafter, canhaltafter:$canhaltafter, cap:$cap, today:$today, next:$next, dayend:$dayend, schedule:$schedule,
+    held:$held, pkgwait:$pkgwait,
     host:$host, now:($now|tonumber? // 0)}'
 `;
 }
@@ -149,6 +161,9 @@ function shape(raw) {
     // A halt that waits for the cycle in progress to end (and for the gate after it).
     haltAfter,
     canHaltAfter: raw.canhaltafter === 'yes',
+    // Waiting for the owner on the Inbox tab, besides the lead's questions.
+    heldChanges: count(raw.held) ?? 0,
+    packageRequests: count(raw.pkgwait) ?? 0,
     shotsDir: /^\/var\/lib\/agent-kit\/[A-Za-z0-9._\/-]+$/.test(raw.shots || '') ? raw.shots : null,
     host: raw.host,
     vmNow: raw.now

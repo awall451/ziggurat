@@ -1,9 +1,33 @@
 import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import { _test, kitAtLeast } from '../src/lib/server/live.js';
-import { idleText } from '../src/lib/format.js';
+import { idleText, waitingParts } from '../src/lib/format.js';
 
 // Raw status as the VM script prints it (all strings), for an idle team.
 const raw = (o = {}) => ({ control: 'run 2026-11-20T00:00:33+00:00', lead: 'inactive', timer: 'enabled', cap: '1', today: '1', next: '1795139944', dayend: '1795219200', now: '1795139000', ...o });
+
+describe('what waits for the owner', () => {
+  it('counts held check changes and package requests from the status, 0 on an older kit', () => {
+    expect(_test.shape(raw({ held: '1', pkgwait: '2' }))).toMatchObject({ heldChanges: 1, packageRequests: 2 });
+    expect(_test.shape(raw())).toMatchObject({ heldChanges: 0, packageRequests: 0 });
+    expect(_test.shape(raw({ held: 'x', pkgwait: '' }))).toMatchObject({ heldChanges: 0, packageRequests: 0 });
+  });
+
+  it('the status script counts them without sudo', () => {
+    const script = _test.statusScript({ slug: 's', kit: { state: '/var/lib/agent-kit', leadUnit: 'agent-kit-lead', bare: '/b', workspace: '/w', agentHome: '/home/agent' } });
+    expect(script).toMatch(/held=\$\(grep -l '"status": \*"held"'/);
+    expect(script).toMatch(/packages\/\.owner\/\$r/);
+    expect(script).toMatch(/held:\$held, pkgwait:\$pkgwait/);
+    // It is still a script bash can read.
+    execFileSync('bash', ['-n'], { input: script });
+  });
+
+  it('is said in words, and the Inbox tab counts what it holds', () => {
+    expect(waitingParts({ asks: 1, escalations: 0, packages: 2, held: 1 })).toEqual({ total: 4, inbox: 4, text: '1 question · 2 package requests · 1 check change' });
+    expect(waitingParts({ asks: 0, escalations: 2, packages: 0, held: 0 })).toEqual({ total: 2, inbox: 0, text: '2 escalations' });
+    expect(waitingParts(undefined)).toEqual({ total: 0, inbox: 0, text: 'Nothing' });
+  });
+});
 
 describe('status of an idle team', () => {
   it('says the daily cap is used up, and when the VM day ends', () => {

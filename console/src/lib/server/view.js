@@ -64,6 +64,13 @@ export async function projectView(project, { wait = 3500 } = {}) {
     summary: sum,
     // Questions from the lead that the owner has not answered yet.
     asks: openAskCount(project),
+    // Everything that waits for the owner (see waitingParts in format.js).
+    waiting: {
+      asks: openAskCount(project),
+      escalations: sum.escalations || 0,
+      packages: status.packageRequests || 0,
+      held: status.heldChanges || 0
+    },
     // Owner issues not yet done or declined.
     issues: openIssueCount(project),
     // Owner feedback and controls need the kit's 0.2 scripts on the VM.

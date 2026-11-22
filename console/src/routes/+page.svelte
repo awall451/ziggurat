@@ -1,5 +1,5 @@
 <script>
-  import { num, usd, dur, between, ago } from '$lib/format.js';
+  import { num, usd, dur, between, ago, waitingParts } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
 
   let { data } = $props();
@@ -107,11 +107,7 @@
           </div>
           <div>
             <dt>Waiting on you</dt>
-            <dd class:attn={p.asks + p.summary.escalations > 0}>
-              {[p.asks ? `${p.asks} question${p.asks > 1 ? 's' : ''}` : '', p.summary.escalations ? `${p.summary.escalations} escalation${p.summary.escalations > 1 ? 's' : ''}` : '']
-                .filter(Boolean)
-                .join(' · ') || 'Nothing'}
-            </dd>
+            <dd class:attn={waitingParts(p.waiting).total > 0}>{waitingParts(p.waiting).text}</dd>
           </div>
         </dl>
 

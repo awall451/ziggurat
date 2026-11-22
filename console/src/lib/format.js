@@ -58,6 +58,25 @@ export function clock(secs, now = Date.now()) {
   return d.toLocaleString([], sameDay ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
+const WAITING = [
+  ['asks', 'question', 'questions'],
+  ['escalations', 'escalation', 'escalations'],
+  ['packages', 'package request', 'package requests'],
+  ['held', 'check change', 'check changes']
+];
+
+/**
+ * What waits for the owner on a project (`waiting` of the project view):
+ * {total, inbox, text}. `inbox` is what the Inbox tab holds: the lead's
+ * questions, package requests and held changes to the checks.
+ */
+export function waitingParts(waiting) {
+  const w = waiting || {};
+  const n = (k) => (Number.isFinite(w[k]) && w[k] > 0 ? w[k] : 0);
+  const parts = WAITING.filter(([k]) => n(k)).map(([k, one, many]) => `${n(k)} ${n(k) > 1 ? many : one}`);
+  return { total: WAITING.reduce((t, [k]) => t + n(k), 0), inbox: n('asks') + n('packages') + n('held'), text: parts.join(' · ') || 'Nothing' };
+}
+
 /** Why an idle team is idle, in one sentence (see idleWhy in live.js). */
 export function idleText(idle, now = Date.now()) {
   if (!idle) return null;
