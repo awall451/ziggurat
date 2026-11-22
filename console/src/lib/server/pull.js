@@ -238,6 +238,9 @@ export function startScheduler() {
       if (!s.slow) maybePublish(p);
       // A remote that is not verified yet is checked by the console itself, now and then.
       if (!s.slow) maybeVerify(p);
+      // A recipe on the VM waits for files the console fetches (kit 0.17).
+      // Loaded here, not at the top: packages.js pulls in the audit log and the gateway.
+      if (peekStatus(p.id)?.packageFetches) import('./packages.js').then((m) => m.maybeFetch(p)).catch(() => {});
       if (watchEnd(p, peekStatus(p.id))) continue;
       if (Date.now() - s.slowAt > SLOW_EVERY) runSlow(p);
       else if (Date.now() - s.viewedAt < VIEW_WINDOW) {

@@ -4,6 +4,8 @@
 # owner approved a team's request; nothing on the agent side can reach it.
 #
 #   agent-allow add <domain>     append one domain (".example.org" covers sub-domains) and reload squid
+#   agent-allow remove <domain>  take one of the extra domains back and reload squid; the
+#                                base list (agent-allow.txt, from the playbook) is never changed
 #   agent-allow list             the extra domains
 set -euo pipefail
 F=/etc/squid/agent-allow-extra.txt
@@ -24,10 +26,28 @@ case "${1:-list}" in
     squid -k reconfigure
     echo "allowed: $d"
     ;;
+  remove)
+    d=$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z')
+    [[ $d =~ $RE ]] && [ ${#d} -le 253 ] || { echo "agent-allow: not a domain name: ${2:-}" >&2; exit 2; }
+    touch "$F"
+    if ! grep -qxF -- "$d" "$F"; then
+      if grep -qxF -- "$d" /etc/squid/agent-allow.txt; then echo "agent-allow: $d is on the base list, which only the playbook changes" >&2; exit 1; fi
+      echo "not on the list: $d"; exit 0
+    fi
+    cp -p "$F" "$F.before"
+    grep -vxF -- "$d" "$F.before" > "$F" || true
+    if ! squid -k parse > /dev/null 2>&1; then
+      cp -p "$F.before" "$F"; rm -f "$F.before"   # put it back: squid refused the list
+      echo "agent-allow: squid refused the list without $d" >&2; exit 1
+    fi
+    rm -f "$F.before"
+    squid -k reconfigure
+    echo "removed: $d"
+    ;;
   list)
     cat "$F" 2>/dev/null || true
     ;;
   *)
-    echo "usage: agent-allow add <domain> | list" >&2; exit 2
+    echo "usage: agent-allow add <domain> | remove <domain> | list" >&2; exit 2
     ;;
 esac

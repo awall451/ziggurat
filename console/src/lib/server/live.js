@@ -60,6 +60,12 @@ for r in "$STATE"/packages-out/*.md; do
   [[ $r =~ ^[0-9]{8}T[0-9]{6}Z-k-[a-f0-9]{6}$ ]] || continue
   [ -e "$STATE/packages/.owner/$r" ] || pkgwait=$((pkgwait + 1))
 done
+# Requests whose files the console has to bring (kit 0.17).
+pkgfetch=0
+for r in "$STATE"/packages/results/*; do
+  read -r w _ < "$r" 2>/dev/null
+  [ "$w" = fetching ] && [ ! -e "$STATE/packages/files/$(basename "$r")/.ready" ] && pkgfetch=$((pkgfetch + 1))
+done
 f=$(grep -l '"status": *"merged"' "$STATE"/gate/results/*.json 2>/dev/null | xargs -r grep -l "all checks passed" | xargs -r ls -t | head -1)
 shots=$([ -n "$f" ] && jq -r '.shots // empty' "$f" 2>/dev/null)
 jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg since "$since" \\
@@ -69,13 +75,13 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
   --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" --arg chat "$chat" --arg atjobs "$atjobs" --arg vmproject "$vmproject" \\
   --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" \\
   --arg cap "$cap" --arg today "$today" --arg next "$next" --arg dayend "$dayend" \\
-  --arg schedule "$schedule" --arg held "$held" --arg pkgwait "$pkgwait" \\
+  --arg schedule "$schedule" --arg held "$held" --arg pkgwait "$pkgwait" --arg pkgfetch "$pkgfetch" \\
   --arg host "$(hostname)" --arg now "$(date +%s)" \\
   '{control:$control, lead:$lead, timer:$timer, since:$since, head:$head, ready:$ready, remote:$remote,
     current:$current, newest:$newest, worktrees:($worktrees|tonumber? // 0), haltat:$haltat,
     gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot, chat:$chat, atjobs:$atjobs, vmproject:$vmproject,
     haltafter:$haltafter, canhaltafter:$canhaltafter, cap:$cap, today:$today, next:$next, dayend:$dayend, schedule:$schedule,
-    held:$held, pkgwait:$pkgwait,
+    held:$held, pkgwait:$pkgwait, pkgfetch:$pkgfetch,
     host:$host, now:($now|tonumber? // 0)}'
 `;
 }
@@ -164,6 +170,8 @@ function shape(raw) {
     // Waiting for the owner on the Inbox tab, besides the lead's questions.
     heldChanges: count(raw.held) ?? 0,
     packageRequests: count(raw.pkgwait) ?? 0,
+    // Approved recipes that wait for files the console fetches.
+    packageFetches: count(raw.pkgfetch) ?? 0,
     shotsDir: /^\/var\/lib\/agent-kit\/[A-Za-z0-9._\/-]+$/.test(raw.shots || '') ? raw.shots : null,
     host: raw.host,
     vmNow: raw.now

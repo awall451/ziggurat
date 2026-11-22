@@ -49,6 +49,28 @@
       pkgBusy = '';
     }
   }
+  // A failed install, tried again once its cause is fixed (kit 0.17), and a domain taken back off the gateway.
+  async function pkgAct(body, key, said) {
+    pkgBusy = key;
+    pkgNote = '';
+    try {
+      const res = await fetch(`${base}/packages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.message || 'That did not work');
+      pkgNote = said;
+      await invalidateAll();
+    } catch (e) {
+      pkgNote = e.message;
+    } finally {
+      pkgBusy = '';
+    }
+  }
+  const retryPkg = (r) => pkgAct({ decision: 'retry', rid: r.rid }, r.rid, `Trying ${r.request} again. It starts between cycles, within a minute or two.`);
+  function removeDomain(d) {
+    if (!confirm(`Take ${d} off the gateway's allow-list? Every agent VM behind it loses it.`)) return;
+    pkgAct({ decision: 'remove-domain', domain: d }, d, `Removed ${d} from the gateway's allow-list.`);
+  }
+  const PKG_STATE = { fetching: 'fetching files', installing: 'installing', installed: 'installed', failed: 'failed', declined: 'declined', approved: 'approved' };
 
   // Changes to what "done" means, held by the gate (kit 0.14).
   let gateBusy = $state('');
@@ -440,9 +462,31 @@
         {#if pastPkgs.length}
           <ul class="pkgs small">
             {#each pastPkgs as r (r.rid)}
-              <li><span class="pill {r.state === 'installed' ? 'done' : r.state === 'failed' ? 'failed' : r.state === 'declined' ? 'halted' : 'running'}">{r.state}</span> <span class="mono">{r.request}</span></li>
+              <li>
+                <span class="pill {r.state === 'installed' ? 'done' : r.state === 'failed' ? 'failed' : r.state === 'declined' ? 'halted' : 'running'}">{PKG_STATE[r.state] || r.state}</span>
+                <span class="mono">{r.request}</span>
+                {#if r.state === 'fetching'}<span class="dim">the console is bringing {r.needs.length || 'its'} file{r.needs.length === 1 ? '' : 's'}{r.ready ? '; installed at the next tick' : ''}</span>{/if}
+                {#if r.state === 'failed'}
+                  {#if p.canControl && p.canRetryPackages}<button class="btn sm" disabled={pkgBusy === r.rid} onclick={() => retryPkg(r)}>Try again</button>{/if}
+                  {#if r.log}
+                    <details class="diff">
+                      <summary class="small">Why it failed (the end of its log)</summary>
+                      <pre class="mono small">{r.log}</pre>
+                    </details>
+                  {/if}
+                {/if}
+              </li>
             {/each}
           </ul>
+        {/if}
+        {#if data.packages.extra?.length}
+          <p class="dim small">
+            Added to the gateway's allow-list since it was made, for every agent VM behind it:
+            {#each data.packages.extra as d (d)}
+              <span class="mono">{d}</span>
+              {#if p.canControl}<button class="btn quiet sm" disabled={pkgBusy === d} onclick={() => removeDomain(d)} title="Take this domain off the allow-list">Remove</button>{/if}
+            {/each}
+          </p>
         {/if}
       </section>
     {/if}

@@ -88,6 +88,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canIssueFiles: kitAtLeast(status.kitVersion, '0.7.0'),
     // Issues as tickets (numbers, priority, edits, notes, files later) need kit 0.12.
     canTickets: kitAtLeast(status.kitVersion, '0.12.0'),
+    // Trying a failed package install again needs kit 0.17.
+    canRetryPackages: kitAtLeast(status.kitVersion, '0.17.0'),
     // Cycle slots need kit 0.9.
     canSchedule: kitAtLeast(status.kitVersion, '0.9.0'),
     // Publishing main to a remote repository needs kit 0.8.

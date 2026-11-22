@@ -40,7 +40,8 @@ status_of() {
   read -r r _ 2>/dev/null < "$P/results/$1" || r=""
   case "$d" in
     denied) echo declined ;;
-    approved) case "$r" in ok) echo installed ;; failed) echo failed ;; installing) echo installing ;; *) echo approved ;; esac ;;
+    # "fetching" (kit 0.17: the console brings the recipe's files) is part of installing, for the lead.
+    approved) case "$r" in ok) echo installed ;; failed) echo failed ;; installing | fetching) echo installing ;; *) echo approved ;; esac ;;
     *) echo waiting ;;
   esac
 }

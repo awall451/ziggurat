@@ -22,7 +22,8 @@ function script(t) {
     sec('mem', 'free -m'),
     // The gateway's domain allow-list (read-only), to warn about a team that needs more:
     // the playbook's list and the domains the owner approved since (agent-allow, kit 0.16).
-    sec('allow', `pct exec ${t.gatewayVmid} -- sh -c 'cat /etc/squid/agent-allow.txt; cat /etc/squid/agent-allow-extra.txt 2>/dev/null; true'`),
+    // A marker line parts the two: only the owner's extra domains can be taken back.
+    sec('allow', `pct exec ${t.gatewayVmid} -- sh -c 'cat /etc/squid/agent-allow.txt; echo "#--extra--"; cat /etc/squid/agent-allow-extra.txt 2>/dev/null; true'`),
     sec('version', 'pveversion')
   ].join('\n');
 }
@@ -118,13 +119,14 @@ export function parseInspect(stdout, t) {
     { id: 'vmids', label: `Free VM ids in ${t.vmidMin}–${t.vmidMax}`, ok: free.length > 0, detail: `${free.length} free, ${inRange.length} in use` }
   ];
   const next = free[0] ?? null;
-  const allowed =
-    sec.allow?.rc === 0
-      ? sec.allow.out
-          .split('\n')
-          .map((l) => l.split('#')[0].trim().toLowerCase())
-          .filter((l) => /^\.?[a-z0-9.-]+$/.test(l))
-      : null;
+  const names = (text) =>
+    text
+      .split('\n')
+      .map((l) => l.split('#')[0].trim().toLowerCase())
+      .filter((l) => /^\.?[a-z0-9.-]+$/.test(l));
+  const allowed = sec.allow?.rc === 0 ? names(sec.allow.out) : null;
+  // What the owner added through the console since the gateway was made (after the marker).
+  const allowedExtra = sec.allow?.rc === 0 && sec.allow.out.includes('#--extra--') ? names(sec.allow.out.split('#--extra--')[1]) : null;
   return {
     ok: checks.every((c) => c.ok),
     checks,
@@ -134,6 +136,7 @@ export function parseInspect(stdout, t) {
     pool,
     memFreeMb,
     allowed,
+    allowedExtra,
     version: first(sec.version)
   };
 }
