@@ -63,20 +63,23 @@ const WAITING = [
   ['escalations', 'escalation', 'escalations'],
   ['packages', 'package request', 'package requests'],
   ['held', 'check change', 'check changes'],
-  ['chat', 'chat answer', 'chat answers']
+  ['chat', 'chat answer', 'chat answers'],
+  // Said without a number: there is one remote per project.
+  ['publishing', 'publishing is not working', 'publishing is not working', true]
 ];
 
 /**
  * What waits for the owner on a project (`waiting` of the project view):
  * {total, inbox, text}. `inbox` is what the Inbox tab holds: the lead's
- * questions, package requests and held changes to the checks. `backlog`: answers
+ * questions, package requests, held changes to the checks and publishing that
+ * does not work. `backlog`: answers
  * of the lead in the Backlog chat that the owner has not opened.
  */
 export function waitingParts(waiting) {
   const w = waiting || {};
   const n = (k) => (Number.isFinite(w[k]) && w[k] > 0 ? w[k] : 0);
-  const parts = WAITING.filter(([k]) => n(k)).map(([k, one, many]) => `${n(k)} ${n(k) > 1 ? many : one}`);
-  return { total: WAITING.reduce((t, [k]) => t + n(k), 0), inbox: n('asks') + n('packages') + n('held'), backlog: n('chat'), text: parts.join(' · ') || 'Nothing' };
+  const parts = WAITING.filter(([k]) => n(k)).map(([k, one, many, plain]) => (plain ? one : `${n(k)} ${n(k) > 1 ? many : one}`));
+  return { total: WAITING.reduce((t, [k]) => t + n(k), 0), inbox: n('asks') + n('packages') + n('held') + n('publishing'), backlog: n('chat'), text: parts.join(' · ') || 'Nothing' };
 }
 
 /** Why an idle team is idle, in one sentence (see idleWhy in live.js). */

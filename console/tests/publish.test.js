@@ -207,6 +207,93 @@ describe('setting up', () => {
   });
 });
 
+describe('the console verifies by itself', () => {
+  const view = (s) => publish.publishView(s.project());
+
+  it('checks a remote that is not verified, records it and tells the VM', async () => {
+    const s = await scenario({ verified: false });
+    expect(view(s).auto).toMatchObject({ checking: true, waiting: false });
+    const out = await publish.maybeVerify(s.project());
+    expect(out).toMatchObject({ ok: true, verified: true });
+    expect(view(s).verified).toBeTruthy();
+    expect(view(s).auto).toBeNull();
+    expect(s.calls.at(-1)).toMatchObject({ script: 'agent-kit-publish', argv: ['enable', s.remote] });
+    // Verified: nothing more to do, and nothing is asked of the VM again.
+    const calls = s.calls.length;
+    expect(publish.maybeVerify(s.project())).toBeNull();
+    expect(s.calls.length).toBe(calls);
+    await expect(publish.publish(user, s.project(), { manual: true })).resolves.toMatchObject({ outcome: 'published' });
+  });
+
+  it('tries again with back-off, is quiet for the first hour, then tells the owner, and clears by itself', async () => {
+    const s = await scenario({ verified: false });
+    const gone = path.join(T, `${s.id}-not-there.git`);
+    await publish.setRemote(user, s.project(), gone);
+    const t0 = Date.now() - 2 * 3600_000;
+    // The key is not there yet (here: no such repository).
+    expect(await publish.maybeVerify(s.project(), t0)).toMatchObject({ ok: false });
+    expect(s.calls.filter((c) => c.argv[0] === 'enable')).toEqual([]);
+    // Not again within 15 minutes; again after.
+    expect(publish.maybeVerify(s.project(), t0 + 14 * 60_000)).toBeNull();
+    expect(await publish.maybeVerify(s.project(), t0 + 16 * 60_000)).toMatchObject({ ok: false });
+    // After the first day: hourly.
+    const day = t0 + 25 * 3600_000;
+    publish._test.writeState(s.id, { auto: { ...publish._test.readState(s.id).auto, lastAt: day } });
+    expect(publish.maybeVerify(s.project(), day + 30 * 60_000)).toBeNull();
+    // It started two hours ago and still fails: the owner is told, with the host's answer.
+    const v = view(s);
+    expect(v.verified).toBeNull();
+    expect(v.auto.waiting).toBe(true);
+    expect(v.auto.error).toMatch(/Could not read the remote/);
+    // A fresh failure (the first hour) is not shown.
+    publish._test.writeState(s.id, { auto: { ...publish._test.readState(s.id).auto, since: Date.now() - 10 * 60_000 } });
+    expect(view(s).auto.waiting).toBe(false);
+    // The repository appears: the next check passes and the item is gone.
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', gone]);
+    expect(await publish.maybeVerify(s.project(), day + 61 * 60_000)).toMatchObject({ ok: true, verified: true });
+    expect(view(s)).toMatchObject({ auto: null });
+    expect(view(s).verified).toBeTruthy();
+    expect(s.calls.at(-1).argv).toEqual(['enable', gone]);
+  });
+
+  it('a changed address starts the checks over', async () => {
+    const s = await scenario({ verified: false });
+    await publish.setRemote(user, s.project(), path.join(T, `${s.id}-nowhere.git`));
+    await publish.maybeVerify(s.project(), Date.now() - 3 * 3600_000);
+    expect(view(s).auto.waiting).toBe(true);
+    await publish.setRemote(user, s.project(), path.join(T, `${s.id}-nowhere-else.git`));
+    expect(view(s).auto).toMatchObject({ waiting: false, error: null });
+  });
+
+  it('never accepts a new host key by itself, and reuses one the owner confirmed for that host', async () => {
+    const s = await scenario({ verified: false });
+    // Nothing listens there: no network is needed to see what the console does first.
+    await publish.setRemote(user, s.project(), 'ssh://git@127.0.0.1:1/team/demo.git');
+    const first = await publish.maybeVerify(s.project());
+    expect(first).toMatchObject({ ok: false, need: 'hostkey' });
+    expect(publish._test.readState(s.id).hostKey).toBeUndefined();
+    // Shown at once: only the owner can do this.
+    expect(view(s).auto).toMatchObject({ waiting: true, need: 'hostkey' });
+    // Another project of this console has that host's key, confirmed by the owner.
+    const other = await scenario({ verified: false });
+    const line = 'ssh-ed25519 ' + 'A'.repeat(68);
+    publish._test.writeState(other.id, { hostKey: { host: '127.0.0.1', port: 1, line, fingerprint: 'SHA256:' + 'b'.repeat(43), at: '2026-01-01T00:00:00Z' } });
+    publish._test.writeState(s.id, { auto: { ...publish._test.readState(s.id).auto, lastAt: 0 } });
+    const second = await publish.maybeVerify(s.project());
+    expect(publish._test.readState(s.id).hostKey).toMatchObject({ host: '127.0.0.1', port: 1, line, reused: true });
+    // The key is trusted now; the remote itself still does not answer.
+    expect(second.ok).toBe(false);
+    expect(second.need).toBeUndefined();
+    expect(view(s).verified).toBeNull();
+  });
+
+  it("keeps the forge's own reason in a refusal", () => {
+    const stderr = 'ERROR: The key you are authenticating with has been marked as read only.\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n';
+    expect(publish._test.tail({ code: 128, stderr, stdout: '' })).toMatch(/^ERROR: The key you are authenticating with has been marked as read only\. · fatal: Could not read/);
+    expect(publish._test.tail({ code: 1, stderr: 'a\nb\nc\nd\n', stdout: '' })).toBe('b · c · d');
+  });
+});
+
 describe('publishing', () => {
   it('pushes main with the same commits, then has nothing to do', async () => {
     const s = await scenario();

@@ -343,6 +343,27 @@
   </div>
 
   <aside class="side">
+    {#if data.publishing}
+      <section class="block">
+        <h2>Publishing</h2>
+        <article class="panel msg">
+          <header>
+            <span class="pill halted">Waiting on you</span>
+            <span class="mono small">{data.publishing.remote}</span>
+            <span class="grow"></span>
+            {#if data.publishing.lastAt}<span class="dim small mono">checked {when(data.publishing.lastAt)}</span>{/if}
+          </header>
+          {#if data.publishing.need === 'hostkey'}
+            <p>{data.publishing.error}</p>
+            <p class="dim small">After that one confirmation the console checks the key by itself.</p>
+          {:else}
+            <p>Publishing to <span class="mono">{data.publishing.remote}</span> is not working: {data.publishing.error}</p>
+            <p class="dim small">Add the project's key to the repository as a deploy key with write access, then nothing else is needed: the console checks again by itself.</p>
+          {/if}
+          <footer class="actions end"><a class="btn sm" href="/p/{p.id}/controls#publishing">Show the key</a></footer>
+        </article>
+      </section>
+    {/if}
     {#if data.gateHeld && (data.gateHeld.held.length || data.gateHeld.error || gateNote)}
       <section class="block">
         <h2>Changes to what "done" means</h2>

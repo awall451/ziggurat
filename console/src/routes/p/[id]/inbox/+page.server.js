@@ -6,6 +6,7 @@ import { notes } from '$lib/server/aggregate.js';
 import { list as backlog } from '$lib/server/backlog.js';
 import { heldChanges, kitHasGateHold } from '$lib/server/gatehold.js';
 import { requests as packageRequests, kitHasPackages } from '$lib/server/packages.js';
+import { publishView } from '$lib/server/publish.js';
 
 export async function load({ params, parent }) {
   const project = getProject(params.id);
@@ -29,5 +30,8 @@ export async function load({ params, parent }) {
   if (status?.reachable && kitHasPackages(status.kitVersion)) {
     packages = await Promise.race([packageRequests(project), new Promise((r) => setTimeout(() => r({ requests: [], error: 'the VM took too long to answer', gateway: null }), 12000))]);
   }
-  return { ...threads(project), escalations: notes(project).escalations, backlogChat, gateHeld, packages };
+  // Publishing the console could not get to work by itself (a key without write access, a new host).
+  const pub = publishView(project);
+  const publishing = pub.auto?.waiting ? { remote: pub.remote, error: pub.auto.error, need: pub.auto.need, lastAt: pub.auto.lastAt } : null;
+  return { ...threads(project), escalations: notes(project).escalations, backlogChat, gateHeld, packages, publishing };
 }

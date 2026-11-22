@@ -72,7 +72,9 @@ export async function projectView(project, { wait = 3500 } = {}) {
       packages: status.packageRequests || 0,
       held: status.heldChanges || 0,
       // Answers of the lead in the Backlog chat that the owner has not opened.
-      chat: chatUnread(project, status)
+      chat: chatUnread(project, status),
+      // Publishing that the console could not get to work by itself.
+      publishing: publishView(project).auto?.waiting ? 1 : 0
     },
     // Owner issues not yet done or declined.
     issues: openIssueCount(project),

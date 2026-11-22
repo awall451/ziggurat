@@ -540,6 +540,11 @@
     <p>
       Remote: <span class="mono">{pub.remote}</span>
       {#if pub.verified}<span class="s-done"> · verified {when(pub.verified)}</span>{:else}<span class="s-failed"> · not verified yet</span>{/if}
+      {#if !pub.verified && pub.auto}
+        <span class="dim small">
+          · the console checks by itself{pub.auto.lastAt ? `, last ${when(pub.auto.lastAt)}` : ''}{pub.auto.error ? `: ${pub.auto.error}` : ''}
+        </span>
+      {/if}
     </p>
     {#if !p.canPublish && p.canControl}
       <p class="s-failed small">This VM's kit is older than 0.8: upgrade it before publishing.</p>
