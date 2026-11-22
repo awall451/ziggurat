@@ -382,7 +382,17 @@ async function tokenInCommits(id, range) {
   return found;
 }
 
-/** Findings of the secret scanner in the new commits, as plain sentences (never the secret itself). */
+// Scanner rules that only guess: a name like "key" or "token" next to a string
+// that looks random. They fire on test data (key: 'Shift+Ctrl+F24') and cannot
+// be cleared, because the commit stays in what would be pushed. The agents hold
+// no credential but the Claude token, which is looked for by its exact value,
+// so a finding of these rules is shown to the owner and does not refuse a publish.
+const WARN_RULES = new Set(['generic-api-key']);
+
+/**
+ * Findings of the secret scanner in the new commits, as plain sentences (never
+ * the secret itself): {block: [...], warn: [...]}. `block` refuses the publish.
+ */
 async function secretFindings(id, range) {
   const report = file(id, `scan.${process.pid}.json`);
   fs.rmSync(report, { force: true });
@@ -394,7 +404,7 @@ async function secretFindings(id, range) {
       { env: gitEnv(id), timeout: 15 * 60_000 }
     );
     if (res.missing) throw new Error('the secret scanner (gitleaks) is not installed on the console');
-    if (res.code === 0) return [];
+    if (res.code === 0) return { block: [], warn: [] };
     if (res.code !== 9) throw new Error(`the secret scan did not finish: ${tail(res)}`);
     let found = [];
     try {
@@ -403,8 +413,13 @@ async function secretFindings(id, range) {
       /* the exit code already says there are findings */
     }
     const plain = (v, n) => String(v ?? '').replace(/[^A-Za-z0-9 ._/@+=-]/g, ' ').slice(0, n);
-    const lines = (Array.isArray(found) ? found : []).slice(0, 5).map((x) => `rule ${plain(x.RuleID, 60)} in ${plain(x.File, 120)}, commit ${plain(x.Commit, 9)}`);
-    return lines.length ? lines : ['the scanner reported a finding'];
+    const line = (x) => `rule ${plain(x?.RuleID, 60)} in ${plain(x?.File, 120)}, commit ${plain(x?.Commit, 9)}`;
+    const all = Array.isArray(found) ? found : [];
+    // A report that cannot be read refuses: the exit code says there is a finding, not which.
+    if (!all.length) return { block: ['the scanner reported a finding'], warn: [] };
+    const guess = (x) => WARN_RULES.has(String(x?.RuleID ?? ''));
+    const short = (rows, n) => [...new Set(rows.map(line))].slice(0, n);
+    return { block: short(all.filter((x) => !guess(x)), 5), warn: short(all.filter(guess), 20) };
   } finally {
     fs.rmSync(report, { force: true });
   }
@@ -508,33 +523,36 @@ async function doPublish(user, project, manual) {
   if (ci.length) return blocked(`CI files changed, which the console does not publish: ${ci.slice(0, 5).join(', ')}${ci.length > 5 ? ` and ${ci.length - 5} more` : ''}.`);
   if (await tokenInCommits(id, range)) return blocked('The Claude sign-in token appears in the new commits. Nothing was pushed. Replace the token, and remove it from the history before publishing.');
   const leaks = await secretFindings(id, range);
-  if (leaks.length) return blocked(`Possible secret in the new commits: ${leaks.join('; ')}.`);
+  if (leaks.block.length) return blocked(`Possible secret in the new commits: ${leaks.block.join('; ')}.`);
 
   // No force, no tags, one ref.
   const push = await git(id, ['push', '--no-verify', remote, `${sha}:refs/heads/main`], { remote: true, timeout: 20 * 60_000 });
   if (push.code !== 0) return blocked(`The remote refused the push: ${tail(push)}`);
   await git(id, ['update-ref', 'refs/heads/main', sha]);
   await git(id, ['update-ref', '-d', 'refs/incoming/main']);
-  finishPublished(user, project, sha, count, manual, false);
+  finishPublished(user, project, sha, count, manual, false, leaks.warn);
   await kit(project, 'agent-kit-publish', ['record', sha]);
-  return { ok: true, outcome: 'published', detail: `Published ${count} commit(s); the remote's main is now ${sha.slice(0, 9)}.`, sha, commits: count };
+  const notes = leaks.warn.length ? ` The secret scan left ${leaks.warn.length} note(s), which did not hold it back.` : '';
+  return { ok: true, outcome: 'published', detail: `Published ${count} commit(s); the remote's main is now ${sha.slice(0, 9)}.${notes}`, sha, commits: count, notes: leaks.warn };
 }
 
-function finishPublished(user, project, sha, commits, manual, already) {
+function finishPublished(user, project, sha, commits, manual, already, notes = []) {
   const request = readRequest(project);
   const at = new Date().toISOString();
   // handledRequest: the request this publish answered, so the same note is not acted on twice.
   writeState(project.id, { publishedSha: sha, publishedAt: at, blocked: null, handledRequest: request?.date || null });
   if (already && readState(project.id).lastRecorded === sha) return;
-  writeState(project.id, { lastRecorded: sha });
+  // What the scan's guessing rules pointed at in this publish, for the owner to look at.
+  writeState(project.id, { lastRecorded: sha, notes: already ? readState(project.id).notes || [] : notes });
   addHistory(project.id, {
     outcome: already ? 'in-sync' : 'published',
     sha,
     commits,
     by: manual ? user?.name || 'owner' : 'request',
-    summary: !manual && request?.publish === 'yes' ? request.summary : null
+    summary: !manual && request?.publish === 'yes' ? request.summary : null,
+    ...(notes.length ? { notes } : {})
   });
-  audit(user, project.id, 'publish', { manual, sha: sha.slice(0, 9), commits }, { ok: true, detail: already ? 'already on the remote' : null });
+  audit(user, project.id, 'publish', { manual, sha: sha.slice(0, 9), commits, ...(notes.length ? { scanNotes: notes.length } : {}) }, { ok: true, detail: already ? 'already on the remote' : null });
 }
 
 // ---- the scheduler's hook ---------------------------------------------------
@@ -574,6 +592,8 @@ export function publishView(project) {
     sha: state.publishedSha || null,
     at: state.publishedAt || null,
     blocked: state.blocked ? { at: state.blocked.at, reason: state.blocked.reason, sha: state.blocked.sha } : null,
+    // Guess-rule findings of the secret scan in the last publish: shown, never a refusal.
+    notes: Array.isArray(state.notes) ? state.notes.slice(0, 20) : [],
     request: request ? { publish: request.publish, date: request.date, summary: request.summary.slice(0, 600) } : null,
     busy: running.has(project.id)
   };
