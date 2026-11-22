@@ -96,6 +96,34 @@ describe('listSessions', () => {
   });
 });
 
+describe('a planning cycle the owner chatted with afterwards', () => {
+  it('stops the report and the figures where the cycle ended, and counts the chat apart', () => {
+    const P = '44444444-2222-4333-8444-555555555555';
+    const f = path.join(project.paths.transcripts, project.slug, `${P}.jsonl`);
+    fs.writeFileSync(
+      f,
+      line(user('You are the lead. Find what to do next.', '2026-01-03T10:00:00Z')) +
+        line(asst('p1', 'claude-lead-1', usage(1_000_000, 0), [{ type: 'tool_use', id: 'x1', name: 'Read', input: {} }], '2026-01-03T10:00:10Z')) +
+        line(asst('p2', 'claude-lead-1', usage(0, 0), [{ type: 'text', text: 'Five proposals written.' }], '2026-01-03T10:01:00Z')) +
+        line(user('[agent-kit owner chat] This is the owner, through the kit.\n\nWhy item 2?', '2026-01-03T12:00:00Z')) +
+        line(asst('c1', 'claude-lead-1', usage(500_000, 0), [{ type: 'tool_use', id: 'x2', name: 'Grep', input: {} }], '2026-01-03T12:00:05Z')) +
+        line(asst('c2', 'claude-lead-1', usage(0, 0), [{ type: 'text', text: 'Because of the menu.' }], '2026-01-03T12:00:20Z')) +
+        line(user([{ type: 'text', text: '[agent-kit owner chat] This is the owner.\n\nDrop it then.' }], '2026-01-03T13:00:00Z')) +
+        line(asst('c3', 'claude-lead-1', usage(500_000, 0), [{ type: 'text', text: 'Dropped.' }], '2026-01-03T13:00:10Z'))
+    );
+    const tree = sessionTree(project, P, { pricing, labeler });
+    const lead = tree.nodes[0];
+    expect(lead.report).toBe('Five proposals written.');
+    expect(lead).toMatchObject({ turns: 2, toolCalls: 1, costUsd: 4, ended: '2026-01-03T10:01:00Z' });
+    expect(tree.session.total).toMatchObject({ costUsd: 4, toolCalls: 1 });
+    expect(tree.session.chat).toEqual({ turns: 2, costUsd: 4 });
+    expect(leadReport(project, P)).toBe('Five proposals written.');
+    // A cycle without chat turns has no chat line.
+    expect(sessionTree(project, SID, { pricing, labeler }).session.chat).toBeNull();
+    fs.rmSync(f);
+  });
+});
+
 describe('leadReport', () => {
   it("gives the lead's last words, and nothing for a bad id", () => {
     const R = '33333333-2222-4333-8444-555555555555';
