@@ -227,8 +227,12 @@ export function cleanWindow(from, to) {
   return { from: Math.round(from), to: Math.round(from + span) };
 }
 
-/** Every start a schedule plans in [from, to): [{at, slot (index), id}], oldest first. */
-export function occurrences(schedule, from, to) {
+/**
+ * Every start a schedule plans in [from, to): [{at, slot (index), id, date}], oldest first.
+ * With `skipped`, a start that is skipped for one day is given too, at its
+ * slot's own time and marked `skipped`: it does not run, but it can be shown.
+ */
+export function occurrences(schedule, from, to, { skipped = false } = {}) {
   if (!schedule?.slots?.length) return [];
   const out = [];
   const first = addDays(parseDate(todayIn(schedule.tz, from)), -1);
@@ -241,11 +245,12 @@ export function occurrences(schedule, from, to) {
       if (slot.days[0] !== 'daily' && !slot.days.includes(name)) return;
       const id = slotId(slot);
       const change = (schedule.changes || []).find((c) => c.date === ds && c.slot === id);
-      if (change?.kind === 'skip') return;
+      const skip = change?.kind === 'skip';
+      if (skip && !skipped) return;
       const time = change?.kind === 'move' ? change.time : slot.time;
       const [H, M] = time.split(':').map(Number);
       const at = instantOf(schedule.tz, date.y, date.m, date.d, H, M);
-      if (at != null && at >= from && at < to) out.push({ at, slot: index, id, date: ds, moved: change?.kind === 'move' });
+      if (at != null && at >= from && at < to) out.push({ at, slot: index, id, date: ds, moved: change?.kind === 'move', ...(skip ? { skipped: true } : {}) });
     });
   }
   return out.sort((a, b) => a.at - b.at);
