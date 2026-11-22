@@ -1,7 +1,7 @@
 // Live state of one sandbox VM: a single read-only ssh round trip, cached
 // briefly. "Running" is decided only from facts on the VM (unit state, the
 // VM's own clock), never by comparing against the workstation clock.
-import { readScript, q } from './ssh.js';
+import { readScript, q, setVmIdentity } from './ssh.js';
 
 const STATUS_TTL = 10_000;
 const DOWN_TTL = 60_000; // do not hammer a VM that is off
@@ -32,6 +32,8 @@ haltat=$(head -c 200 "$STATE/halt-at" 2>/dev/null)
 gatepaused=$([ -e "$STATE/gate/paused" ] && echo yes || echo no)
 kitver=$(head -c 40 /opt/agent-kit/VERSION 2>/dev/null)
 oneshot=$(head -c 200 "$STATE/oneshot" 2>/dev/null)
+# Which project this VM says it is (the kit writes PROJECT= at install).
+vmproject=$(sed -n 's/^PROJECT=//p' /etc/agent-kit/project.env 2>/dev/null | head -1 | head -c 80)
 # A chat turn with the lead, and jobs set for a time (kit 0.10).
 chat=$(head -c 200 "$STATE/chat" 2>/dev/null)
 atjobs=$([ -d "$STATE/oneshot-at" ] && sudo -n /opt/agent-kit/bin/agent-kit-oneshot list-at 2>/dev/null | head -50)
@@ -53,14 +55,14 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
   --arg head "$head" --arg ready "$ready" --arg remote "$remote" --arg current "$current" \\
   --arg newest "$newest" --arg worktrees "$worktrees" --arg haltat "$haltat" \\
   --arg gatepaused "$gatepaused" --arg kitver "$kitver" --arg shots "$shots" \\
-  --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" --arg chat "$chat" --arg atjobs "$atjobs" \\
+  --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" --arg chat "$chat" --arg atjobs "$atjobs" --arg vmproject "$vmproject" \\
   --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" \\
   --arg cap "$cap" --arg today "$today" --arg next "$next" --arg dayend "$dayend" \\
   --arg schedule "$schedule" \\
   --arg host "$(hostname)" --arg now "$(date +%s)" \\
   '{control:$control, lead:$lead, timer:$timer, since:$since, head:$head, ready:$ready, remote:$remote,
     current:$current, newest:$newest, worktrees:($worktrees|tonumber? // 0), haltat:$haltat,
-    gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot, chat:$chat, atjobs:$atjobs,
+    gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot, chat:$chat, atjobs:$atjobs, vmproject:$vmproject,
     haltafter:$haltafter, canhaltafter:$canhaltafter, cap:$cap, today:$today, next:$next, dayend:$dayend, schedule:$schedule,
     host:$host, now:($now|tonumber? // 0)}'
 `;
@@ -154,15 +156,31 @@ function shape(raw) {
 }
 
 async function fetchStatus(project) {
+  // Two entries reach one VM: neither may show the other's team as its own.
+  if (project.vmShared?.length) {
+    return { reachable: false, state: 'unreachable', leadActive: false, vmShared: project.vmShared, error: `Shares its VM with ${project.vmShared.join(', ')} in this console. Remove the stale project.` };
+  }
   const res = await readScript(project, statusScript(project), { timeout: 25000 });
   if (res.code !== 0) {
     return { reachable: false, state: 'unreachable', leadActive: false, error: (res.stderr || '').trim().slice(-300) };
   }
+  let raw;
   try {
-    return shape(JSON.parse(res.stdout.trim().split('\n').pop()));
+    raw = JSON.parse(res.stdout.trim().split('\n').pop());
   } catch {
     return { reachable: false, state: 'unreachable', leadActive: false, error: 'bad status output' };
   }
+  // The VM names its project (PROJECT= in its project.env). A VM that names
+  // another one was handed to another team (a deleted VM's id and address
+  // reused): show nothing of it as this project's, and send it nothing.
+  const expected = project.vmProject || project.id;
+  const found = /^[A-Za-z0-9._-]{1,80}$/.test(raw.vmproject || '') ? raw.vmproject : null;
+  if (found && found !== expected) {
+    setVmIdentity(project.id, found);
+    return { reachable: false, state: 'unreachable', leadActive: false, vmMismatch: { expected, found }, error: `This VM now belongs to the project "${found}", not to ${project.name || project.id}. Nothing is sent to it.` };
+  }
+  setVmIdentity(project.id, null);
+  return { ...shape(raw), vmProject: found };
 }
 
 /** Cached live status; never throws. Concurrent callers share one ssh call. */

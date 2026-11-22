@@ -115,7 +115,9 @@
           </div>
         </dl>
 
-        {#if p.status.state === 'unreachable'}
+        {#if p.status.vmMismatch || p.status.vmShared}
+          <div class="small s-failed" title={p.status.error}><b>Not this project's VM</b>: {p.status.vmMismatch ? `it now belongs to “${p.status.vmMismatch.found}”` : `shared with ${p.status.vmShared.join(', ')}`}. Nothing is sent to it.</div>
+        {:else if p.status.state === 'unreachable'}
           <div class="small s-failed">VM not reachable. Showing the last pulled data.</div>
         {:else if p.status.state === 'halted'}
           <div class="small dim clip" title={p.status.control}>{p.status.control}</div>

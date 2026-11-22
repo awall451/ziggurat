@@ -216,6 +216,12 @@ async function preflight(d, t, { vmid = null, strictMemory = false, mustExist = 
     }
   }
   if (config.rawProjects().some((p) => p.id === d.id)) problems.push(`A project called ${d.id} already exists`);
+  // A VM id the console still has a project for: its VM was deleted on the host,
+  // but the entry is still here, and would read and act on the new VM.
+  if (id != null && !mustExist) {
+    const stale = config.rawProjects().find((p) => p.id !== d.id && p.target === t.id && p.vmid === id);
+    if (stale) problems.push(`VM id ${id} still belongs to the project ${stale.name || stale.id} in this console. Remove that project first, or pick another VM id`);
+  }
   if (!mustExist && seen.memFreeMb != null && seen.memFreeMb < d.request.memoryMb) {
     (strictMemory ? problems : warnings).push(`The host has ${(seen.memFreeMb / 1024).toFixed(1)} GB of memory free; this VM is set to ${(d.request.memoryMb / 1024).toFixed(1)} GB`);
   }
