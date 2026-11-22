@@ -5,7 +5,7 @@
   import Modal from '$lib/components/Modal.svelte';
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
-  import { conflictsAt, placeAfter, dateString } from '$lib/schedule.js';
+  import { conflictsAt, placeAfter, dateString, expectedStarts, gapNote, usageOverlaps, waitText } from '$lib/schedule.js';
   import { DAYS, plan, occurrences, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
 
   let { data } = $props();
@@ -89,9 +89,13 @@
         .filter((o) => o.skipped)
         .map((o) => ({ ...o, end: o.at + (p.typicalSecs || 3600) * 1000 })),
       jobs: p.jobs || [],
+      // Where its waiting jobs are likely to start: behind a job that runs over, a cycle that runs, or the job they build on.
+      expected: expectedStarts(p.jobs || [], tl.now, p.running ? Math.max(p.running.start + (p.typicalSecs || 3600) * 1000, tl.now) : null),
       log: p.log
     }))
   );
+  // Jobs of different teams at the same time: they share one usage limit.
+  const usage = $derived(usageOverlaps(rows, tl.now));
 
   // ---- backlog jobs: the pop-up, cancel, move ----
   let jobOpen = $state(null); // {project, job}
@@ -154,6 +158,8 @@
     movePick = placeAfter(moveRow?.planned, moveRow?.jobs, movePick, moving.job.minutes, moving.job.id, tl.now);
     moveHit = null;
   }
+  // Close behind another job of the team, or before the job it builds on would be merged: a note, never a refusal.
+  const moveNote = $derived(moving && movePick && !moveHit ? gapNote(moveRow?.jobs, movePick, moving.job.minutes, { ignore: moving.job.id, after: moving.job.after || [], now: tl.now }) : null);
   const moveTz = $derived(moving ? scheduleOf(project(moving.project))?.tz : null);
   const canSkipMove = $derived(!!moveHit && moveHit.length === 1 && moveHit[0].kind === 'cycle' && !!moveTz);
   const skipMove = () => confirmMove({ slot: moveHit[0].slot, date: dateString(wallClock(moveTz, moveHit[0].at)) });
@@ -469,6 +475,16 @@
     {#if moving && moveHit}
       <ConflictChoice conflicts={moveHit} team={project(moving.project)?.name} {clockAt} busy={!!busy} onafter={moveAfter} onskip={canSkipMove ? skipMove : null} oncancel={() => (moveHit = null)} />
     {/if}
+    {#if moveNote}
+      <div class="actions gapnote small">
+        <span>
+          {#if moveNote.kind === 'builds'}It builds on {moveNote.order != null ? `#${moveNote.order} ` : ''}“{moveNote.title}”, which would not be merged by then: it would wait.{:else}That is close behind {moveNote.order != null ? `#${moveNote.order} ` : ''}“{moveNote.title}”. Jobs run over, and the gate needs a few minutes to merge.{/if}
+          Leaving room: <b>{clockAt(moveNote.at)}</b>.
+        </span>
+        <span class="spacer"></span>
+        <button class="btn sm" onclick={() => (movePick = moveNote.at)} disabled={!!busy}>Place it there</button>
+      </div>
+    {/if}
     {#if moving}
       <div class="actions movebar">
         {#if movePick}
@@ -531,6 +547,16 @@
         Time zone: {zoneLabel(scheduleOf(sel.p).tz, tl.now)}. A cycle of {sel.p.name} typically takes {lengthText(sel.p.typicalSecs)}. If its previous cycle is still running at a
         start time, that one is skipped.
       </p>
+    </section>
+  {/if}
+
+  {#if usage.length}
+    <section class="panel note caution block">
+      <h2>Shared usage</h2>
+      <ul class="warns">
+        {#each usage as w (w.text)}<li>{w.text}</li>{/each}
+      </ul>
+      <p class="dim small">Every team draws on the same subscription. Nothing here is blocked.</p>
     </section>
   {/if}
 
@@ -693,6 +719,17 @@
     <p class="small">
       {JOB_STATE[j.state]} <b>{whenAt(j.start)}</b>{j.state === 'done' ? `, until ${clockAt(j.end)}` : ''}. Estimate {j.minutes} min{j.state === 'done' ? `, took ${lengthText((j.end - j.start) / 1000)}` : ''}.
     </p>
+    {#if j.wait}<p class="small s-interrupted">Its time has come: {waitText(j.wait)}.</p>{/if}
+    {#if j.state === 'set' && rows.find((r) => r.id === jobOpen.project)?.expected?.[j.id]}
+      <p class="small s-interrupted">Expected to start about {clockAt(rows.find((r) => r.id === jobOpen.project).expected[j.id])} instead of {clockAt(j.start)}.</p>
+    {/if}
+    {#if j.stopped}<p class="small s-failed">Stopped by the time limit: it ran to twice its estimate. What it had not submitted is still on its branches.</p>{/if}
+    {#if j.state === 'running' && tl.now > j.estEnd}
+      <p class="small s-interrupted">
+        Past its estimate.
+        {#if j.noBrake}No time limit is set for this job.{:else if j.kind !== 'plan'}{team?.name}'s lead is told to wrap up at {clockAt(j.start + Math.max(j.minutes * 1.5, j.minutes + 10) * 60000)}; the job is stopped at {clockAt(j.start + Math.max(j.minutes * 2, j.minutes + 20) * 60000)}.{/if}
+      </p>
+    {/if}
     {#if j.prop}
       <ProposalCard prop={j.prop} bare />
     {:else if j.kind === 'plan'}
@@ -729,6 +766,13 @@
   }
   .grow {
     flex: 1;
+  }
+  .gapnote {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--warn);
+    border-radius: 10px;
+    background: rgba(251, 191, 36, 0.08);
   }
   .movebar {
     margin-top: 10px;

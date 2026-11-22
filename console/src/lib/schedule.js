@@ -490,6 +490,122 @@ export function draggedStart(start, deltaMs, now = Date.now(), snap = 15 * 60000
   return { t, ok: t >= now + 60000 && t !== start };
 }
 
+/** Why a job whose time has come has not started, in words (`wait` of a job, kit 0.18). */
+export function waitText(wait) {
+  if (!wait) return '';
+  const on = wait.order != null ? `#${wait.order}` : wait.title ? `“${wait.title}”` : 'the job it builds on';
+  return (
+    {
+      busy: 'waiting for the team to be free',
+      pending: `waiting for ${on} to run`,
+      running: `waiting for ${on} to finish`,
+      merge: `waiting for ${on} to merge`,
+      held: 'waiting for your approval of a change to the checks',
+      failed: `${on} did not finish: this job is dropped 4 hours after its time`
+    }[wait.reason] || ''
+  );
+}
+
+// How long the gate needs after a job to judge and merge what it submitted.
+const GATE_MS = 5 * 60000;
+
+/**
+ * The room to leave behind a job before the next one of the same team: jobs
+ * run over, and the gate has to merge the first one's work. Half the estimate,
+ * at least 15 minutes, plus the gate.
+ */
+export function gapAfter(job) {
+  return Math.max(15, Math.ceil((job?.minutes || 0) / 2)) * 60000 + GATE_MS;
+}
+
+/**
+ * When a team's waiting jobs can really be expected to start: {jobId: ms}, only
+ * for jobs that will start later than set. A team runs one thing at a time, so
+ * a job that runs past its estimate, or a cycle still running, pushes the next
+ * ones back; a job that builds on another starts after that one has merged.
+ * `busyUntil`: when a cycle that is running now is expected to end.
+ */
+export function expectedStarts(jobs = [], now = Date.now(), busyUntil = null) {
+  const out = {};
+  const ends = new Map(); // job id -> when it is expected to end
+  let free = Number.isFinite(busyUntil) ? Math.max(busyUntil, now) : null;
+  const live = jobs.filter((j) => j.state === 'running' || j.state === 'set').sort((a, b) => a.start - b.start);
+  for (const j of live) {
+    if (j.state !== 'running') continue;
+    const end = Math.max(j.estEnd, now);
+    ends.set(j.id, end);
+    free = Math.max(free ?? 0, end);
+  }
+  for (const j of live) {
+    if (j.state !== 'set') continue;
+    let at = Math.max(j.start, now);
+    if (free != null) at = Math.max(at, free);
+    for (const dep of j.after || []) if (ends.has(dep)) at = Math.max(at, ends.get(dep) + GATE_MS);
+    // Rounded up to the minute: the VM looks once a minute.
+    at = Math.ceil(at / 60000) * 60000;
+    if (at - j.start > 90_000) out[j.id] = at;
+    ends.set(j.id, at + j.minutes * 60000);
+    free = Math.max(free ?? 0, at + j.minutes * 60000);
+  }
+  return out;
+}
+
+/**
+ * A note for a job placed at `start` close behind another job of its team, or
+ * before a job it builds on would be merged: {kind: 'close' | 'builds', title,
+ * order, at} with a suggested start on the quarter hour, or null. Never a refusal.
+ * `after`: ids of the jobs it builds on. Overlaps are conflictsAt's business.
+ */
+export function gapNote(jobs = [], start, minutes, { ignore = null, after = [], now = Date.now() } = {}) {
+  const Q = 15 * 60000;
+  let best = null;
+  for (const j of jobs) {
+    if (j.id === ignore || (j.state !== 'set' && j.state !== 'running')) continue;
+    const end = j.state === 'running' ? Math.max(j.estEnd, now) : j.estEnd;
+    const builds = after.includes(j.id);
+    // Only a job that comes first matters, unless this one builds on it.
+    if (!builds && !(j.start <= start)) continue;
+    const need = end + gapAfter(j);
+    if (start >= need) continue;
+    // Overlapping an unrelated job is a conflict, not a gap.
+    if (!builds && start < end) continue;
+    const at = Math.ceil(need / Q) * Q;
+    if (!best || at > best.at) best = { kind: builds ? 'builds' : 'close', title: j.title, order: j.order ?? null, at };
+  }
+  return best;
+}
+
+/**
+ * Jobs of different teams that are likely to run at the same time, and jobs
+ * that overlap another team's planned cycle: every team draws on the same
+ * usage. [{kind: 'usage', project, text}], one per pair of teams.
+ * `rows`: [{id, name, jobs, planned}].
+ */
+export function usageOverlaps(rows = [], now = Date.now()) {
+  const out = [];
+  const span = (j) => [j.start, j.state === 'running' ? Math.max(j.estEnd, now) : j.estEnd];
+  const live = (r) => (r.jobs || []).filter((j) => j.state === 'set' || j.state === 'running');
+  for (let i = 0; i < rows.length; i++) {
+    for (let k = 0; k < rows.length; k++) {
+      if (i === k) continue;
+      const a = rows[i];
+      const b = rows[k];
+      for (const j of live(a)) {
+        const [s, e] = span(j);
+        const other = k > i ? live(b).find((x) => span(x)[0] < e && s < span(x)[1]) : null;
+        const cycle = (b.planned || []).find((c) => c.at >= now && c.at < e && s < c.end);
+        if (!other && !cycle) continue;
+        const what = j.kind === 'plan' ? 'planning cycle' : `job “${j.title}”`;
+        const withWhat = other ? (other.kind === 'plan' ? 'planning cycle' : `job “${other.title}”`) : 'cycle';
+        const key = `${a.id} ${b.id} ${j.id}`;
+        if (out.some((w) => w.key === key)) continue;
+        out.push({ kind: 'usage', project: a.id, key, text: `${a.name}'s ${what} and ${b.name}'s ${withWhat} are likely to run at the same time. Both draw on the same usage limit.` });
+      }
+    }
+  }
+  return out.map(({ key, ...w }) => w);
+}
+
 /** The first start after `start` (on the quarter hour) where the job runs into nothing. */
 export function placeAfter(planned, jobs, start, minutes, ignore = null, now = Date.now()) {
   const Q = 15 * 60000;

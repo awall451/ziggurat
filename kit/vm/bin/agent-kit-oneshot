@@ -10,6 +10,17 @@
 #   agent-kit-oneshot at <unix> <id> <from> [--plan]   the same, started by the tick at that time
 #   agent-kit-oneshot unat <id>           cancel a job set for a time
 #   agent-kit-oneshot due                 start jobs whose time has come (run every minute by agent-kit-tick)
+#   agent-kit-oneshot brake               tell a job that runs far past its estimate to wrap up, then stop it
+#                                         (run every minute by agent-kit-tick, kit 0.18)
+#
+# `start` and `at` also take, after the sender (and --plan), what the console knows
+# about a backlog job (kit 0.18):
+#   --minutes N       its estimate. With it the brake applies: at max(1.5 x N, N + 10 min) the lead
+#                     is told to wrap up; at max(2 x N, N + 20 min) the cycle is stopped.
+#   --no-brake        the owner switched the brake off for this job
+#   --after id[,id]   jobs it builds on. Set for a time, it does not start before each of them has
+#                     ended well, the gate has made a pass since with nothing left to judge, and no
+#                     change is held for the owner. Why it waits is kept beside it and printed by list-at.
 #   agent-kit-oneshot finish              end the job (run by agent-kit-lead.service when a cycle ends)
 #   agent-kit-oneshot reap                end a job that lost its cycle (run every minute by agent-kit-tick)
 #   agent-kit-oneshot show
@@ -27,6 +38,11 @@
 #
 # The marker ($STATE/oneshot) is "<id> <since> <after>", after = halt | run.
 # Markers from older kits have no third field and mean halt.
+# $STATE/oneshot.meta holds the running job's estimate ("id=", "minutes=", "brake=off");
+# $STATE/oneshot.wrap the wrap-up notice for the lead (owner-inbox-hook delivers it);
+# $STATE/oneshot.overrun the id of a job the brake stopped (lead-cycle notes it in the ledger).
+# A job set for a time has <id> ("<when> <from>"), <id>.job, and from kit 0.18 <id>.meta
+# and <id>.wait ("<reason> <dep> <last look> <seconds spent waiting for the owner>").
 set -uo pipefail
 # `finish` runs as root at the end of every lead cycle. That unit's own
 # environment puts a folder the agent can write to first in PATH, so nothing
@@ -52,6 +68,15 @@ AT=$STATE/oneshot-at
 # started at the same time, say), then is dropped and logged as missed.
 AT_GRACE=$((4 * 3600))
 MAX_JOB=$((200 * 1024 * 1024))
+META=$STATE/oneshot.meta
+WRAP=$STATE/oneshot.wrap
+OVERRUN=$STATE/oneshot.overrun
+SHA_RE='^[0-9a-f]{40}$'
+if [ "$(id -u)" = 0 ]; then
+  AG() { sudo -u agent -H git -C "$WORKSPACE" "$@"; } # the agents' workspace, read as the agent
+else
+  AG() { git -C "$WORKSPACE" "$@"; } # only the kit's own tests run it this way
+fi
 
 timer_held=0 # start stopped the lead timer: a refusal must turn it back on
 die() {
@@ -75,13 +100,83 @@ timer_on() { # the lead timer back, if it is meant to be on
   [ "$(systemctl is-enabled "$LEAD.timer" 2>/dev/null)" = enabled ] && systemctl start --no-block "$LEAD.timer" > /dev/null 2>&1
   return 0
 }
+# What the console knows about a backlog job: --minutes N, --no-brake, --after id,id.
+# Sets minutes, brake, after; dies on anything else.
+job_flags() {
+  minutes="" brake=on after_ids=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --minutes) [[ ${2:-} =~ ^[0-9]{1,4}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 1440 ] || die "bad estimate"; minutes=$2; shift ;;
+      --no-brake) brake=off ;;
+      --after)
+        local a
+        IFS=, read -r -a a <<< "${2:-}"
+        [ "${#a[@]}" -ge 1 ] && [ "${#a[@]}" -le 10 ] || die "bad list of jobs to come after"
+        for x in "${a[@]}"; do [[ $x =~ $ID_RE ]] || die "bad job id in --after"; done
+        after_ids=$2; shift ;;
+      *) die "unknown flag: $1" ;;
+    esac
+    shift
+  done
+}
+write_meta() { # file id
+  { echo "id=$2"; [ -z "$minutes" ] || echo "minutes=$minutes"; [ "$brake" = on ] || echo "brake=off"; [ -z "$after_ids" ] || echo "after=$after_ids"; } > "$1.tmp"
+  chmod 644 "$1.tmp"
+  mv "$1.tmp" "$1"
+}
+meta_of() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; } # file key
+# Branches the agents submitted that the gate has not judged yet (as in agent-kit-publish).
+unjudged() {
+  local n=0 ref sha f
+  while read -r sha ref; do
+    [[ $sha =~ $SHA_RE ]] || continue
+    f=$STATE/gate/results/$(printf '%s' "${ref#refs/heads/ready/}" | tr / _).json
+    [ -f "$f" ] && [ "$(jq -r '.sha // ""' "$f" 2>/dev/null)" = "$sha" ] || n=$((n + 1))
+  done < <(AG for-each-ref --format='%(objectname) %(refname)' refs/heads/ready/ 2>/dev/null)
+  echo "$n"
+}
+gate_busy() {
+  local lock=${AGENT_KIT_RUN:-/run}/agent-kit-gate.lock
+  [ -e "$lock" ] || return 1
+  ( exec 9< "$lock" && flock -n 9 ) 2>/dev/null && return 1
+  return 0
+}
+# Why a job may not start yet because of the jobs it builds on: prints
+# "<reason> <job>" and returns 0, or returns 1 when nothing holds it.
+#   pending   that job is itself still set for a time
+#   running   that job is running
+#   failed    that job did not end well (halted, stopped, an error) or never ran
+#   held      a change waits for the owner's approval (gate, kit 0.14)
+#   merge     the gate has not judged everything since that job ended
+waits_for() { # comma list
+  local dep line end pass cur
+  local -a deps
+  IFS=, read -r -a deps <<< "$1"
+  cur=""
+  [ -f "$MARK" ] && read -r cur _ < "$MARK"
+  for dep in "${deps[@]}"; do
+    [ -e "$AT/$dep" ] && { echo "pending $dep"; return 0; }
+    [ "$cur" = "$dep" ] && { echo "running $dep"; return 0; }
+    line=$(jq -c --arg id "$dep" 'select(.oneshot == $id)' "$STATE/ledger/cycles.jsonl" 2>/dev/null | tail -1)
+    [ -n "$line" ] || { echo "failed $dep"; return 0; }
+    [ "$(jq -r 'if .rc == 0 and (.halted | not) and (.limited | not) and (.is_error | not) and (.overrun | not) then "ok" else "bad" end' <<< "$line")" = ok ] || { echo "failed $dep"; return 0; }
+    if compgen -G "$STATE/gate/results/*.json" > /dev/null && grep -ql '"status": *"held"' "$STATE"/gate/results/*.json 2> /dev/null; then echo "held $dep"; return 0; fi
+    # A paused gate judges nothing: there is nothing to wait for.
+    [ -e "$STATE/gate/paused" ] && continue
+    end=$(date -d "$(jq -r '.end // ""' <<< "$line")" +%s 2>/dev/null) || end=0
+    pass=$(head -c 20 "$STATE/gate/pass-started" 2>/dev/null)
+    { [[ ${pass:-} =~ ^[0-9]+$ ]] && [ "$pass" -ge "$end" ] && ! gate_busy && [ "$(unjudged)" = 0 ]; } || { echo "merge $dep"; return 0; }
+  done
+  return 1
+}
+
 # Put back what was there before the job. Only undoes what `start` did: after
 # a halt the control file already says stop, and after a resume the owner wants
 # the team to keep running.
 end_job() { # $1 = how it ended, for the control line
   local id after
   read -r id _ after _ < "$MARK"
-  rm -f "$MARK"
+  rm -f "$MARK" "$META" "$WRAP" "$OVERRUN"
   [[ ${id:-} =~ $ANY_RE ]] || id=unknown
   if grep -q '^run oneshot ' "$STATE/control" 2>/dev/null; then
     if [ "${after:-}" = run ]; then
@@ -98,7 +193,9 @@ end_job() { # $1 = how it ended, for the control line
 case "${1:-show}" in
   start)
     id=${2:-} from=${3:-} kind=job
-    [ "${4:-}" = --plan ] && kind=plan
+    shift 3 2> /dev/null || die "usage: agent-kit-oneshot start <id> <from> [--plan] [--minutes N] [--no-brake]"
+    [ "${1:-}" = --plan ] && { kind=plan; shift; }
+    job_flags "$@"
     if [ "$kind" = plan ]; then [[ $id =~ $PLAN_RE ]] || die "bad plan id"
     else [[ $id =~ $ID_RE ]] || die "bad id"; fi
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
@@ -147,11 +244,14 @@ case "${1:-show}" in
     printf '%s %s %s\n' "$id" "$now" "$after" > "$MARK.tmp"
     chmod 644 "$MARK.tmp"
     mv "$MARK.tmp" "$MARK"
+    # The job's estimate, for the brake. Always written: nothing of an earlier job may stay.
+    rm -f "$WRAP" "$OVERRUN"
+    write_meta "$META" "$id"
     control "run oneshot $id $now"
     if ! systemctl start --no-block "$LEAD.service" > /dev/null 2>&1; then
       # Leave no trace: a job that could not start must not sit in the inbox
       # and be picked up by some later cycle.
-      rm -f "$MARK"
+      rm -f "$MARK" "$META"
       control "$before"
       [ "$stored" = 1 ] && rm -rf -- "${jobdir:?}"
       [ "$after" = run ] && die "could not start the cycle. The team runs on as before"
@@ -159,7 +259,7 @@ case "${1:-show}" in
     fi
     timer_held=0 # off for the job: end_job turns it back on
     # Started by hand while it was set for a time: it must not start again then.
-    rm -f -- "$AT/$id" "$AT/$id.job"
+    rm -f -- "$AT/$id" "$AT/$id.job" "$AT/$id.meta" "$AT/$id.wait"
     if [ "$kind" = plan ]; then
       [ "$after" = run ] && echo "planning cycle $id started. The team runs on when it ends" \
         || echo "planning cycle $id started. The team halts again when it ends"
@@ -192,10 +292,14 @@ case "${1:-show}" in
     ;;
 
   at)
-    when=${2:-} id=${3:-} from=${4:-} flag=${5:-}
+    when=${2:-} id=${3:-} from=${4:-} flag=""
+    shift 4 2> /dev/null || die "usage: agent-kit-oneshot at <unix> <id> <from> [--plan] [--minutes N] [--after id,id] [--no-brake]"
+    [ "${1:-}" = --plan ] && { flag=--plan; shift; }
+    job_flags "$@"
     [[ $when =~ ^[0-9]{9,11}$ ]] || die "bad time"
     if [ "$flag" = --plan ]; then [[ $id =~ $PLAN_RE ]] || die "bad plan id"
-    else [ -z "$flag" ] || die "unknown flag: $flag"; [[ $id =~ $ID_RE ]] || die "bad id"; fi
+    else [[ $id =~ $ID_RE ]] || die "bad id"; fi
+    [[ ",$after_ids," != *",$id,"* ]] || die "a job cannot come after itself"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     now=$(date +%s)
     [ "$when" -ge $((now + 30)) ] && [ "$when" -le $((now + 31 * 86400)) ] || die "the time must be between now and 31 days ahead"
@@ -207,6 +311,8 @@ case "${1:-show}" in
     head -c $((MAX_JOB + 1)) > "$AT/.$id.job" || die "could not store the job"
     [ "$(stat -c %s "$AT/.$id.job")" -le "$MAX_JOB" ] || { rm -f "$AT/.$id.job"; die "the job is too large"; }
     mv "$AT/.$id.job" "$AT/$id.job"
+    rm -f -- "$AT/$id.wait"
+    write_meta "$AT/$id.meta" "$id"
     printf '%s %s\n' "$when" "$from" > "$AT/.$id.tmp"
     mv "$AT/.$id.tmp" "$AT/$id"
     echo "job $id set for $(date -d "@$when" -Is)"
@@ -216,7 +322,7 @@ case "${1:-show}" in
     id=${2:-}
     [[ $id =~ $ANY_RE ]] || die "bad id"
     [ -e "$AT/$id" ] || die "no job set for a time: $id"
-    rm -f -- "$AT/$id" "$AT/$id.job"
+    rm -f -- "$AT/$id" "$AT/$id.job" "$AT/$id.meta" "$AT/$id.wait"
     echo "job $id no longer set for a time"
     ;;
 
@@ -228,22 +334,75 @@ case "${1:-show}" in
       id=$(basename "$f")
       [[ $id =~ $ANY_RE ]] || continue
       read -r when from _ < "$f"
-      [[ ${when:-} =~ ^[0-9]{9,11}$ ]] || { rm -f -- "$f" "$f.job"; continue; }
+      [[ ${when:-} =~ ^[0-9]{9,11}$ ]] || { rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"; continue; }
       [ "$now" -ge "$when" ] || continue
       flag=(); [[ $id =~ $PLAN_RE ]] && flag=(--plan)
-      if [ $((now - when)) -gt "$AT_GRACE" ]; then
-        rm -f -- "$f" "$f.job"
-        printf '%s job:%s %s missed: the team was busy for %s minutes after the set time\n' \
-          "$(date -u +%FT%TZ)" "$id" "$(date +%F)" $((AT_GRACE / 60)) >> "$STATE/schedule.log"
+      # What it waited for at the last look, and how long of that was for the owner:
+      # time spent waiting for an approval does not count against the job.
+      wreason="" wdep="" wlast=$now wowner=0
+      read -r wreason wdep wlast wowner 2> /dev/null < "$f.wait" || true
+      [[ ${wlast:-} =~ ^[0-9]+$ ]] || wlast=$now
+      [[ ${wowner:-} =~ ^[0-9]+$ ]] || wowner=0
+      [ "$wreason" = held ] && wowner=$((wowner + now - wlast))
+      after_ids=$(meta_of "$f.meta" after)
+      hold=""
+      [ -z "$after_ids" ] || hold=$(waits_for "$after_ids") || hold=""
+      if [ $((now - when - wowner)) -gt "$AT_GRACE" ]; then
+        rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"
+        case "${hold%% *}" in
+          "") why="the team was busy for $((AT_GRACE / 60)) minutes after the set time" ;;
+          failed | pending) why="the job it builds on (${hold#* }) did not finish" ;;
+          *) why="the job it builds on (${hold#* }) was not merged within $((AT_GRACE / 60)) minutes" ;;
+        esac
+        printf '%s job:%s %s missed: %s\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" "$why" >> "$STATE/schedule.log"
         continue
       fi
-      if out=$("$0" start "$id" "$from" "${flag[@]}" < "$f.job" 2>&1); then
-        rm -f -- "$f" "$f.job"
+      if [ -n "$hold" ]; then
+        # It waits for another job, not for the team: the next due job may go.
+        printf '%s %s %s\n' "$hold" "$now" "$wowner" > "$f.wait"
+        continue
+      fi
+      args=()
+      m=$(meta_of "$f.meta" minutes); [ -z "$m" ] || args+=(--minutes "$m")
+      [ "$(meta_of "$f.meta" brake)" != off ] || args+=(--no-brake)
+      if out=$("$0" start "$id" "$from" "${flag[@]}" "${args[@]}" < "$f.job" 2>&1); then
+        rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"
         printf '%s job:%s %s started\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" >> "$STATE/schedule.log"
+      else
+        printf 'busy - %s %s\n' "$now" "$wowner" > "$f.wait"
       fi
       : "$out"
       break # one start per tick: the next waits for this one to end
     done
+    ;;
+
+  brake)
+    # A backlog job that runs far past its estimate: first the lead is told to
+    # wrap up, then the cycle is stopped. The work on its branches is left as it is.
+    [ -f "$MARK" ] && [ -f "$META" ] || exit 0
+    read -r id since _ < "$MARK"
+    [ "$(meta_of "$META" id)" = "$id" ] && [ "$(meta_of "$META" brake)" != off ] || exit 0
+    minutes=$(meta_of "$META" minutes)
+    [[ ${minutes:-} =~ ^[0-9]{1,4}$ ]] && [ "$minutes" -ge 1 ] || exit 0
+    began=$(date -d "$since" +%s 2> /dev/null) || exit 0
+    ran=$(($(date +%s) - began))
+    wrap_at=$((minutes * 90)); [ "$wrap_at" -ge $((minutes * 60 + 600)) ] || wrap_at=$((minutes * 60 + 600))
+    stop_at=$((minutes * 120)); [ "$stop_at" -ge $((minutes * 60 + 1200)) ] || stop_at=$((minutes * 60 + 1200))
+    if [ "$ran" -ge "$stop_at" ]; then
+      exec 8> "$LOCK"
+      flock 8
+      [ -f "$MARK" ] && cycle_alive || exit 0
+      echo "$id" > "$OVERRUN.tmp" && chmod 644 "$OVERRUN.tmp" && mv "$OVERRUN.tmp" "$OVERRUN"
+      printf '%s job:%s %s stopped: it ran %s minutes against an estimate of %s\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" $((ran / 60)) "$minutes" >> "$STATE/schedule.log"
+      # Stopping the unit ends the cycle like a halt would; its own end (finish)
+      # then puts the team back to what it was before the job.
+      flock -u 8
+      systemctl stop "$LEAD.service" > /dev/null 2>&1
+      echo "one-shot job $id stopped after $((ran / 60)) minutes (estimate $minutes)"
+    elif [ "$ran" -ge "$wrap_at" ] && [ ! -e "$WRAP" ]; then
+      printf '%s %s %s %s\n' "$id" "$minutes" $((ran / 60)) $((stop_at / 60)) > "$WRAP.tmp" && chmod 644 "$WRAP.tmp" && mv "$WRAP.tmp" "$WRAP"
+      echo "one-shot job $id told to wrap up after $((ran / 60)) minutes (estimate $minutes)"
+    fi
     ;;
 
   list-at)
@@ -252,7 +411,10 @@ case "${1:-show}" in
       id=$(basename "$f")
       [[ $id =~ $ANY_RE ]] || continue
       read -r when from _ < "$f"
-      echo "$id $when $from"
+      # From kit 0.18: why a job whose time has come has not started ("-" when it has not been looked at).
+      wreason="" wdep=""
+      read -r wreason wdep _ 2> /dev/null < "$f.wait" || true
+      echo "$id $when $from ${wreason:--} ${wdep:--}"
     done
     ;;
 
@@ -266,6 +428,6 @@ case "${1:-show}" in
     ;;
 
   *)
-    die "usage: agent-kit-oneshot start <id> <from> [--plan] | at <unix> <id> <from> [--plan] | unat <id> | due | list-at | finish | reap | show"
+    die "usage: agent-kit-oneshot start <id> <from> [--plan] [--minutes N] [--no-brake] | at <unix> <id> <from> [--plan] [--minutes N] [--after id,id] [--no-brake] | unat <id> | due | brake | list-at | finish | reap | show"
     ;;
 esac

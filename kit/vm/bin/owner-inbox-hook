@@ -42,7 +42,15 @@ if [ -f "$S/halt-after" ]; then
   read -r hset hmode _ < "$S/halt-after"
   [ "${hmode:-}" = wrap ] && [[ ${hset:-} =~ ^[0-9]{9,11}$ ]] && wrap=$hset
 fi
-[ ${#waiting[@]} -gt 0 ] || [ -n "$wrap" ] || exit 0
+# A backlog job that runs far past its estimate (agent-kit-oneshot brake, kit 0.18):
+# "<job> <estimate> <minutes it ran> <minutes at which it is stopped>", for the job in progress only.
+over= oest= oran= ostop=
+if [ -f "$S/oneshot.wrap" ] && [ -f "$S/oneshot" ]; then
+  read -r ojob oest oran ostop _ < "$S/oneshot.wrap"
+  read -r cur _ < "$S/oneshot"
+  [ -n "${ojob:-}" ] && [ "$ojob" = "$cur" ] && [[ ${oest:-} =~ ^[0-9]{1,4}$ && ${oran:-} =~ ^[0-9]{1,5}$ && ${ostop:-} =~ ^[0-9]{1,5}$ ]] && over=$ojob
+fi
+[ ${#waiting[@]} -gt 0 ] || [ -n "$wrap" ] || [ -n "$over" ] || exit 0
 
 ID_RE='^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$'
 IFS=$'\t' read -r sid aid < <(jq -r '[.session_id // "", .agent_id // ""] | @tsv' 2>/dev/null)
@@ -58,6 +66,16 @@ if [ -n "$wrap" ]; then
       out+="[agent-kit owner notice] The owner has asked for the team to halt when this cycle ends. Wrap up: start no new work and no new agents. Agents that are running have been told to finish the step they are on and report back. Integrate and submit what is ready, write in your notes what is unfinished and where it stands, then end the cycle. No cycle follows until the owner resumes the team."$'\n\n'
     else
       out+="[agent-kit owner notice] The owner has asked for the team to halt when this cycle ends. Finish the step you are on and do not start further steps. Leave your work in a safe state (commit or note what is half done) and report back, saying what is left to do."$'\n'
+    fi
+  fi
+fi
+if [ -n "$over" ]; then
+  who=$(printf '%s' "${aid:-lead}" | tr -cd 'A-Za-z0-9_-' | cut -c1-64)
+  if [ -n "$who" ] && mkdir "$S/outbox/.seen/overrun-$over@$who" 2>/dev/null; then
+    if [ -z "$aid" ]; then
+      out+="[agent-kit owner notice] This job has run $oran minutes against an estimate of $oest. Wrap up now: start no new work and no new agents. Agents that are running have been told to finish the step they are on and report back. Integrate and submit what is ready, see it through the gate, and say in your reply what is left and where it stands. At $ostop minutes the cycle is stopped as it is; work that was not submitted stays on its branches."$'\n\n'
+    else
+      out+="[agent-kit owner notice] This job has run well past its estimate and will be stopped soon. Finish the step you are on and do not start further steps. Leave your work in a safe state (commit or note what is half done) and report back, saying what is left to do."$'\n'
     fi
   fi
 fi

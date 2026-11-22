@@ -20,6 +20,8 @@ import { invalidateStatus, getStatus, peekStatus } from './live.js';
 import { createPlanned, noteJob, setStatus as setIssueStatus, get as getIssue, PLANNED_KIT, OPEN as OPEN_ISSUE } from './issues.js';
 
 export const BACKLOG_KIT = '0.10.0';
+// Estimates, dependencies and the overrun brake on the VM.
+export const BRAKE_KIT = '0.18.0';
 export const PLAN_RE = /^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$/;
 export const PID_RE = /^[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}$/;
 export const MSG_RE = /^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$/;
@@ -345,6 +347,25 @@ export function jobText(prop, issueId = null) {
     .join('\n');
 }
 
+/**
+ * What the VM is told about a backlog job (kit 0.18): its estimate, the jobs it
+ * builds on (the proposal's Depends, for those that have a job), and the
+ * owner's "no time limit". Nothing for an older kit, which would refuse the flags.
+ */
+let kitOverride = null; // the kit's own tests have no VM to ask
+function flagsFor(project, prop, { noBrake = false } = {}) {
+  if (!atLeast(kitOverride ?? peekStatus(project.id)?.kitVersion, BRAKE_KIT)) return { flags: [], after: [], unplaced: [] };
+  const after = [];
+  const unplaced = [];
+  for (const dep of prop.depends) {
+    const run = readJson(path.join(runsDir(project), `${dep}.json`));
+    if (run && typeof run.jobId === 'string' && /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(run.jobId) && !run.cancelled) after.push(run.jobId);
+    else unplaced.push(dep);
+  }
+  const flags = ['--minutes', String(prop.minutes), ...(noBrake ? ['--no-brake'] : []), ...(after.length ? ['--after', after.join(',')] : [])];
+  return { flags, after, unplaced };
+}
+
 function approvedProposal(project, pid) {
   if (!PID_RE.test(pid)) throw new Error('Bad proposal id');
   const prop = proposal(project, pid);
@@ -356,26 +377,31 @@ function approvedProposal(project, pid) {
 }
 
 /** Run an approved item now: a one-shot job whose text is the proposal. */
-export async function runNow(user, project, pid, oneshot) {
+export async function runNow(user, project, pid, oneshot, { noBrake = false } = {}) {
   const { prop, issueId } = approvedProposal(project, pid);
-  const out = await oneshot(user, project, { text: jobText(prop, issueId), attachments: [] });
+  const { flags } = flagsFor(project, prop, { noBrake });
+  const out = await oneshot(user, project, { text: jobText(prop, issueId), attachments: [], flags });
   const at = new Date().toISOString();
-  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at, scheduledFor: null, minutes: prop.minutes });
+  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at, scheduledFor: null, minutes: prop.minutes, noBrake: !!noBrake });
   if (issueId) noteJob(project, issueId, { id: out.id, startedAt: at });
   return out;
 }
 
 /** Set an approved item for a time: the VM starts the job then (agent-kit-oneshot at). */
-export async function runAt(user, project, pid, at, skip = null) {
+export async function runAt(user, project, pid, at, skip = null, { noBrake = false } = {}) {
   const { prop, issueId } = approvedProposal(project, pid);
   const epoch = checkTime(at);
-  const out = await scheduleOneshot(project, user, { text: jobText(prop, issueId), epoch });
+  const { flags, after, unplaced } = flagsFor(project, prop, { noBrake });
+  const out = await scheduleOneshot(project, user, { text: jobText(prop, issueId), epoch, flags });
   if (out.scheduled) await skipStart(user, project, skip);
   if (issueId && out.scheduled) noteJob(project, issueId, { id: out.id, scheduledFor: epoch });
   audit(user, project.id, 'job-at', { pid, id: out.id, at: new Date(epoch * 1000).toISOString() }, { ok: out.scheduled, detail: out.error });
-  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at: new Date().toISOString(), scheduledFor: out.scheduled ? epoch : null, minutes: prop.minutes });
+  writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at: new Date().toISOString(), scheduledFor: out.scheduled ? epoch : null, minutes: prop.minutes, noBrake: !!noBrake, after });
   invalidateStatus(project.id);
-  return { ok: true, id: out.id, scheduled: out.scheduled, detail: out.scheduled ? 'Job set for that time.' : `No clear answer from the VM (${out.error}).` };
+  // What it builds on has no job yet: the VM cannot wait for something it does not know.
+  const loose = unplaced.length ? ` It builds on ${unplaced.length === 1 ? 'an item that has' : `${unplaced.length} items that have`} no job yet: it will not wait for ${unplaced.length === 1 ? 'it' : 'them'}.` : '';
+  const waits = after.length ? ` It starts once what it builds on has merged.` : '';
+  return { ok: true, id: out.id, scheduled: out.scheduled, detail: out.scheduled ? `Job set for that time.${waits}${loose}` : `No clear answer from the VM (${out.error}).` };
 }
 
 // ---- chat ----------------------------------------------------------------
@@ -540,7 +566,19 @@ export function list(project, status = null) {
       taken,
       run:
         run && typeof run.jobId === 'string'
-          ? { jobId: run.jobId, rev: run.rev, at: run.at, scheduledFor: run.scheduledFor || null, cancelled: !!run.cancelled, missed: missed.has(run.jobId) }
+          ? {
+              jobId: run.jobId,
+              rev: run.rev,
+              at: run.at,
+              scheduledFor: run.scheduledFor || null,
+              cancelled: !!run.cancelled,
+              missed: missed.has(run.jobId),
+              // The overrun brake ended it at twice its estimate (kit 0.18): minutes it ran, or null.
+              stopped: (() => {
+                const l = lines.findLast((x) => x.oneshot === run.jobId);
+                return l?.overrun === true ? Math.round((num(l.secs) || 0) / 60) : null;
+              })()
+            }
           : null
     });
   }
@@ -619,16 +657,22 @@ export function jobsFor(project, status = null, now = Date.now()) {
       minutes,
       cost: prop?.cost ?? null,
       end: null,
+      // The jobs it builds on, and the owner's "no time limit" (kit 0.18).
+      after: Array.isArray(run.after) ? run.after.filter((x) => typeof x === 'string' && /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(x)).slice(0, 10) : [],
+      noBrake: run.noBrake === true,
+      wait: null,
       // For the job's pop-up on the Schedule page: the proposal as checked here.
       prop: prop ? { order: prop.order, title: prop.title, minutes: prop.minutes, cost: prop.cost, confidence: prop.confidence, areas: prop.areas, risk: prop.risk, rev: prop.rev, text: prop.text } : null
     };
     const line = lines.findLast((l) => l.oneshot === run.jobId);
     if (line) {
-      add({ ...base, state: 'done', start: Date.parse(line.start), end: Date.parse(line.end) });
+      // `stopped`: the overrun brake ended it at twice its estimate.
+      add({ ...base, state: 'done', start: Date.parse(line.start), end: Date.parse(line.end), stopped: line.overrun === true });
     } else if (running === run.jobId) {
       add({ ...base, state: 'running', start: Number.isFinite(runningSince) ? runningSince : Date.parse(run.at) });
     } else if (atById.has(run.jobId)) {
-      add({ ...base, state: 'set', start: atById.get(run.jobId).at * 1000 });
+      // `wait`: its time has come and it has not started; why, as the VM says.
+      add({ ...base, state: 'set', start: atById.get(run.jobId).at * 1000, wait: atById.get(run.jobId).wait || null });
     } else if (run.scheduledFor && missed.has(run.jobId)) {
       // The team was busy for hours after the set time: the VM dropped it.
       add({ ...base, state: 'missed', start: run.scheduledFor * 1000 });
@@ -644,6 +688,12 @@ export function jobsFor(project, status = null, now = Date.now()) {
     const base = { id, kind: 'plan', pid: null, order: null, title: 'Planning cycle', minutes: planMinutes, cost: null, end: null };
     if (running === id) add({ ...base, state: 'running', start: Number.isFinite(runningSince) ? runningSince : now });
     else if (atById.has(id)) add({ ...base, state: 'set', start: atById.get(id).at * 1000 });
+  }
+  // The job a waiting one waits for, by what the owner calls it.
+  const byId = new Map(out.map((j) => [j.id, j]));
+  for (const j of out) {
+    const on = j.wait?.job ? byId.get(j.wait.job) : null;
+    if (j.wait) j.wait = { reason: j.wait.reason, job: j.wait.job || null, title: on?.title || null, order: on?.order ?? null };
   }
   return out.sort((x, y) => x.start - y.start);
 }
@@ -667,3 +717,9 @@ export function syncBacklog(project, { force = false } = {}) {
   syncState.set(project.id, { ...s, pending });
   return pending;
 }
+
+export const _test = {
+  setKit: (version) => {
+    kitOverride = version;
+  }
+};

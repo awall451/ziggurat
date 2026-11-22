@@ -92,13 +92,24 @@ function chatOf(text) {
   return /^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$/.test(plan || '') && /^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$/.test(msg || '') ? { plan, msg, since: since || null } : null;
 }
 
-/** Jobs set for a time: "<id> <unix> <from>" lines. */
+const WAIT_RE = /^(busy|pending|running|failed|held|merge)$/;
+
+/**
+ * Jobs set for a time: "<id> <unix> <from>" lines. From kit 0.18 also why a
+ * job whose time has come has not started, and the job it waits for.
+ */
 function atJobsOf(text) {
   return String(text || '')
     .split('\n')
     .map((l) => l.trim().split(/\s+/))
     .filter(([id, at]) => /^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}$/.test(id || '') && /^\d{9,11}$/.test(at || ''))
-    .map(([id, at, from]) => ({ id, at: Number(at), from: /^[A-Za-z0-9._@-]{1,80}$/.test(from || '') ? from : null, plan: /-p-/.test(id) }));
+    .map(([id, at, from, why, dep]) => ({
+      id,
+      at: Number(at),
+      from: /^[A-Za-z0-9._@-]{1,80}$/.test(from || '') ? from : null,
+      plan: /-p-/.test(id),
+      wait: WAIT_RE.test(why || '') ? { reason: why, job: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(dep || '') ? dep : null } : null
+    }));
 }
 
 const count = (v) => (/^\d{1,10}$/.test(String(v ?? '')) ? Number(v) : null);

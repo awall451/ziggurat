@@ -69,6 +69,84 @@ function DAYS7() {
   return [...lib.DAYS];
 }
 
+describe('jobs placed close together (kit 0.18)', () => {
+  const M = 60000;
+  const now = 1_800_000_000_000; // on a quarter hour
+  const job = (id, startMin, minutes, o = {}) => ({ id, kind: 'job', title: id.toUpperCase(), order: null, minutes, start: now + startMin * M, estEnd: now + (startMin + minutes) * M, state: 'set', after: [], ...o });
+
+  it('leaves room behind a job: half its estimate, at least 15 minutes, plus the gate', () => {
+    expect(lib.gapAfter({ minutes: 10 })).toBe(20 * M);
+    expect(lib.gapAfter({ minutes: 60 })).toBe(35 * M);
+    expect(lib.gapAfter({ minutes: 90 })).toBe(50 * M);
+  });
+
+  it('a job that runs over pushes the next ones back, and they show where they will start', () => {
+    const a = job('a', -50, 30, { state: 'running' }); // 20 minutes past its estimate
+    const b = job('b', 5, 20);
+    const c = job('c', 40, 20);
+    const d = job('d', 300, 20);
+    // a may end any minute: b is five minutes off still, so nothing is late yet.
+    expect(lib.expectedStarts([d, c, b, a], now)).toEqual({});
+    // Its time has come and a still runs: b moves along with now.
+    expect(lib.expectedStarts([job('b', -5, 20), a], now)).toEqual({ b: now });
+    const a2 = job('a', -10, 60, { state: 'running' }); // runs until +50
+    expect(lib.expectedStarts([a2, b, c, d], now)).toEqual({ b: now + 50 * M, c: now + 70 * M });
+    // A cycle that is running delays them the same way.
+    expect(lib.expectedStarts([b, c], now, now + 30 * M)).toEqual({ b: now + 30 * M, c: now + 50 * M });
+    expect(lib.expectedStarts([b, c, d], now)).toEqual({});
+    expect(lib.expectedStarts([], now)).toEqual({});
+  });
+
+  it('a job that builds on another is expected after that one has merged', () => {
+    const a = job('a', 10, 30); // ends +40
+    const b = job('b', 60, 20, { after: ['a'] }); // far enough behind
+    const c = job('c', 42, 20, { after: ['a'] }); // two minutes behind: not merged yet
+    expect(lib.expectedStarts([a, b], now)).toEqual({});
+    expect(lib.expectedStarts([a, c], now)).toEqual({ c: now + 45 * M });
+  });
+
+  it('notes a job placed too close behind another, and suggests a start that leaves room', () => {
+    const a = job('a', 0, 60, { order: 1 }); // ends +60, room until +95
+    expect(lib.gapNote([a], now + 60 * M, 30, { now })).toEqual({ kind: 'close', title: 'A', order: 1, at: now + 105 * M });
+    expect(lib.gapNote([a], now + 95 * M, 30, { now })).toBeNull();
+    expect(lib.gapNote([a], now + 120 * M, 30, { now })).toBeNull();
+    // Overlapping an unrelated job is a conflict (conflictsAt), not a gap; before it, nothing.
+    expect(lib.gapNote([a], now + 30 * M, 30, { now })).toBeNull();
+    expect(lib.gapNote([job('z', 200, 30)], now + 60 * M, 30, { now })).toBeNull();
+    // It builds on that job: said even when it is set before it.
+    expect(lib.gapNote([job('z', 200, 30)], now + 60 * M, 30, { now, after: ['z'] })).toMatchObject({ kind: 'builds', at: now + 255 * M });
+    // The job being moved does not count against itself; done and missed jobs do not count.
+    expect(lib.gapNote([a], now + 60 * M, 30, { now, ignore: 'a' })).toBeNull();
+    expect(lib.gapNote([{ ...a, state: 'done' }], now + 60 * M, 30, { now })).toBeNull();
+    expect(lib.conflictsAt([], [a], now + 30 * M, 30, null, now)).toHaveLength(1);
+    expect(lib.placeAfter([], [a], now + 30 * M, 30, null, now)).toBe(now + 60 * M);
+  });
+
+  it('points out jobs of different teams at the same time: they share one usage limit', () => {
+    const rows = [
+      { id: 'x', name: 'Xteam', jobs: [job('a', 10, 60)], planned: [] },
+      { id: 'y', name: 'Yteam', jobs: [job('b', 30, 30), job('c', 400, 30)], planned: [{ at: now + 420 * M, end: now + 480 * M }] },
+      { id: 'z', name: 'Zteam', jobs: [], planned: [{ at: now + 20 * M, end: now + 80 * M }] }
+    ];
+    const out = lib.usageOverlaps(rows, now).map((w) => w.text);
+    expect(out).toContain('Xteam\'s job “A” and Yteam\'s job “B” are likely to run at the same time. Both draw on the same usage limit.');
+    expect(out).toContain('Xteam\'s job “A” and Zteam\'s cycle are likely to run at the same time. Both draw on the same usage limit.');
+    expect(out.filter((t) => t.includes('“A”') && t.includes('“B”'))).toHaveLength(1);
+    // A team's own cycle is not another team.
+    expect(out.some((t) => t.startsWith("Yteam's job “C” and Yteam"))).toBe(false);
+    expect(lib.usageOverlaps([rows[0]], now)).toEqual([]);
+  });
+
+  it('says in words why a job waits', () => {
+    expect(lib.waitText({ reason: 'merge', order: 1 })).toBe('waiting for #1 to merge');
+    expect(lib.waitText({ reason: 'held', order: 1 })).toBe('waiting for your approval of a change to the checks');
+    expect(lib.waitText({ reason: 'running', title: 'Autosave', order: null })).toBe('waiting for “Autosave” to finish');
+    expect(lib.waitText({ reason: 'busy' })).toBe('waiting for the team to be free');
+    expect(lib.waitText({ reason: 'failed', order: 2 })).toMatch(/^#2 did not finish/);
+    expect(lib.waitText(null)).toBe('');
+  });
+});
+
 describe('dragging a job that is set for a time', () => {
   it('lands on the quarter hour, and not in the past or where it was', () => {
     const Q = 15 * 60000;

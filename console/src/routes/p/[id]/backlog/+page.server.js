@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import { getProject } from '$lib/server/config.js';
 import { list, syncBacklog, kitHasBacklog } from '$lib/server/backlog.js';
 import { noteScheduledStart } from '$lib/server/feedback.js';
-import { peekStatus } from '$lib/server/live.js';
+import { peekStatus, kitAtLeast } from '$lib/server/live.js';
 import { getSettings } from '$lib/server/schedule.js';
 
 export async function load({ params, parent }) {
@@ -25,6 +25,8 @@ export async function load({ params, parent }) {
     planMinutes: mins.length ? Math.max(1, mins[Math.floor(mins.length / 2)]) : 5,
     ready,
     kitVersion: status?.kitVersion || null,
+    // A time limit for a job (told to wrap up, then stopped) needs kit 0.18.
+    canBrake: kitAtLeast(status?.kitVersion, '0.18.0'),
     atJobs: status?.atJobs || [],
     busy: status ? { state: status.state, oneshot: status.oneshot || null, chat: status.chat || null } : null,
     clock: settings.clock || '24',

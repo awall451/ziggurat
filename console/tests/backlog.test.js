@@ -331,3 +331,82 @@ describe('planned issues and jobs on the timeline (kit 0.11)', () => {
     await expect(bl.moveAt(user, project, 'x; id', to)).rejects.toThrow();
   });
 });
+
+describe('what the VM is told about a job (kit 0.18)', () => {
+  const NEXT = '20260102T110000Z-b-eeeeee'; // the approved "Autosave" item of the tests above
+  const BUILDS = '20260102T100500Z-b-ffffff';
+  const at = () => Math.floor(Date.now() / 1000) + 3 * 3600;
+  const lastAt = () => calls().filter((c) => /agent-kit-oneshot at /.test(c)).at(-1);
+
+  it('nothing new for an older kit', async () => {
+    bl._test.setKit('0.17.0');
+    const res = await bl.runAt(user, project, NEXT, at());
+    expect(lastAt()).toMatch(new RegExp(`agent-kit-oneshot at \\d+ ${res.id} owner$`));
+    await bl.cancelAt(user, project, res.id);
+  });
+
+  it('its estimate, and "no time limit" when the owner said so', async () => {
+    bl._test.setKit('0.18.0');
+    let res = await bl.runAt(user, project, NEXT, at());
+    expect(lastAt()).toMatch(new RegExp(`agent-kit-oneshot at \\d+ ${res.id} owner --minutes 30$`));
+    // Moved: the same is sent again.
+    await bl.moveAt(user, project, res.id, at() + 900);
+    expect(lastAt()).toMatch(new RegExp(`agent-kit-oneshot at \\d+ ${res.id} owner --minutes 30$`));
+    await bl.cancelAt(user, project, res.id);
+    res = await bl.runAt(user, project, NEXT, at(), null, { noBrake: true });
+    expect(lastAt()).toMatch(new RegExp(`${res.id} owner --minutes 30 --no-brake$`));
+    expect(JSON.parse(fs.readFileSync(path.join(base, 'runs', `${NEXT}.json`), 'utf8'))).toMatchObject({ noBrake: true, after: [] });
+  });
+
+  it('the jobs it builds on, when they have a job', async () => {
+    const plan = JSON.parse(fs.readFileSync(path.join(base, 'decisions', `${NEXT}.json`), 'utf8'));
+    const first = JSON.parse(fs.readFileSync(path.join(base, 'runs', `${NEXT}.json`), 'utf8')).jobId;
+    const planId = fs.readFileSync(path.join(out, `${NEXT}.md`), 'utf8').match(/^Plan: (.+)$/m)[1];
+    fs.writeFileSync(
+      path.join(out, `${BUILDS}.md`),
+      prop({ Plan: planId, Rev: 1, Date: '2026-01-02T11:10:00Z', Title: 'Autosave settings page', Minutes: 45, 'Cost-usd': '3.00', Confidence: 'medium', Depends: `${NEXT},20260102T100900Z-b-000000`, Order: 2 })
+    );
+    expect(plan.status).toBe('approved');
+    await bl.decide(user, project, BUILDS, 'approved');
+    const res = await bl.runAt(user, project, BUILDS, at() + 3600);
+    expect(lastAt()).toMatch(new RegExp(`${res.id} owner --minutes 45 --after ${first}$`));
+    // One of the two it builds on has no job: said, not hidden.
+    expect(res.detail).toMatch(/starts once what it builds on has merged/);
+    expect(JSON.parse(fs.readFileSync(path.join(base, 'runs', `${BUILDS}.json`), 'utf8')).after).toEqual([first]);
+    // The timeline knows what it builds on and, from the VM, why it waits.
+    const jobs = bl.jobsFor(project, {
+      atJobs: [
+        { id: first, at: at(), from: 'owner', plan: false, wait: null },
+        { id: res.id, at: at() + 3600, from: 'owner', plan: false, wait: { reason: 'merge', job: first } }
+      ]
+    });
+    expect(jobs.find((j) => j.id === res.id)).toMatchObject({ state: 'set', after: [first], noBrake: false, wait: { reason: 'merge', job: first, title: 'Autosave', order: 1 } });
+    expect(jobs.find((j) => j.id === first)).toMatchObject({ noBrake: true, wait: null });
+  });
+
+  it('Run now sends the estimate, and never what it comes after', async () => {
+    let got = null;
+    await bl.runNow(
+      user,
+      project,
+      BUILDS,
+      async (_u, _p, job) => {
+        got = job.flags;
+        return { id: '20260102T140000Z-o-runnow', started: true };
+      },
+      { noBrake: false }
+    );
+    expect(got.slice(0, 2)).toEqual(['--minutes', '45']);
+    bl._test.setKit(null);
+  });
+
+  it('a job the time limit stopped shows as stopped, on the Backlog and on the timeline', () => {
+    fs.appendFileSync(
+      path.join(project.paths.fleet, 'cycles.jsonl'),
+      JSON.stringify({ kind: 'oneshot', oneshot: '20260102T140000Z-o-runnow', start: '2026-01-02T14:00:00Z', end: '2026-01-02T15:31:00Z', secs: 5460, halted: true, overrun: true }) + '\n'
+    );
+    const p = bl.list(project).plans.flatMap((x) => x.proposals).find((x) => x.pid === BUILDS);
+    expect(p.run.stopped).toBe(91);
+    expect(bl.jobsFor(project, {}).find((j) => j.id === '20260102T140000Z-o-runnow')).toMatchObject({ state: 'done', stopped: true });
+  });
+});
