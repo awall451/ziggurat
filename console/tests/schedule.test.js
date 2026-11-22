@@ -69,6 +69,20 @@ function DAYS7() {
   return [...lib.DAYS];
 }
 
+describe('dragging a job that is set for a time', () => {
+  it('lands on the quarter hour, and not in the past or where it was', () => {
+    const Q = 15 * 60000;
+    const now = 1000 * Q + 5 * 60000;
+    const start = 1004 * Q;
+    expect(lib.draggedStart(start, 22 * 60000, now)).toEqual({ t: 1005 * Q, ok: true });
+    expect(lib.draggedStart(start, -22 * 60000, now)).toEqual({ t: 1003 * Q, ok: true });
+    expect(lib.draggedStart(start, 5 * 60000, now)).toEqual({ t: start, ok: false });
+    expect(lib.draggedStart(start, -4 * Q, now)).toEqual({ t: 1000 * Q, ok: false });
+    // The quarter hour just after now is less than a minute away only when now is on it.
+    expect(lib.draggedStart(start, -3 * Q, now).ok).toBe(true);
+  });
+});
+
 describe('one-day changes (kit 0.12.1)', () => {
   it('move or skip one day of a slot, kept through the VM text form', () => {
     const s = lib.validateSchedule({

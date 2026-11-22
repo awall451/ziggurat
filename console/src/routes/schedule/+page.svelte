@@ -121,6 +121,14 @@
       busy = '';
     }
   }
+  // A job dragged on the timeline: the same path as Move, with the place already picked.
+  function dragMove(projectId, job, at) {
+    if (busy) return;
+    moving = { project: projectId, job };
+    movePick = at;
+    moveHit = null;
+    confirmMove();
+  }
   function startMove() {
     moving = jobOpen;
     movePick = null;
@@ -457,7 +465,7 @@
       </div>
       <p class="dim small">Per day: cycles that ran (filled) and start times still to come (outlined). Open a day or the week to change times.</p>
     {:else}
-      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => ((movePick = ms), (moveHit = null))} />
+      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} onjobmove={editable ? dragMove : null} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => ((movePick = ms), (moveHit = null))} />
     {#if moving && moveHit}
       <ConflictChoice conflicts={moveHit} team={project(moving.project)?.name} {clockAt} busy={!!busy} onafter={moveAfter} onskip={canSkipMove ? skipMove : null} oncancel={() => (moveHit = null)} />
     {/if}
@@ -475,7 +483,7 @@
     {/if}
       <p class="dim small">
         <b>Move through time:</b> the arrows, or scroll sideways (Shift + wheel). <b>Zoom in:</b> drag across empty space. <b>Change times:</b> drag a planned start, or
-        click an empty place in a row to add one. Changes are not active until you apply them.
+        click an empty place in a row to add one. Changes are not active until you apply them. <b>Move a backlog job:</b> drag it along its row; that is done at once.
       </p>
     {/if}
   </section>

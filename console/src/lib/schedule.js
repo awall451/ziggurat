@@ -480,6 +480,16 @@ export function conflictsAt(planned = [], jobs = [], start, minutes, ignore = nu
   return out.sort((a, b) => a.at - b.at);
 }
 
+/**
+ * Where a job that started at `start` would start after being dragged by
+ * `deltaMs` along its row: on the quarter hour, {t, ok}. Not `ok` when that is
+ * in the past (less than a minute from now) or nowhere new.
+ */
+export function draggedStart(start, deltaMs, now = Date.now(), snap = 15 * 60000) {
+  const t = Math.round((start + deltaMs) / snap) * snap;
+  return { t, ok: t >= now + 60000 && t !== start };
+}
+
 /** The first start after `start` (on the quarter hour) where the job runs into nothing. */
 export function placeAfter(planned, jobs, start, minutes, ignore = null, now = Date.now()) {
   const Q = 15 * 60000;

@@ -7,11 +7,12 @@
   //   drag across empty space  zoom in to that stretch
   //   scroll sideways          move through time (also Shift + wheel)
   // Backlog jobs (row.jobs) are drawn with their estimate; hover shows what
-  // they are, a click calls onjob. With `ghost` set, the pointer carries a bar
+  // they are, a click calls onjob. A job that waits for its time can be dragged
+  // along its row (or moved with the arrow keys, then Enter): onjobmove. With `ghost` set, the pointer carries a bar
   // of that length along its row and a click calls onpick with the start; the
   // parent passes the picked start back as ghost.at, which stays drawn and can
   // be dragged, or picked again with another click.
-  import { wallClock, timeOfDay, hourLabel, clockLabel, DAYS } from '$lib/schedule.js';
+  import { wallClock, timeOfDay, hourLabel, clockLabel, draggedStart, DAYS } from '$lib/schedule.js';
 
   let {
     rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, skipped, log}]
@@ -27,6 +28,7 @@
     onzoom = () => {}, // (from, to)
     onpan = () => {}, // (milliseconds, positive is later)
     onjob = null, // (project, job): a backlog job was clicked
+    onjobmove = null, // (project, job, start in ms): a job set for a time was dragged there
     ghost = null, // {project, minutes, at}: place a job of this length; `at` is the start picked so far
     onpick = () => {} // (project, start in ms)
   } = $props();
@@ -189,7 +191,61 @@
     tip = { row, job, left: Math.max(0, Math.min(e.clientX - r.left + 12, r.width - 280)), top: e.clientY - r.top + 14 };
   }
   const JOB_STATE = { set: 'set for', running: 'running since', done: 'ran', missed: 'missed, was set for' };
+
+  // ---- moving a job that is set for a time ----
+  // Only a job that still waits for its time moves; one that runs, ran or was missed stays.
+  const movable = (job) => !!onjobmove && !ghost && job.state === 'set';
+  let jobDrag = $state(null); // {project, id, start, startX, t, ok, moved, keys}
+  let dragged = false; // the click that ends a drag is not a click on the job
+  const dragOf = (row, job) => (jobDrag && jobDrag.project === row.id && jobDrag.id === job.id && (jobDrag.moved || jobDrag.keys) ? jobDrag : null);
+  function grabJob(e, row, job) {
+    e.stopPropagation();
+    if (e.button !== 0 || !movable(job)) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    jobDrag = { project: row.id, id: job.id, start: job.start, startX: e.clientX, t: job.start, ok: false, moved: false, keys: false };
+  }
+  function pullJob(e, row, job) {
+    if (!jobDrag || jobDrag.keys) return showTip(e, row, job);
+    const dx = e.clientX - jobDrag.startX;
+    if (Math.abs(dx) > 4) jobDrag.moved = true;
+    if (!jobDrag.moved) return;
+    tip = null;
+    Object.assign(jobDrag, draggedStart(jobDrag.start, (dx / track) * span, now, SNAP));
+  }
+  function dropJob(row, job) {
+    const d = jobDrag;
+    if (!d || d.keys) return;
+    jobDrag = null;
+    if (!d.moved) return; // a press without movement: the click opens the job
+    dragged = true;
+    setTimeout(() => (dragged = false), 0);
+    if (d.ok) onjobmove(row.id, job, d.t);
+  }
+  function clickJob(row, job) {
+    if (dragged) return;
+    onjob?.(row.id, job);
+  }
   function jobKey(e, row, job) {
+    const step = e.key === 'ArrowLeft' ? -SNAP : e.key === 'ArrowRight' ? SNAP : 0;
+    if (step && movable(job)) {
+      e.preventDefault();
+      const from = dragOf(row, job)?.t ?? job.start;
+      jobDrag = { project: row.id, id: job.id, start: job.start, startX: 0, moved: false, keys: true, ...draggedStart(from, step, now, SNAP) };
+      tip = null;
+      return;
+    }
+    const pending = dragOf(row, job);
+    if (e.key === 'Escape' && pending) {
+      e.preventDefault();
+      jobDrag = null;
+      return;
+    }
+    if (e.key === 'Enter' && pending?.keys) {
+      e.preventDefault();
+      jobDrag = null;
+      if (pending.ok) onjobmove(row.id, job, pending.t);
+      return;
+    }
     if ((e.key === 'Enter' || e.key === ' ') && onjob) {
       e.preventDefault();
       onjob(row.id, job);
@@ -329,20 +385,28 @@
 
           {#each row.jobs || [] as job (job.id)}
             {@const end = job.state === 'done' ? job.end : job.state === 'running' ? Math.max(now, job.start) : job.start}
-            {#if visible(job.start, Math.max(job.estEnd, end))}
+            {@const mv = dragOf(row, job)}
+            {#if visible(job.start, Math.max(job.estEnd, end)) || mv}
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <g
                 class="job {job.state}"
                 class:plan={job.kind === 'plan'}
                 class:clickable={!!onjob}
+                class:movable={movable(job)}
+                class:moving={!!mv}
+                class:bad={!!mv && !mv.ok}
+                transform="translate({mv ? x(mv.t) - x(job.start) : 0} 0)"
                 role={onjob ? 'button' : 'img'}
                 tabindex={onjob ? 0 : -1}
-                aria-label="{job.kind === 'plan' ? 'Planning cycle' : `Backlog job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}"
-                onpointerdown={(e) => e.stopPropagation()}
+                aria-label="{job.kind === 'plan' ? 'Planning cycle' : `Backlog job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}{movable(job) ? '. Arrow keys move it, Enter confirms' : ''}"
+                onpointerdown={(e) => grabJob(e, row, job)}
                 onpointerenter={(e) => showTip(e, row, job)}
-                onpointermove={(e) => showTip(e, row, job)}
+                onpointermove={(e) => pullJob(e, row, job)}
+                onpointerup={() => dropJob(row, job)}
+                onpointercancel={() => (jobDrag = null)}
                 onpointerleave={() => (tip = null)}
-                onclick={() => onjob?.(row.id, job)}
+                onblur={() => jobDrag?.keys && (jobDrag = null)}
+                onclick={() => clickJob(row, job)}
                 onkeydown={(e) => jobKey(e, row, job)}
               >
                 <rect class="est" x={x(job.start)} y={y + 6} width={Math.max(6, x(job.estEnd) - x(job.start))} height={ROW - 12} rx="4" />
@@ -352,6 +416,10 @@
                 {#if inside(job.start)}
                   <line class="start" x1={x(job.start)} x2={x(job.start)} y1={y + 3} y2={y + ROW - 3} />
                   <text class="mark" x={x(job.start) + 5} y={y + 19}>◆{job.order != null ? ` ${job.order}` : ''}</text>
+                {/if}
+                {#if mv}
+                  <!-- where it would start and end (estimate), while it is dragged -->
+                  <text class="moveto" x={x(job.start) + 4} y={y + ROW - 8}>{mv.t < now + 60000 ? 'not in the past' : `${clockText(mv.t)} to ${clockText(mv.t + job.minutes * 60000)}`}</text>
                 {/if}
               </g>
             {/if}
@@ -400,7 +468,7 @@
       <div class="small">
         est {lengthText(tip.job.estEnd - tip.job.start)}{tip.job.cost != null ? ` · $${tip.job.cost.toFixed(2)}` : ''}{tip.job.state === 'done' ? ` · took ${lengthText(tip.job.end - tip.job.start)}` : ''}
       </div>
-      {#if onjob}<div class="small dim">Click for details</div>{/if}
+      {#if onjob}<div class="small dim">Click for details{movable(tip.job) ? '. Drag to move it' : ''}</div>{/if}
     </div>
   {/if}
 </div>
@@ -505,6 +573,26 @@
   }
   .job.clickable {
     cursor: pointer;
+  }
+  .job.movable {
+    cursor: grab;
+  }
+  .job.moving {
+    cursor: grabbing;
+  }
+  .job.moving .est {
+    stroke-width: 2.2;
+    stroke-dasharray: none;
+    fill-opacity: 0.3;
+  }
+  .job.moving.bad .est {
+    stroke: var(--critical);
+  }
+  .job .moveto {
+    fill: var(--ink-strong);
+    font-size: 11px;
+    font-family: var(--mono, monospace);
+    pointer-events: none;
   }
   .job:focus-visible {
     outline: none;
