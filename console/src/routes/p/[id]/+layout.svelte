@@ -79,7 +79,11 @@
   {#if p.publish.blocked}
     <div class="note s-failed">Publish refused: {p.publish.blocked.reason} <a href="/p/{p.id}/controls#publishing">Publishing</a></div>
   {/if}
-  {#if p.status.state === 'unreachable'}
+  {#if p.status.vmMismatch || p.status.vmShared}
+    <div class="note s-failed" role="alert">
+      <b>Not this project's VM.</b> {p.status.error} Every control and pull for {p.name} is stopped. Remove or fix this project in <a href="/settings">Settings</a>.
+    </div>
+  {:else if p.status.state === 'unreachable'}
     <div class="note s-failed">VM not reachable{p.status.error ? ` (${p.status.error})` : ''}. Showing the last pulled data.</div>
   {:else if p.status.state === 'halted'}
     <div class="note dim">Halted: <span class="mono">{p.status.control}</span></div>

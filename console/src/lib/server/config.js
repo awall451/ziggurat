@@ -66,7 +66,32 @@ function normalizeProject(p) {
 
 export function listProjects() {
   const raw = readJson(path.join(CONFIG_DIR, 'projects.json'), { projects: [] });
-  return (raw.projects || []).filter((p) => ID_RE.test(p.id || '')).map(normalizeProject);
+  const list = (raw.projects || []).filter((p) => ID_RE.test(p.id || ''));
+  // Two entries that reach the same VM would each show, and act on, the
+  // other's team. Both are marked; ssh.js refuses every kit call for them.
+  return list.map((p) => {
+    const shared = list.filter((o) => o.id !== p.id && sameVm(p, o)).map((o) => o.id);
+    return normalizeProject(shared.length ? { ...p, vmShared: shared } : p);
+  });
+}
+
+/**
+ * Do two project entries reach the same VM? The same VM id on the same
+ * target, the same address (and jump host), or the same ssh alias.
+ */
+export function sameVm(a, b) {
+  if (!a || !b) return false;
+  if (a.target && a.target === b.target && Number.isInteger(a.vmid) && a.vmid === b.vmid) return true;
+  const sa = a.ssh || {};
+  const sb = b.ssh || {};
+  if (sa.host && sa.host === sb.host && (sa.jump || '') === (sb.jump || '')) return true;
+  if (sa.alias && sa.alias === sb.alias) return true;
+  return false;
+}
+
+/** The other project entry that already reaches this one's VM, or null. */
+export function vmOwner(entry) {
+  return rawProjects().find((o) => o.id !== entry.id && sameVm(entry, o)) || null;
 }
 
 export function getProject(id) {
@@ -108,6 +133,13 @@ function deleteEntry(name, id) {
 }
 
 export function saveProject(project, { replace = false } = {}) {
+  const owner = vmOwner(project);
+  if (owner) {
+    throw new Error(
+      `That VM already belongs to the project ${owner.name || owner.id} in this console (${owner.vmid ? `VM ${owner.vmid}, ` : ''}${owner.ssh?.host || owner.ssh?.alias || ''}). ` +
+        `If its VM was deleted, remove that project first.`
+    );
+  }
   saveEntry('projects', project, replace);
   return getProject(project.id);
 }

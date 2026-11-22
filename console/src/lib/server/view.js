@@ -56,7 +56,10 @@ export async function projectView(project, { wait = 3500 } = {}) {
       schedule: schedule ? { tz: schedule.tz, slots: schedule.slots.length, next: nextSlot } : null,
       haltAfter: status.haltAfter || null,
       vmNow: status.vmNow || null,
-      error: status.error || null
+      error: status.error || null,
+      // The VM is not this project's (kit PROJECT= names another one), or another entry shares it.
+      vmMismatch: status.vmMismatch || null,
+      vmShared: project.vmShared || null
     },
     summary: sum,
     // Questions from the lead that the owner has not answered yet.

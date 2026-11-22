@@ -446,6 +446,19 @@ order, through the proxy (`packages/results/<rid>`, `packages/logs/<rid>.log`). 
 requests and the end of a failed install's log. New VMs also get `python3-venv` and `python3-pip` from
 cloud-init.
 
+### One VM, one project
+
+A deleted VM's id and address can be given to the next VM. The console therefore checks, for every project,
+that its VM is its own:
+- **The VM names its project.** The status read includes `PROJECT=` from `/etc/agent-kit/project.env`. When it
+  names another project, the console shows "Not this project's VM", shows none of that VM's data as this
+  project's, and refuses every kit call and pull for it.
+- **No two entries on one VM.** Two project entries with the same VM id on the same target, the same address
+  (and jump host) or the same ssh alias are both marked and blocked the same way. Saving a new entry for a VM
+  another project has is refused, and the New project wizard refuses a VM id the console still has a project for.
+
+**Deleting a team's VM:** remove its project in the console first (Settings), then delete the VM on the host.
+
 ### Ledger kinds
 
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,

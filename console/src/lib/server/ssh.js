@@ -203,7 +203,28 @@ export function readScript(project, script, opts = {}) {
  * shell text chosen by a caller can reach the VM. `input` (or a readable
  * `inputStream`) goes to stdin.
  */
+// Projects whose VM is not theirs: another entry reaches the same VM
+// (config.js marks vmShared), or the VM says it belongs to another project
+// (live.js reads PROJECT= from its project.env). Every kit call and pull for
+// them is refused, so nothing done for one team can reach another's VM.
+const wrongVm = new Map(); // project id -> the project the VM says it belongs to
+export function setVmIdentity(id, found) {
+  if (found) wrongVm.set(id, found);
+  else wrongVm.delete(id);
+}
+export function vmRefusal(project) {
+  if (project.vmShared?.length) return `${project.name || project.id} shares its VM with ${project.vmShared.join(', ')} in this console. Remove the stale project first.`;
+  const found = wrongVm.get(project.id);
+  if (found) return `The VM of ${project.name || project.id} now belongs to the project "${found}". Nothing is sent to it. Remove or fix this project's entry.`;
+  return null;
+}
+function guard(project) {
+  const why = vmRefusal(project);
+  if (why) throw new Error(why);
+}
+
 export function kit(project, script, argv = [], opts = {}) {
+  guard(project);
   if (!SCRIPT_RE.test(script)) throw new Error(`bad kit script name: ${script}`);
   for (const a of argv) {
     if (typeof a !== 'string' || !ARG_RE.test(a)) throw new Error(`bad argument for ${script}: ${JSON.stringify(a)}`);
@@ -218,6 +239,7 @@ export function kit(project, script, argv = [], opts = {}) {
  * straight to the file `dest` (mode 600). Stops, and fails, past `maxBytes`.
  */
 export function kitToFile(project, script, argv, dest, { timeout = 600000, maxBytes = 1024 ** 3 } = {}) {
+  guard(project);
   if (!SCRIPT_RE.test(script)) throw new Error(`bad kit script name: ${script}`);
   for (const a of argv) {
     if (typeof a !== 'string' || !ARG_RE.test(a)) throw new Error(`bad argument for ${script}: ${JSON.stringify(a)}`);
@@ -277,6 +299,8 @@ export function kitToFile(project, script, argv, dest, { timeout = 600000, maxBy
  * could have swapped), 'self' for world-readable root-owned files.
  */
 export function pull(project, remotePaths, localDir, { as = 'self', filters = [], maxSize = '64m', timeout = 180000 } = {}) {
+  // Another team's data must not land in this project's folders.
+  if (vmRefusal(project)) return Promise.resolve({ code: 1, stdout: '', stderr: vmRefusal(project) });
   const { args, dest } = sshArgs(project);
   const rsh = rshCommand(args);
   const argv = ['-rt', '--no-links', '--chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r', `--max-size=${maxSize}`, '-e', rsh];
