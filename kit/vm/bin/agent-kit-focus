@@ -1,0 +1,185 @@
+#!/bin/bash
+# agent-kit-focus: focus mode (kit 0.27). One team works in cycles back to back
+# for a while; other teams may be paused meanwhile. Run with sudo (the console
+# calls it over ssh); `check` runs every minute from agent-kit-tick.
+#
+#   agent-kit-focus set (--until <unix> | --cycles N | --open) --per-day N
+#                       this team: cycles back to back, its schedule set aside,
+#                       at most N cycles a day instead of its daily cap
+#   agent-kit-focus clear [reason]       end the focus now
+#   agent-kit-focus pause (--until <unix> | --open) --for <team>
+#                       this team: no cycles from its schedule or its timer while
+#                       <team> is in focus. Jobs and one-time cycles set for a
+#                       time still run. It ends by itself at --until, and after
+#                       7 days at the most.
+#   agent-kit-focus unpause
+#   agent-kit-focus check     end a focus or pause whose time has come, one that has
+#                             run its cycles, or one whose team is blocked on the owner
+#   agent-kit-focus show      one JSON line
+#
+# $STATE/focus   "since=<unix> until=<unix|-> cycles=<N|-> perday=<N>"
+# $STATE/paused  "since=<unix> until=<unix> for=<team>"
+# $STATE/focus.ended "<unix> <reason>": the last focus and why it ended.
+# A focus ends early when the team is blocked on the owner: the lead says so
+# (owner-focus blocked "<why>", a file in $STATE/focus-out) or two cycles in a
+# row in focus changed nothing but the team's notes (lead-cycle writes
+# notes_only in the ledger).
+set -uo pipefail
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+LEAD=agent-kit-lead
+FOCUS=$STATE/focus
+PAUSED=$STATE/paused
+ENDED=$STATE/focus.ended
+OUT=$STATE/focus-out
+LEDGER=$STATE/ledger/cycles.jsonl
+LOG=$STATE/schedule.log
+LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
+MAX_PAUSE=$((7 * 86400))
+MAX_FOCUS=$((31 * 86400))
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+
+die() { echo "agent-kit-focus: $*" >&2; exit 2; }
+now=${AGENT_KIT_NOW:-$(date +%s)}
+field() { sed -n "s/.*\(^\| \)$2=\([^ ]*\).*/\2/p" "$1" 2> /dev/null | head -1; } # file key
+write() { # file text
+  printf '%s\n' "$2" > "$1.tmp" && chmod 644 "$1.tmp" && mv "$1.tmp" "$1"
+}
+log() { printf '%s focus %s %s\n' "$(date -u -d "@$now" +%FT%TZ)" "$(date -d "@$now" +%F)" "$1" >> "$LOG"; }
+# Cycles of the focus that began at that time: lead-cycle marks them focus_since.
+since_count() {
+  jq -s --argjson t "$1" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | length' "$LEDGER" 2> /dev/null || echo 0
+}
+end_focus() { # reason
+  rm -f "$FOCUS" "$OUT/blocked"
+  write "$ENDED" "$now $1"
+  log "ended: $1"
+  echo "focus ended: $1"
+}
+
+case "${1:-show}" in
+  set)
+    shift
+    until=- cycles=- perday="" open=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --until) [[ ${2:-} =~ ^[0-9]{9,11}$ ]] || die "bad time"; until=$2; shift ;;
+        --cycles) [[ ${2:-} =~ ^[0-9]{1,3}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 500 ] || die "cycles: 1 to 500"; cycles=$2; shift ;;
+        --open) open=1 ;;
+        --per-day) [[ ${2:-} =~ ^[0-9]{1,3}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 200 ] || die "cycles a day: 1 to 200"; perday=$2; shift ;;
+        *) die "usage: agent-kit-focus set (--until <unix> | --cycles N | --open) --per-day N" ;;
+      esac
+      shift
+    done
+    [ -n "$perday" ] || die "say how many cycles a day (--per-day N)"
+    ends=$open
+    [ "$until" = - ] || ends=$((ends + 1))
+    [ "$cycles" = - ] || ends=$((ends + 1))
+    [ "$ends" -eq 1 ] || die "one of --until, --cycles or --open"
+    if [ "$until" != - ]; then
+      [ "$until" -gt $((now + 60)) ] && [ "$until" -le $((now + MAX_FOCUS)) ] || die "the end must be between a minute and 31 days from now"
+    fi
+    exec 8> "$LOCK"
+    flock 8
+    grep -q '^stop' "$STATE/control" 2> /dev/null && die "the team is halted. Resume it first"
+    [ ! -e "$STATE/halt-after" ] || die "a halt after the cycle is pending. Cancel it first"
+    [ ! -e "$PAUSED" ] || die "this team is paused for another team's focus"
+    [ "$(systemctl is-enabled "$LEAD.timer" 2> /dev/null)" = enabled ] || die "the lead timer is off. Resume the team first"
+    install -d -m 755 "$STATE"
+    rm -f "$OUT/blocked"
+    # `since` names this focus in the ledger: it must be later than any earlier one's.
+    since=$now
+    prev=$(jq -s '[.[] | .focus_since // 0] | max // 0' "$LEDGER" 2> /dev/null)
+    [[ ${prev:-} =~ ^[0-9]+$ ]] && [ "$prev" -ge "$since" ] && since=$((prev + 1))
+    write "$FOCUS" "since=$since until=$until cycles=$cycles perday=$perday"
+    rm -f "$ENDED"
+    log "started: $([ "$until" != - ] && echo "until $(date -d "@$until" -Is)" || { [ "$cycles" != - ] && echo "$cycles cycles" || echo "until switched off"; }), $perday a day"
+    # The next cycle comes when the lead timer fires (within minutes).
+    systemctl start --no-block "$LEAD.timer" > /dev/null 2>&1
+    echo "focus on: cycles back to back, at most $perday a day"
+    ;;
+
+  clear)
+    reason=$(printf '%s' "${*:2}" | tr -cd 'A-Za-z0-9 .,:_@/-' | head -c 120)
+    exec 8> "$LOCK"
+    flock 8
+    [ -f "$FOCUS" ] || { echo "no focus"; exit 0; }
+    end_focus "switched off${reason:+: $reason}"
+    ;;
+
+  pause)
+    shift
+    until="" for=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --until) [[ ${2:-} =~ ^[0-9]{9,11}$ ]] || die "bad time"; until=$2; shift ;;
+        --open) until=$((now + MAX_PAUSE)) ;;
+        --for) [[ ${2:-} =~ $NAME_RE ]] || die "bad team name"; for=$2; shift ;;
+        *) die "usage: agent-kit-focus pause (--until <unix> | --open) --for <team>" ;;
+      esac
+      shift
+    done
+    [ -n "$until" ] && [ -n "$for" ] || die "usage: agent-kit-focus pause (--until <unix> | --open) --for <team>"
+    [ "$until" -gt "$now" ] || die "the end has passed"
+    [ "$until" -le $((now + MAX_PAUSE)) ] || until=$((now + MAX_PAUSE))
+    [ ! -e "$FOCUS" ] || die "this team is in focus itself"
+    exec 8> "$LOCK"
+    flock 8
+    write "$PAUSED" "since=$now until=$until for=$for"
+    log "paused for focus on $for until $(date -d "@$until" -Is)"
+    echo "paused for focus on $for"
+    ;;
+
+  unpause)
+    exec 8> "$LOCK"
+    flock 8
+    [ -f "$PAUSED" ] || { echo "not paused"; exit 0; }
+    rm -f "$PAUSED"
+    log "pause ended"
+    echo "pause ended"
+    ;;
+
+  check)
+    if [ -f "$PAUSED" ]; then
+      u=$(field "$PAUSED" until)
+      { [[ ${u:-} =~ ^[0-9]+$ ]] && [ "$now" -lt "$u" ]; } || { rm -f "$PAUSED"; log "pause ended: its time has come"; }
+    fi
+    [ -f "$FOCUS" ] || exit 0
+    since=$(field "$FOCUS" since) until=$(field "$FOCUS" until) cycles=$(field "$FOCUS" cycles)
+    [[ ${since:-} =~ ^[0-9]+$ ]] || { end_focus "its file was unreadable" > /dev/null; exit 0; }
+    if [[ ${until:-} =~ ^[0-9]+$ ]] && [ "$now" -ge "$until" ]; then end_focus "its time has come" > /dev/null; exit 0; fi
+    if [[ ${cycles:-} =~ ^[0-9]+$ ]] && [ "$(since_count "$since")" -ge "$cycles" ]; then end_focus "it ran its $cycles cycles" > /dev/null; exit 0; fi
+    if [ $((now - since)) -ge "$MAX_FOCUS" ]; then end_focus "31 days, the longest a focus lasts" > /dev/null; exit 0; fi
+    # The lead says the team can do nothing more without the owner.
+    if [ -f "$OUT/blocked" ] && [ ! -L "$OUT/blocked" ] && [ "$(stat -c %Y "$OUT/blocked")" -ge "$(stat -c %Y "$FOCUS")" ]; then
+      why=$(head -c 300 "$OUT/blocked" | tr -cd 'A-Za-z0-9 .,:;()_@/-' | head -c 200)
+      end_focus "blocked on the owner: ${why:-the lead said so}" > /dev/null
+      exit 0
+    fi
+    # Two cycles in a row in focus that changed nothing but the team's notes.
+    last=$(jq -s --argjson t "$since" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | .[-2:] | map(.notes_only == true) | if length == 2 and all then "yes" else "no" end' "$LEDGER" 2> /dev/null)
+    [ "$last" = '"yes"' ] && end_focus "blocked on the owner: two cycles in a row changed only the team's notes" > /dev/null
+    exit 0
+    ;;
+
+  show)
+    f=null p=null e=null
+    if [ -f "$FOCUS" ]; then
+      since=$(field "$FOCUS" since)
+      f=$(jq -nc --arg s "$since" --arg u "$(field "$FOCUS" until)" --arg c "$(field "$FOCUS" cycles)" --arg d "$(field "$FOCUS" perday)" --arg n "$(since_count "${since:-0}")" \
+        '{since: ($s | tonumber? // null), until: ($u | tonumber? // null), cycles: ($c | tonumber? // null), perDay: ($d | tonumber? // null), done: ($n | tonumber? // 0)}')
+    fi
+    [ -f "$PAUSED" ] && p=$(jq -nc --arg s "$(field "$PAUSED" since)" --arg u "$(field "$PAUSED" until)" --arg f "$(field "$PAUSED" for)" \
+      '{since: ($s | tonumber? // null), until: ($u | tonumber? // null), for: $f}')
+    if [ -f "$ENDED" ]; then
+      read -r at reason < "$ENDED"
+      e=$(jq -nc --arg a "$at" --arg r "${reason:-}" '{at: ($a | tonumber? // null), reason: $r}')
+    fi
+    jq -nc --argjson f "$f" --argjson p "$p" --argjson e "$e" '{focus: $f, paused: $p, ended: $e}'
+    ;;
+
+  *) die "usage: agent-kit-focus set | clear | pause | unpause | check | show" ;;
+esac

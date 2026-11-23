@@ -87,7 +87,8 @@ for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-re
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
          owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule \
-         agent-kit-backlog owner-backlog agent-kit-chat owner-gate owner-packages agent-kit-packages agent-kit-stall; do
+         agent-kit-backlog owner-backlog agent-kit-chat owner-gate owner-packages agent-kit-packages agent-kit-stall \
+         agent-kit-focus owner-focus; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 
@@ -118,6 +119,8 @@ install -d -m 755 "$STATE/packages" "$STATE/packages/.owner" "$STATE/packages/re
 # Files the console fetches for a recipe (kit 0.17): what is asked for, and the files themselves.
 install -d -m 755 "$STATE/packages/needs" "$STATE/packages/files"
 install -d -m 755 -o agent -g agent "$STATE/packages-out"
+# Focus (kit 0.27): the lead's "blocked on the owner" goes here; agent-kit-focus reads it.
+install -d -m 755 -o agent -g agent "$STATE/focus-out"
 [ -f "$STATE/control" ] || echo "stop awaiting owner go $(date -Is)" > "$STATE/control"
 chmod 644 "$STATE/control"
 

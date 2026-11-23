@@ -137,6 +137,8 @@ export async function timeline({ view = 'day', date = null, from = null, to = nu
           canSchedule: kitAtLeast(status.kitVersion, SCHEDULE_KIT),
           // Every N, first and last dates, a number of times, and one-time cycles (kit 0.26).
           canRepeat: kitAtLeast(status.kitVersion, REPEAT_KIT),
+          // Focus mode (kit 0.27): in focus, or paused for another team's.
+          focus: status.focus || null,
           cap: Number.isInteger(status.cap) ? status.cap : null,
           schedule: parseScheduleText(status.schedule),
           typicalSecs: typicalSecs(cycles),

@@ -35,6 +35,26 @@
     menu = false;
   });
   const crumb = $derived(project || /^\/(new|settings)/.test(page.url.pathname));
+
+  // Focus mode (#93): the team in focus, shown under the header on every page.
+  const focus = $derived(page.data.focusNow || null);
+  let stopping = $state(false);
+  let focusProblem = $state('');
+  const fwhen = (secs) => new Date(secs * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  async function stopFocus() {
+    stopping = true;
+    focusProblem = '';
+    try {
+      const r = await fetch('/api/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop', project: focus.id }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(out.message || 'That did not work');
+      await invalidateAll();
+    } catch (e) {
+      focusProblem = e.message;
+    } finally {
+      stopping = false;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -76,12 +96,31 @@
       </Popover>
     </span>
   </header>
+  {#if focus}
+    <div class="focusbar" role="status">
+      <span><b>Focus:</b> <a href="/p/{focus.id}/topology">{focus.name}</a> runs cycles back to back{focus.until ? ` until ${fwhen(focus.until)}` : focus.cycles ? ` · ${focus.done} of ${focus.cycles} cycles` : ' until you switch it off'} · at most {focus.perDay} a day</span>
+      {#if focusProblem}<span class="s-failed small">{focusProblem}</span>{/if}
+      <button class="btn quiet sm" onclick={stopFocus} disabled={stopping}>{stopping ? 'Stopping…' : 'Stop'}</button>
+    </div>
+  {/if}
   <main>
     {@render children()}
   </main>
 </div>
 
 <style>
+  .focusbar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding: 6px 16px;
+    font-size: 13px;
+    color: var(--cyan-soft);
+    background: rgba(var(--glow), 0.08);
+    border-bottom: 1px solid var(--line);
+  }
   .app {
     min-height: 100vh;
     display: flex;

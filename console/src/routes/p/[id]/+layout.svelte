@@ -5,6 +5,12 @@
   import Icon from '$lib/components/Icon.svelte';
   import Popover from '$lib/components/Popover.svelte';
   import RunCycle from '$lib/components/RunCycle.svelte';
+  import FocusDialog from '$lib/components/FocusDialog.svelte';
+
+  let focusOpen = $state(false);
+  const fwhen = (secs) => new Date(secs * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  // How a focus that has ended in the last day ended.
+  const focusEnded = $derived(p.status.focus?.ended && !p.status.focus?.on && p.now / 1000 - p.status.focus.ended.at < 86400 ? p.status.focus.ended : null);
 
   let { data, children } = $props();
   const p = $derived(data.project);
@@ -66,6 +72,11 @@
         {:else if p.runCycle?.can}
           <RunCycle id={p.id} name={p.name} rc={p.runCycle} quietNow={data.quietNow} small />
         {/if}
+        {#if p.status.focus?.on}
+          <span class="pill running" title="Cycles back to back">Focus</span>
+        {:else if p.canFocus && p.status.state !== 'halted' && !p.status.focus?.paused && !data.focusNow}
+          <button class="btn quiet sm" onclick={() => (focusOpen = true)} title="Cycles back to back for a while">◎ Focus…</button>
+        {/if}
       </span>
     </div>
     <div class="stat panel">
@@ -90,6 +101,16 @@
     </a>
   </div>
 
+  {#if p.status.focus?.on}
+    {@const f = p.status.focus.on}
+    <div class="note s-running">
+      In focus: cycles back to back{f.until ? ` until ${fwhen(f.until)}` : f.cycles ? `, ${f.done} of ${f.cycles} cycles done` : ' until you switch it off'}, at most {f.perDay} a day. Stop it in the bar at the top.
+    </div>
+  {:else if p.status.focus?.paused}
+    <div class="note dim">Paused while {p.status.focus.paused.for} is in focus, until {fwhen(p.status.focus.paused.until)} at the latest. Jobs and one-time cycles set for a time still run.</div>
+  {:else if focusEnded}
+    <div class="note dim">Focus ended {ago(new Date(focusEnded.at * 1000).toISOString(), p.now)}: {focusEnded.reason}.</div>
+  {/if}
   {#if p.status.stalled && p.status.state !== 'unreachable'}
     <div class="note s-stalled" role="status">{stallText(p.status.stalled, p.now)}{p.status.stalled.chat ? ' (chat turn)' : ''}. The {p.status.stalled.reason === 'usage-limit' ? 'cycle carries on by itself once the window resets' : 'cycle may still recover; you can halt it under Controls'}.</div>
   {/if}
@@ -112,8 +133,12 @@
     <div class="note dim">
       {p.status.oneshot.free ? 'A cycle you started is in progress.' : 'One-shot job in progress.'} {p.status.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'}
     </div>
-  {:else if p.status.state === 'idle' && idleText(p.status.idle, p.now)}
+  {:else if p.status.state === 'idle' && !p.status.focus?.on && idleText(p.status.idle, p.now)}
     <div class="note dim">{idleText(p.status.idle, p.now)}</div>
+  {/if}
+
+  {#if focusOpen}
+    <FocusDialog id={p.id} name={p.name} cap={p.status.cap ?? null} typical={p.runCycle?.typical} onclose={() => (focusOpen = false)} ondone={() => (focusOpen = false)} />
   {/if}
 
   <div class="tabs">
@@ -190,6 +215,9 @@
     min-height: 24px;
     white-space: nowrap;
     overflow: hidden;
+    /* the state with its buttons (Run a cycle, Focus) may need two lines */
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
   .note {
     font-size: 13px;

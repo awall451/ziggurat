@@ -6,11 +6,16 @@
   function key(e) {
     if (e.key === 'Escape') onclose();
   }
+  // Shown from inside a panel (whose backdrop blur would hold a fixed box), the dialog is moved to <body>.
+  function portal(node) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
 </script>
 
 <svelte:window onkeydown={key} />
 
-<div class="wrap" role="dialog" aria-modal="true" aria-label={title}>
+<div class="wrap" role="dialog" aria-modal="true" aria-label={title} use:portal>
   <button class="shade" onclick={onclose} aria-label="Close"></button>
   <div class="box panel lit" class:wide>
     <header>

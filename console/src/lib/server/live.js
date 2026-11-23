@@ -42,6 +42,8 @@ canhaltafter=$([ -x /opt/agent-kit/bin/agent-kit-halt-after ] && echo yes || ech
 canoneshot=$([ -x /opt/agent-kit/bin/agent-kit-oneshot ] && echo yes || echo no)
 # Whether the session in progress is stuck, and why (kit 0.24): one JSON line.
 stall=$([ -x /opt/agent-kit/bin/agent-kit-stall ] && sudo -n /opt/agent-kit/bin/agent-kit-stall 2>/dev/null | head -c 600)
+# Focus mode (kit 0.27): this team in focus, paused for another's, and how the last focus ended.
+focus=$([ -x /opt/agent-kit/bin/agent-kit-focus ] && sudo -n /opt/agent-kit/bin/agent-kit-focus show 2>/dev/null | head -c 1000)
 # Cycle slots (agent-kit-schedule, kit 0.9): empty when cycles simply follow each other.
 schedule=$(head -c 6000 /etc/agent-kit/schedule 2>/dev/null)
 # Why an idle team is idle: the daily cap (owner's caps.env wins over project.env,
@@ -75,14 +77,14 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
   --arg newest "$newest" --arg worktrees "$worktrees" --arg haltat "$haltat" \\
   --arg gatepaused "$gatepaused" --arg kitver "$kitver" --arg shots "$shots" \\
   --arg oneshot "$oneshot" --arg canoneshot "$canoneshot" --arg chat "$chat" --arg atjobs "$atjobs" --arg vmproject "$vmproject" \\
-  --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" --arg stall "$stall" \\
+  --arg haltafter "$haltafter" --arg canhaltafter "$canhaltafter" --arg stall "$stall" --arg focus "$focus" \\
   --arg cap "$cap" --arg today "$today" --arg next "$next" --arg dayend "$dayend" \\
   --arg schedule "$schedule" --arg held "$held" --arg pkgwait "$pkgwait" --arg pkgfetch "$pkgfetch" \\
   --arg host "$(hostname)" --arg now "$(date +%s)" \\
   '{control:$control, lead:$lead, timer:$timer, since:$since, head:$head, ready:$ready, remote:$remote,
     current:$current, newest:$newest, worktrees:($worktrees|tonumber? // 0), haltat:$haltat,
     gatepaused:$gatepaused, kitver:$kitver, shots:$shots, oneshot:$oneshot, canoneshot:$canoneshot, chat:$chat, atjobs:$atjobs, vmproject:$vmproject,
-    haltafter:$haltafter, canhaltafter:$canhaltafter, stall:$stall, cap:$cap, today:$today, next:$next, dayend:$dayend, schedule:$schedule,
+    haltafter:$haltafter, canhaltafter:$canhaltafter, stall:$stall, focus:$focus, cap:$cap, today:$today, next:$next, dayend:$dayend, schedule:$schedule,
     held:$held, pkgwait:$pkgwait, pkgfetch:$pkgfetch,
     host:$host, now:($now|tonumber? // 0)}'
 `;
@@ -143,6 +145,32 @@ export function stallOf(text) {
     attempt: o.reason === 'api-error' ? small(o.attempt) : null,
     minutes: o.reason === 'no-progress' ? small(o.minutes) : null,
     chat: o.kind === 'chat'
+  };
+}
+
+const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const posInt = (v) => (Number.isInteger(v) && v >= 0 && v < 1e11 ? v : null);
+
+/**
+ * Focus mode as the VM says (agent-kit-focus show, kit 0.27): {on, paused, ended}
+ * or null on an older kit. `on`: this team runs in focus; `paused`: it waits for
+ * another team's focus; `ended`: when and why its last focus ended.
+ */
+export function focusOf(text) {
+  let o;
+  try {
+    o = JSON.parse(String(text || '').trim().split('\n').at(-1));
+  } catch {
+    return null;
+  }
+  if (!o || typeof o !== 'object') return null;
+  const f = o.focus && typeof o.focus === 'object' ? o.focus : null;
+  const p = o.paused && typeof o.paused === 'object' ? o.paused : null;
+  const e = o.ended && typeof o.ended === 'object' ? o.ended : null;
+  return {
+    on: f && posInt(f.since) ? { since: f.since, until: posInt(f.until), cycles: posInt(f.cycles), perDay: posInt(f.perDay), done: posInt(f.done) ?? 0 } : null,
+    paused: p && posInt(p.until) && NAME_RE.test(p.for || '') ? { since: posInt(p.since), until: p.until, for: p.for } : null,
+    ended: e && posInt(e.at) ? { at: e.at, reason: String(e.reason || '').replace(/[^A-Za-z0-9 .,:;()_@/-]/g, '').slice(0, 200) } : null
   };
 }
 
@@ -214,6 +242,8 @@ function shape(raw) {
     canOneshot: raw.canoneshot === 'yes',
     // The cycle (or chat turn) in progress is stuck, and why (kit 0.24): shown as Stalled.
     stalled: running || chatOf(raw.chat) ? stallOf(raw.stall) : null,
+    // Focus mode (kit 0.27).
+    focus: focusOf(raw.focus),
     // A halt that waits for the cycle in progress to end (and for the gate after it).
     haltAfter,
     canHaltAfter: raw.canhaltafter === 'yes',

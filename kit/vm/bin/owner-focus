@@ -1,0 +1,43 @@
+#!/bin/bash
+# owner-focus: for the lead, while the owner has put the team in focus (kit 0.27).
+#
+#   owner-focus blocked "<why>"   the team can do nothing more without the owner:
+#                                 the focus ends after this cycle
+#   owner-focus prompt            the focus rule for the lead's prompt (nothing when no focus is on)
+#
+# Neutral wording: it must fit every team and theme.
+set -uo pipefail
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+FOCUS=$STATE/focus
+OUT=$STATE/focus-out
+
+die() { echo "owner-focus: $*" >&2; exit 2; }
+
+case "${1:-}" in
+  blocked)
+    [ -f "$FOCUS" ] || die "no focus is on: nothing to end"
+    why=$(printf '%s' "${*:2}" | tr -d '\000-\037' | head -c 300)
+    [ -n "$why" ] || die "say why, in one line: owner-focus blocked \"waiting for the owner to test the build on the device\""
+    [ -d "$OUT" ] || die "no place for the request ($OUT)"
+    printf '%s\n' "$why" > "$OUT/.blocked.tmp" && mv "$OUT/.blocked.tmp" "$OUT/blocked" || die "could not write the request"
+    echo "noted: the focus ends after this cycle. Finish and report as usual."
+    ;;
+
+  prompt)
+    [ -f "$FOCUS" ] || exit 0
+    cat << 'EOF'
+## Focus
+
+The owner has put this team in focus: cycles follow each other back to back for a while, so that the
+team gets far. Work as in any cycle. One rule more: if the team can do nothing more that is worth a
+cycle without the owner (everything left waits for the owner's answer, approval, test or decision),
+run `owner-focus blocked "<one line: what you wait for>"` and end the cycle. The focus then ends
+instead of spending the owner's usage on cycles that can only write notes. Do not say so while
+there is still real work you can do.
+EOF
+    ;;
+
+  *) die "usage: owner-focus blocked \"<why>\" | prompt" ;;
+esac

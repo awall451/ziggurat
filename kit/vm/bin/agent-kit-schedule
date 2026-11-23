@@ -259,6 +259,13 @@ case "${1:-show}" in
         [ "$mark_only" = 1 ] && continue
         if grep -qxF "$slot $day" "$SKIP" 2>/dev/null; then note "$slot" "$day" "skipped: the owner gave this time to a backlog job"; continue; fi
         if grep -q '^stop' "$STATE/control" 2>/dev/null; then note "$slot" "$day" "skipped: halted"; continue; fi
+        # Focus (kit 0.27): this team in focus runs back to back; paused for another team's focus, it waits.
+        if [ -f "$STATE/focus" ]; then note "$slot" "$day" "skipped: in focus, cycles run back to back"; continue; fi
+        if [ -f "$STATE/paused" ]; then
+          pu=$(sed -n 's/.*until=\([0-9]*\).*/\1/p' "$STATE/paused" | head -1)
+          pf=$(sed -n 's/.*for=\([A-Za-z0-9._-]*\).*/\1/p' "$STATE/paused" | head -1)
+          if [[ ${pu:-} =~ ^[0-9]+$ ]] && [ "$now" -lt "$pu" ]; then note "$slot" "$day" "skipped: paused for focus on ${pf:-another team}"; continue; fi
+        fi
         if [ -e "$STATE/oneshot" ]; then note "$slot" "$day" "skipped: a one-shot job is in progress"; continue; fi
         if [ -e "$STATE/halt-after" ]; then note "$slot" "$day" "skipped: a halt is pending"; continue; fi
         if [ "$(systemctl is-enabled "$LEAD.timer" 2>/dev/null)" != enabled ]; then note "$slot" "$day" "skipped: timer off"; continue; fi
