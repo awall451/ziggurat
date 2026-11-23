@@ -626,6 +626,7 @@ check "the ledger line keeps the job's estimate" '[ "$(tail -1 "$S/ledger/cycles
 check "the ledger line sums the tokens of all models" 'tail -1 "$S/ledger/cycles.jsonl" | jq -e ".tokens == {in:4, out:50, cr:600, cw:80, think:10}" > /dev/null'
 check "the ledger line keeps the tokens per model" 'tail -1 "$S/ledger/cycles.jsonl" | jq -e ".models[\"model-b\"] == {in:1, out:10, cr:100, cw:20, think:3, usd:0.1}" > /dev/null'
 check "a one-shot cycle runs although the daily cap is used up" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$LC" <<< "$out"'
+check "a one-shot cycle is told its number after the notice, before the team's own text" '[ "$(grep -n "^\*\*This is cycle 1\.\*\*" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "Read this first" "$FAKE_PROMPT" | head -1 | cut -d: -f1)" ] && [ "$(grep -n "^\*\*This is cycle 1\.\*\*" "$FAKE_PROMPT" | cut -d: -f1)" -lt "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" ]'
 check "its prompt starts with the notice, before the team's own text" '[ "$(head -c 16 "$FAKE_PROMPT")" = "**Read this firs" ] && [ "$(grep -n "Read this first" "$FAKE_PROMPT" | head -1 | cut -d: -f1)" -lt "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" ]'
 check "the issues section comes before the job, which stays last" '[ "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "^## Owner inbox" "$FAKE_PROMPT" | cut -d: -f1)" ] && [ "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" -lt "$(grep -n "^## One-shot job" "$FAKE_PROMPT" | cut -d: -f1)" ]'
 check "its prompt ends with the job and the rules" '[ "$(grep -n "## One-shot job" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "## Owner inbox" "$FAKE_PROMPT" | cut -d: -f1)" ] && grep -q GNEISS "$FAKE_PROMPT" && [ "$(tail -1 "$FAKE_PROMPT")" = "Then end the cycle. Do not look for more work." ]'
@@ -638,7 +639,8 @@ check "a normal cycle still stops at the daily cap" 'grep -q "daily cycle cap re
 head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
 out=$(cycle 2>&1)
 check "a stale marker does not make a normal cycle a one-shot" '[ -s "$FAKE_PROMPT" ] && ! grep -q "One-shot job\|Read this first" "$FAKE_PROMPT" && grep -q "oneshot=no" <<< "$out"'
-check "a normal cycle's prompt starts with the team's own text" '[ "$(head -c 15 "$FAKE_PROMPT")" = "TEAM-CYCLE-TEXT" ]'
+# The cycle's number (kit 0.23): counted as the owner's console counts.
+check "a normal cycle's prompt starts with its number, then the team's own text" '[ "$(head -c 20 "$FAKE_PROMPT")" = "**This is cycle 1.**" ] && [ "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" -gt 1 ]'
 check "a normal cycle's ledger line names no job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = null ]'
 check "a normal cycle has no estimate" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .est_min)" = null ]'
 check "no publishing section unless publishing is set up" '! grep -q "^## Publishing" "$FAKE_PROMPT"'
@@ -647,6 +649,16 @@ check "a normal cycle's prompt has the cost rules" 'grep -q "^## Cost rules (age
 check "no cache notice while the workspace has no agent files" '! grep -q "cacheTtl" "$FAKE_PROMPT"'
 check "a one-shot cycle is told how to do a small job, after the team text and before the job" '[ "$(grep -n "A small job" <<< "$("$BIN/agent-kit-rules" lead oneshot)" | wc -l)" = 1 ]'
 check "a planning cycle gets no cost rules" '[ -z "$("$BIN/agent-kit-rules" lead plan)" ]'
+# The number is the cycle's place among counted cycles with a session: a try
+# that hit a usage limit and a line without a session take none.
+cp "$S/ledger/cycles.jsonl" "$T/ledger.keep"
+{ jq -nc '{date:"2025-12-01", counted:true, session:"s-1"}'; jq -nc '{date:"2025-12-01", counted:false, session:"s-2"}'
+  jq -nc '{date:"2025-12-01", counted:true}'; jq -nc '{date:"2025-12-01", counted:true, session:"s-3", kind:"plan"}'; } > "$S/ledger/cycles.jsonl"
+out=$(cycle 2>&1)
+check "the number counts normal, one-shot and planning cycles, not uncounted tries" '[ "$(head -c 20 "$FAKE_PROMPT")" = "**This is cycle 3.**" ]'
+rm -f "$S/ledger/cycles.jsonl"; out=$(cycle 2>&1)
+check "a team without a ledger starts at cycle 1" '[ "$(head -c 20 "$FAKE_PROMPT")" = "**This is cycle 1.**" ]'
+mv "$T/ledger.keep" "$S/ledger/cycles.jsonl"
 RW=$T/rules-ws; mkdir -p "$RW/.claude/agents"
 printf -- '---\nname: area-lead-core\nmodel: opus\n---\nYou are a tech lead.\n' > "$RW/.claude/agents/area-lead-core.md"
 check "the lead is asked to give its tech leads the one-hour cache" 'WORKSPACE=$RW AGENT_KIT_ETC=$T/none "$BIN/agent-kit-rules" lead normal | grep -q "cacheTtl: 1h"'
@@ -1137,6 +1149,7 @@ check "it is the current plan" '[ "$(cat "$S/backlog/current")" = "$PL" ]'
 check "marker and control name the plan" '[ "$(cut -d" " -f1 "$S/oneshot")" = "$PL" ] && grep -q "^run oneshot $PL " "$S/control"'
 out=$(cycle 2>&1)
 check "the planning cycle runs" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$PL" <<< "$out"'
+check "a planning cycle is told its number too" 'grep -q "^\*\*This is cycle [0-9]*\.\*\*" "$FAKE_PROMPT"'
 check "its prompt starts with the planning notice" '[ "$(head -c 50 "$FAKE_PROMPT")" = "**Read this first: this cycle is a planning cycle." ]'
 check "its prompt holds the focus and the rules, not the one-shot rules" 'grep -q FELDSPAR "$FAKE_PROMPT" && grep -q "^## Planning cycle: this cycle only" "$FAKE_PROMPT" && ! grep -q "^## One-shot job" "$FAKE_PROMPT"'
 check "it runs with the planning tools and budget" 'grep -qx -- --tools "$FAKE_ARGS" && grep -qx "Read,Grep,Glob,Bash" "$FAKE_ARGS" && [ "$(grep -A1 -x -- --max-budget-usd "$FAKE_ARGS" | tail -1)" = 2 ]'
