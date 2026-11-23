@@ -607,7 +607,7 @@ echo "TEAM-CYCLE-TEXT: step 1, resume or remove leftover worktrees." > "$K/lead-
 cat > "$FB/claude" <<'EOF'
 #!/bin/bash
 while [ $# -gt 0 ]; do [ "$1" = -p ] && { printf '%s' "$2" > "$FAKE_PROMPT"; break; }; shift; done
-echo '{"total_cost_usd":0.5,"num_turns":9,"result":"cycle summary","is_error":false}'
+echo '{"total_cost_usd":0.5,"num_turns":9,"result":"cycle summary","is_error":false,"modelUsage":{"model-a":{"inputTokens":3,"outputTokens":40,"cacheReadInputTokens":500,"cacheCreationInputTokens":60,"thinkingTokens":7,"costUSD":0.4},"model-b":{"inputTokens":1,"outputTokens":10,"cacheReadInputTokens":100,"cacheCreationInputTokens":20,"thinkingTokens":3,"costUSD":0.1}}}'
 EOF
 chmod 755 "$FB/claude"
 export FAKE_PROMPT=$T/prompt.txt
@@ -619,7 +619,11 @@ tar -c -C "$T/work/lc" . | shot start $LC owner > /dev/null
 # The daily cap is used up: six counted cycles today.
 mkdir -p "$S/ledger"
 for i in 1 2 3 4 5 6; do jq -nc --arg d "$(date +%F)" '{date:$d, counted:true}'; done > "$S/ledger/cycles.jsonl"
+echo "minutes=25" >> "$S/oneshot.meta"
 out=$(cycle 2>&1)
+check "the ledger line keeps the job's estimate" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .est_min)" = 25 ]'
+check "the ledger line sums the tokens of all models" 'tail -1 "$S/ledger/cycles.jsonl" | jq -e ".tokens == {in:4, out:50, cr:600, cw:80, think:10}" > /dev/null'
+check "the ledger line keeps the tokens per model" 'tail -1 "$S/ledger/cycles.jsonl" | jq -e ".models[\"model-b\"] == {in:1, out:10, cr:100, cw:20, think:3, usd:0.1}" > /dev/null'
 check "a one-shot cycle runs although the daily cap is used up" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=$LC" <<< "$out"'
 check "its prompt starts with the notice, before the team's own text" '[ "$(head -c 16 "$FAKE_PROMPT")" = "**Read this firs" ] && [ "$(grep -n "Read this first" "$FAKE_PROMPT" | head -1 | cut -d: -f1)" -lt "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" ]'
 check "the issues section comes before the job, which stays last" '[ "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "^## Owner inbox" "$FAKE_PROMPT" | cut -d: -f1)" ] && [ "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" -lt "$(grep -n "^## One-shot job" "$FAKE_PROMPT" | cut -d: -f1)" ]'
@@ -635,6 +639,7 @@ out=$(cycle 2>&1)
 check "a stale marker does not make a normal cycle a one-shot" '[ -s "$FAKE_PROMPT" ] && ! grep -q "One-shot job\|Read this first" "$FAKE_PROMPT" && grep -q "oneshot=no" <<< "$out"'
 check "a normal cycle's prompt starts with the team's own text" '[ "$(head -c 15 "$FAKE_PROMPT")" = "TEAM-CYCLE-TEXT" ]'
 check "a normal cycle's ledger line names no job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = null ]'
+check "a normal cycle has no estimate" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .est_min)" = null ]'
 check "no publishing section unless publishing is set up" '! grep -q "^## Publishing" "$FAKE_PROMPT"'
 "$BIN/agent-kit-publish" enable git@example.org:team/demo.git > /dev/null
 head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
@@ -1356,6 +1361,12 @@ check "the planning rules name the cap" 'grep -q "At most 2 proposals" <<< "$(ob
 echo "Why: a. Steps: 1." | prop > /dev/null; echo "Why: b. Steps: 1." | prop > /dev/null
 refuse "a proposal over the owner's cap" sh -c "echo 'Why: c.' | $BIN/owner-backlog propose --title C --minutes 30 --cost 1 --confidence low"
 check "without a cap the usual range" 'grep -q "Three to eight proposals" <<< "$(ob plan $PL)"'
+# How the estimates held up: only with three or more finished jobs that had one.
+cp "$S/ledger/cycles.jsonl" "$T/cycles.keep"
+for r in 600:10 1800:10 1200:10 9000:10; do jq -nc --argjson s "${r%%:*}" --argjson e "${r##*:}" '{start:"2026-01-01T00:00:00+00:00", kind:"oneshot", secs:$s, est_min:$e, halted:($s == 9000)}'; done >> "$S/ledger/cycles.jsonl"
+check "the lead is told how its estimates held up" 'grep -q "The last 3 jobs with an estimate ran 2 times their estimate" <<< "$(ob plan $PL)"'
+cp "$T/cycles.keep" "$S/ledger/cycles.jsonl"
+check "nothing is said about estimates without enough jobs" '! grep -q "times their estimate" <<< "$(ob plan $PL)"'
 printf 'Max-proposals: 9\nNine is too many.\n' | akb plan 20260104T110000Z-p-nine owner > /dev/null
 check "a cap out of range stays in the focus text and caps nothing" '! grep -q "^Max-proposals" <<< "$(sed -n "1,/^---$/p" "$S/backlog/plans/20260104T110000Z-p-nine/request.md")"'
 printf 'Max-proposals: 3' | akb plan 20260104T120000Z-p-only owner > /dev/null

@@ -126,6 +126,13 @@ async function slowPass(project) {
     const { syncBacklog, kitHasBacklog } = await import('./backlog.js');
     if (kitHasBacklog(status.kitVersion)) await syncBacklog(project, { force: true });
   }
+  // The history of runs (Usage, "Over time"): a line for each run that just finished.
+  try {
+    const [{ recordMetrics }, { itemForJob }] = await Promise.all([import('./metrics.js'), import('./backlog.js')]);
+    recordMetrics(project, { itemForJob });
+  } catch (e) {
+    errors.push(`metrics: ${e?.message || e}`);
+  }
   // The lead's request to publish main (projects with a remote).
   if (project.publish?.remote) await syncRequest(project).catch(() => {});
   s.error = errors.length ? errors.join('; ') : null;

@@ -534,5 +534,18 @@ that its VM is its own:
 From kit 0.10 every ledger line has `kind`: `normal`, `oneshot`, `plan` or `chat`, and `plan` (the plan id,
 or null). Planning and chat lines also carry `touched_code`.
 
+From kit 0.19 a cycle's line also has `tokens` (input, output, cache read, cache write and thinking of the
+whole run, sub-agents included), `models` (the same per model, with Claude Code's own cost figure) and
+`est_min` (the estimate of a job that had one, else null).
+
+### History of runs
+
+The console keeps one line per finished run in `<data>/metrics/<project>.jsonl`, written after a pull once
+the run's ledger line has arrived: kind, minutes, outcome, the estimate against what it took, tokens and
+cost by class and role, the model of each area lead, context written to the cache again after a wait,
+goals done again on the larger model, and the gate's verdicts during the run. It stays when transcripts
+are cleaned up. The Usage tab shows it per week under "Over time"; `/p/<id>/usage/metrics.json` gives the
+same as data. A planning cycle's prompt tells the lead how its last jobs ran against their estimates.
+
 A team unit counts as a token spender when it is listed in `/etc/agent-kit/token-units`, or when what it
 executes mentions `claude`; `/etc/agent-kit/keep-units` overrides both.
