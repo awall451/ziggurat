@@ -111,6 +111,10 @@ fi
 if [ -x "$KIT/bin/owner-packages" ]; then
   pkgs=$("$KIT/bin/owner-packages" prompt 2>/dev/null) && [ -n "$pkgs" ] && prompt+=$'\n\n'"$pkgs"
 fi
+# The kit's cost rules (kit 0.20): nothing for a planning cycle.
+if [ -x "$KIT/bin/agent-kit-rules" ]; then
+  rules=$("$KIT/bin/agent-kit-rules" lead "$kind" 2>/dev/null) && [ -n "$rules" ] && prompt+=$'\n\n'"$rules"
+fi
 budget=$CYCLE_BUDGET_USD
 tools=()
 if [ -n "$plan" ]; then

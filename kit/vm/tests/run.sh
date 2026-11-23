@@ -61,6 +61,7 @@ sub=$(hook LEAD '"agent1"')
 check "agent gets the urgent nudge" 'grep -q "urgent message ($U)" <<< "$sub" && grep -q "agent-kit owner notice" <<< "$sub"'
 start=$(ZIGGURAT_LEAD_SESSION=LEAD "$BIN/owner-inbox-hook" subagent-start <<< '{"session_id":"LEAD","agent_id":"agent1"}')
 check "agents are told at start that the notice is genuine" 'jq -e ".hookSpecificOutput.hookEventName == \"SubagentStart\"" <<< "$start" > /dev/null && grep -q "agent-kit owner notice" <<< "$start"'
+check "an agent gets the kit's cost rules at its start, before the notice rule" 'jq -r .hookSpecificOutput.additionalContext <<< "$start" | head -1 | grep -q "Team rules from the agent kit, on cost" && grep -q "only the tests that cover what you touched" <<< "$start" && grep -q "agent-kit owner notice" <<< "$start"'
 check "no start notice outside the lead session" '[ -z "$(ZIGGURAT_LEAD_SESSION=LEAD "$BIN/owner-inbox-hook" subagent-start <<< "{\"session_id\":\"OTHER\"}")" ]'
 check "nudge never carries the message text" '! grep -q QUARTZ <<< "$sub"'
 check "nudge does not mention the priority message" '! grep -q "$P" <<< "$sub"'
@@ -641,6 +642,18 @@ check "a normal cycle's prompt starts with the team's own text" '[ "$(head -c 15
 check "a normal cycle's ledger line names no job" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = null ]'
 check "a normal cycle has no estimate" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .est_min)" = null ]'
 check "no publishing section unless publishing is set up" '! grep -q "^## Publishing" "$FAKE_PROMPT"'
+# The kit's cost rules (kit 0.20).
+check "a normal cycle's prompt has the cost rules" 'grep -q "^## Cost rules (agent kit)" "$FAKE_PROMPT" && grep -q "Redo on Opus:" "$FAKE_PROMPT" && ! grep -q "A small job" "$FAKE_PROMPT"'
+check "no cache notice while the workspace has no agent files" '! grep -q "cacheTtl" "$FAKE_PROMPT"'
+check "a one-shot cycle is told how to do a small job, after the team text and before the job" '[ "$(grep -n "A small job" <<< "$("$BIN/agent-kit-rules" lead oneshot)" | wc -l)" = 1 ]'
+check "a planning cycle gets no cost rules" '[ -z "$("$BIN/agent-kit-rules" lead plan)" ]'
+RW=$T/rules-ws; mkdir -p "$RW/.claude/agents"
+printf -- '---\nname: area-lead-core\nmodel: opus\n---\nYou are a tech lead.\n' > "$RW/.claude/agents/area-lead-core.md"
+check "the lead is asked to give its tech leads the one-hour cache" 'WORKSPACE=$RW AGENT_KIT_ETC=$T/none "$BIN/agent-kit-rules" lead normal | grep -q "cacheTtl: 1h"'
+check "not in a one-shot cycle" '! WORKSPACE=$RW AGENT_KIT_ETC=$T/none "$BIN/agent-kit-rules" lead oneshot | grep -q "cacheTtl"'
+printf -- '---\nname: area-lead-core\nmodel: opus\nexperimental:\n  cacheTtl: 1h\n---\nYou are a tech lead.\n' > "$RW/.claude/agents/area-lead-core.md"
+check "and no longer once the lines are there" '! WORKSPACE=$RW AGENT_KIT_ETC=$T/none "$BIN/agent-kit-rules" lead normal | grep -q "cacheTtl"'
+refuse "rules for an unknown reader" "$BIN/agent-kit-rules" everyone
 "$BIN/agent-kit-publish" enable git@example.org:team/demo.git > /dev/null
 head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
 out=$(cycle 2>&1)
