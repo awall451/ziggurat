@@ -16,7 +16,7 @@ export function load({ params }) {
     number: c.number,
     start: c.start,
     live: c.live,
-    builds: c.builds.map((b) => ({ folder: b.sha, sha: b.sha, topic: b.topic, at: b.at, files: b.files }))
+    builds: c.builds.map((b) => ({ folder: b.sha, sha: b.sha, topic: b.topic, at: b.at, files: b.files, fresh: b.fresh, removed: b.removed }))
   }));
   const days = gallery(project).map((d) => ({ key: `day:${d.date}`, kind: 'day', date: d.date, builds: [{ folder: d.date, sha: null, topic: null, at: null, files: d.files }] }));
   return { sets: [...cycles, ...days], issues: screenIndex(project) };

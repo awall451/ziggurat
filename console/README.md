@@ -15,7 +15,7 @@ VMs **only as the caller**, over ssh and rsync. Nothing on a VM can reach the co
 | Progress | Cycles, cost estimates, tests on main over time, gate verdicts |
 | Inbox | Messages to the lead in three tiers, with attachments; the lead's replies; questions the lead asks you; one-shot jobs, which can be started again from here |
 | Notes | The lead's plan (`STATE.md`), journal, QA issues, other docs on main |
-| Gallery | Screenshots the gate took of every merged build, grouped by the cycle that made them (kit 0.13; older kits: the newest passing build, by day). Pick a cycle, a build within it, and another cycle to compare with |
+| Gallery | Screenshots the gate took of every merged build, grouped by the cycle that made them (kit 0.13; older kits: the newest passing build, by day). A cycle shows only what it made or changed, by file hash against the newest build before it; "Show all" gives the full set. Pick a cycle, a build within it, and another cycle to compare with |
 | Briefs | A brief for every finished cycle and its spoken version (written by `workstation/agent-brief`); a cycle without one yet shows the lead's own final report |
 | Usage | Tokens and cost estimates by model, role and cycle, computed from the transcripts |
 | Schedule (all projects) | One timeline for every team: cycles that ran, the one running, and the start times still to come, by day, week or month. Move and zoom through time, drag a start time to another time, add or remove them, mark your own quiet hours; overlaps between teams are pointed out |

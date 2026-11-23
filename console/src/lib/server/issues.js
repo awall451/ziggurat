@@ -14,6 +14,9 @@ import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
 import { parseHeaderFile } from './headerfile.js';
 import { peekStatus, kitAtLeast } from './live.js';
+import { screenKey } from './aggregate.js';
+
+export { screenKey };
 
 // The kinds the owner raises. `planned` (kit 0.11) is made by the console when
 // the owner approves a backlog proposal: see createPlanned.
@@ -120,16 +123,6 @@ function cleanRelated(project, list, self = null) {
   return out;
 }
 
-/** A gallery file name -> the screen it shows ("03-level-up.png" -> "level-up"). */
-export function screenKey(file) {
-  return String(file || '')
-    .replace(/\.png$/i, '')
-    .replace(/^\d+-/, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80);
-}
 
 function stamp(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');

@@ -10,6 +10,7 @@
   let buildIdx = $state(0);
   let other = $state('');
   let big = $state(null);
+  let showAll = $state(false);
 
   const cycles = $derived(data.sets.filter((x) => x.kind !== 'day'));
   const days = $derived(data.sets.filter((x) => x.kind === 'day'));
@@ -17,6 +18,10 @@
   const current = $derived(set ? set.builds[Math.min(buildIdx, set.builds.length - 1)] : null);
   const compareSet = $derived(data.sets.find((x) => x.key === other) || null);
   const compare = $derived(compareSet ? compareSet.builds[0] : null);
+  // A cycle shows what it made or changed; the older day folders have no such record.
+  const why = $derived(new Map((current?.fresh || []).map((x) => [x.file, x.why])));
+  const partial = $derived(!!current?.fresh && current.fresh.length < current.files.length);
+  const shown = $derived(!current ? [] : partial && !showAll ? current.files.filter((f) => why.has(f)) : current.files);
   const src = (folder, file) => `/p/${p.id}/media/shots/${folder}/${encodeURIComponent(file)}`;
   const title = (file) => file.replace(/\.png$/, '').replace(/^\d+-/, '').replace(/[-_]/g, ' ');
 
@@ -37,6 +42,7 @@
   function pickSet(key) {
     setKey = key;
     buildIdx = 0;
+    showAll = false;
     if (other === key) other = '';
   }
 
@@ -121,16 +127,30 @@
     </label>
     <span class="dim small">
       {#if current.sha}
-        {current.files.length} screenshots of {current.topic || 'a build'} ({current.sha.slice(0, 7)}), merged {at(current.at)}
+        {#if current.fresh}{current.fresh.length} new or changed of {/if}{current.files.length} screenshots of {current.topic || 'a build'} ({current.sha.slice(0, 7)}), merged {at(current.at)}{#if current.removed}
+          · {current.removed} removed{/if}
       {:else}
         {current.files.length} screenshots from the newest passing build on {current.folder}
       {/if}
     </span>
+    {#if partial}
+      <button class="btn quiet" onclick={() => (showAll = !showAll)} aria-pressed={showAll}>{showAll ? 'Show only new and changed' : `Show all ${current.files.length}`}</button>
+    {/if}
     {#if flash}<span class="small s-done">{flash} <a href="/p/{p.id}/issues">Open Issues</a></span>{/if}
   </div>
 
+  {#if !shown.length}
+    <div class="panel empty">
+      <h2>Nothing new in this cycle</h2>
+      <p class="dim">
+        All {current.files.length} screenshots are the same as in the build before.
+        <button class="link" onclick={() => (showAll = true)}>Show all</button>
+      </p>
+    </div>
+  {/if}
+
   <div class="shots">
-    {#each current.files as f (f)}
+    {#each shown as f (f)}
       <figure class="panel">
         <div class="pair" class:two={compare}>
           {#if compare}
@@ -158,6 +178,7 @@
             {/if}
           </span>
           <span class="name">{title(f)}</span>
+          {#if partial && why.has(f)}<span class="why {why.get(f)}">{why.get(f)}</span>{/if}
           {#if dot(f)}<span class="dot {dot(f).cls}" title={dot(f).text} aria-label={dot(f).text}></span>{/if}
         </figcaption>
       </figure>
@@ -244,6 +265,25 @@
   }
   .name {
     text-transform: capitalize;
+  }
+  .why {
+    padding: 1px 7px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--ink);
+  }
+  .why.changed {
+    border-color: var(--warn);
+  }
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
   }
   .opts {
     position: relative;

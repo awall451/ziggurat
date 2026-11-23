@@ -163,14 +163,15 @@ describe('galleryCycles (kit 0.13)', () => {
     const fleet = fs.mkdtempSync(path.join(os.tmpdir(), 'gallery-cycles-'));
     project = { paths: { fleet } };
     const shots = path.join(fleet, 'shots');
+    // A name alone has the content 'png'; [name, content] gives it other bytes.
     const build = (s, files) => {
       fs.mkdirSync(path.join(shots, s), { recursive: true });
-      for (const f of files) fs.writeFileSync(path.join(shots, s, f), 'png');
+      for (const f of files) fs.writeFileSync(path.join(shots, s, ...[f].flat().slice(0, 1)), [f].flat()[1] || 'png');
     };
     build(sha('a'), ['01-title.png']); // gate proof, before any cycle
     build(sha('b'), ['01-title.png', '02-room.png']); // during cycle 1
-    build(sha('c'), ['01-title.png']); // after cycle 1 ended, before cycle 2: still cycle 1
-    build(sha('d'), ['01-title.png', 'bad name.png']); // during cycle 2 (a plan)
+    build(sha('c'), [['01-title.png', 'title v2']]); // after cycle 1 ended, before cycle 2: still cycle 1
+    build(sha('d'), [['02-title.png', 'title v2'], 'bad name.png']); // during cycle 2 (a plan): renumbered, same bytes
     build(sha('e'), []); // no files: left out
     build(sha('f'), ['03-new.png']); // during the live cycle
     fs.writeFileSync(
@@ -210,7 +211,7 @@ describe('galleryCycles (kit 0.13)', () => {
     ]);
     expect(out[2].builds.map((b) => b.topic)).toEqual(['title-fix', 'room-art']);
     expect(out[2].builds[1].files).toEqual(['01-title.png', '02-room.png']);
-    expect(out[1].builds[0].files).toEqual(['01-title.png']);
+    expect(out[1].builds[0].files).toEqual(['02-title.png']);
     expect(out[3].builds[0].sha).toBe(sha('a'));
   });
 
@@ -219,6 +220,26 @@ describe('galleryCycles (kit 0.13)', () => {
     const out = galleryCycles(project);
     expect(out.map((c) => c.key)).toEqual([S2, S1, 'setup']);
     expect(out[0].builds.map((b) => b.topic)).toEqual(['new-screen', 'plan-notes']);
+  });
+
+  it('marks what a cycle made or changed against the newest build before it', async () => {
+    const { galleryCycles } = await import('../src/lib/server/aggregate.js');
+    const [live, plan, one, setup] = galleryCycles(project, { session: S3, start: '2026-01-01T14:00:00+00:00' });
+    // Setup has nothing before it: all new.
+    expect(setup.builds[0].fresh).toEqual([{ file: '01-title.png', why: 'new' }]);
+    expect(setup.builds[0].removed).toBe(0);
+    // Both builds of cycle 1 are compared with the setup build, not with each other.
+    const [fix, room] = one.builds;
+    expect(room.fresh).toEqual([{ file: '02-room.png', why: 'new' }]);
+    expect(fix.fresh).toEqual([{ file: '01-title.png', why: 'changed' }]);
+    expect([room.removed, fix.removed]).toEqual([0, 0]);
+    // The same bytes under a new number are the same screen: nothing new.
+    expect(plan.builds[0].fresh).toEqual([]);
+    expect(plan.builds[0].removed).toBe(0);
+    // A new screen, and the title screen is gone.
+    expect(live.builds[0].fresh).toEqual([{ file: '03-new.png', why: 'new' }]);
+    expect(live.builds[0].removed).toBe(1);
+    expect(live.builds[0]).not.toHaveProperty('hashes');
   });
 
   it('serves a build screenshot through the shots root and still lists days separately', () => {
