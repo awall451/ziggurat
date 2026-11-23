@@ -2,7 +2,7 @@ import { error } from '@sveltejs/kit';
 import { getProject } from '$lib/server/config.js';
 import { threads, syncOutbox } from '$lib/server/feedback.js';
 import { peekStatus } from '$lib/server/live.js';
-import { notes } from '$lib/server/aggregate.js';
+import { escalationList } from '$lib/server/escalations.js';
 import { list as backlog } from '$lib/server/backlog.js';
 import { heldChanges, kitHasGateHold } from '$lib/server/gatehold.js';
 import { requests as packageRequests, extraDomains, kitHasPackages } from '$lib/server/packages.js';
@@ -37,5 +37,5 @@ export async function load({ params, parent }) {
   // Publishing the console could not get to work by itself (a key without write access, a new host).
   const pub = publishView(project);
   const publishing = pub.auto?.waiting ? { remote: pub.remote, error: pub.auto.error, need: pub.auto.need, lastAt: pub.auto.lastAt } : null;
-  return { ...threads(project), escalations: notes(project).escalations, backlogChat, gateHeld, packages, publishing };
+  return { ...threads(project), escalations: escalationList(project), backlogChat, gateHeld, packages, publishing };
 }
