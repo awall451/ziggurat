@@ -7,17 +7,27 @@
   import { invalidateAll } from '$app/navigation';
   import { onMount } from 'svelte';
   import { ago, usd } from '$lib/format.js';
-  import { md } from '$lib/md.js';
   import { instantOf, wallClock, clockLabel, zoneLabel } from '$lib/schedule.js';
   import Popover from '$lib/components/Popover.svelte';
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import PlaceModal from '$lib/components/PlaceModal.svelte';
+  import PlanChat from '$lib/components/PlanChat.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
   const base = $derived(`/p/${p.id}`);
   const plans = $derived(data.backlog.plans);
   const newest = $derived(plans.find((x) => x.newest) || null);
+  const earlier = $derived(plans.filter((x) => !x.newest));
+  // The chat is only for talking a finished plan over.
+  const chatPlan = $derived(newest?.done ? newest : null);
+  const chatClosed = $derived(
+    newest?.running
+      ? 'The lead is planning… The chat opens when the proposals are in.'
+      : newest?.scheduledFor && !newest.done && !newest.cancelled
+        ? `A planning cycle is set for ${whenText(newest.scheduledFor)}. The chat opens when its proposals are in.`
+        : 'This chat is for talking a plan over with the lead. Start a planning cycle first: the chat opens when its proposals are in.'
+  );
   const lead = 'the lead';
 
   let busy = $state('');
@@ -34,7 +44,23 @@
   // Per item: the owner switched the time limit off for its job (kit 0.18).
   let noLimit = $state({});
   let openPlan = $state(null);
-  let chatBox = $state(null);
+  let chat = $state(null); // the chat box (PlanChat)
+  let chatCol = $state(null);
+
+  // Wide window: the chat box ends at the bottom of the window, wherever it
+  // starts (under the project's header at first, under the top bar once the
+  // page has scrolled). Narrow: the height comes from the stylesheet.
+  function fitChat() {
+    if (!chatCol) return;
+    const wide = window.matchMedia('(min-width: 1000px)').matches;
+    chatCol.style.height = wide ? `${Math.max(280, window.innerHeight - chatCol.getBoundingClientRect().top - 24)}px` : '';
+  }
+  $effect(() => {
+    chatCol;
+    flash;
+    plans;
+    fitChat();
+  });
 
   const STATE_WORD = { new: 'New', approved: 'Approved', rejected: 'Rejected', revised: 'Revised: decide again' };
   // A chat turn does not block a cycle or a job (kit 0.10.1); a cycle does.
@@ -140,7 +166,7 @@
 
   function edit(prop) {
     chatText = `About "${prop.title}" (${prop.pid}): `;
-    chatBox?.focus();
+    chat?.focus();
   }
 
   function sendChat() {
@@ -156,6 +182,7 @@
 </script>
 
 <svelte:head><title>Backlog · {p.name}</title></svelte:head>
+<svelte:window onscroll={fitChat} onresize={fitChat} />
 
 {#if !data.ready}
   <section class="panel block">
@@ -169,6 +196,8 @@
 {:else}
   {#if flash}<div class="flash small" class:bad={!flash.ok}>{flash.text}</div>{/if}
 
+  <div class="cols">
+  <div class="top">
   <section class="panel block ask">
     <h2>Find what to do next</h2>
     <p class="small dim">
@@ -215,7 +244,32 @@
     <p class="dim">No planning cycles yet.</p>
   {/if}
 
-  {#each plans as plan (plan.id)}
+  {#if newest}{@render planPanel(newest)}{/if}
+  </div>
+
+  <div class="chatcol" class:empty={!chatPlan} bind:this={chatCol}>
+    <PlanChat
+      bind:this={chat}
+      bind:text={chatText}
+      plan={chatPlan}
+      closed={chatClosed}
+      {lead}
+      now={p.now}
+      {busy}
+      chatBusy={!!data.busy?.chat}
+      jobRunning={!!data.busy?.oneshot && !data.busy.oneshot.plan}
+      onsend={sendChat}
+      onresend={(text) => post({ action: 'chat', plan: newest.id, text }, 'chat')}
+      onend={() => post({ action: 'chat-end', plan: newest.id }, 'end')}
+    />
+  </div>
+
+  <div class="rest">
+    {#each earlier as plan (plan.id)}{@render planPanel(plan)}{/each}
+  </div>
+  </div>
+
+  {#snippet planPanel(plan)}
     {@const t = totals(plan.proposals)}
     <section class="panel block plan" class:old={!plan.newest}>
       <header class="row">
@@ -296,50 +350,9 @@
           {/each}
         </div>
 
-        {#if plan.newest && plan.done}
-          <div class="chat">
-            <h3>Talk it over with {lead}</h3>
-            {#each plan.chat as c (c.id)}
-              <div class="msg me small"><span class="dim">{c.by}, {ago(c.at, p.now)}</span><div class="pre">{c.text}</div></div>
-              {#if c.reply}
-                <div class="msg lead small" class:bad={c.reply.status === 'error'}>
-                  <span class="dim">{lead}{#if c.cost != null}, {usd(c.cost)}{/if}</span>
-                  {#if c.reply.text}
-                    <div class="md">{@html md(c.reply.text)}</div>
-                  {:else}
-                    <div class="dim">No answer came back.</div>
-                  {/if}
-                  {#if c.reply.status === 'error' && plan.newest && !plan.ended}
-                    <div class="actions end">
-                      <button class="btn sm" disabled={!!busy || !!data.busy?.chat || plan.running} onclick={() => post({ action: 'chat', plan: plan.id, text: c.text }, 'chat')}>Send again</button>
-                    </div>
-                  {/if}
-                </div>
-              {:else if c.delivered}
-                <div class="msg lead small dim">{lead} is answering…</div>
-              {:else}
-                <div class="msg small s-failed">Not sent{c.error ? `: ${c.error}` : ''}</div>
-              {/if}
-            {/each}
-            {#if plan.ended}
-              <p class="small dim">This chat is ended. Start a new planning cycle to plan again.</p>
-            {:else}
-              <textarea class="field" rows="3" bind:this={chatBox} bind:value={chatText} placeholder="Ask about a proposal, or ask {lead} to change, split or drop one"></textarea>
-              <p class="small dim">
-                Each message resumes the planning session for one answer (counts as usage, not as a cycle).
-                {#if data.busy?.oneshot && !data.busy.oneshot.plan}The chat stays open while a job runs; {lead} is told what is running.{/if}
-              </p>
-              <div class="actions">
-                <button class="btn quiet" disabled={!!busy} onclick={() => post({ action: 'chat-end', plan: plan.id }, 'end')}>End chat</button>
-                <span class="spacer"></span>
-                <button class="btn primary" disabled={!!busy || !!data.busy?.chat || plan.running || !chatText.trim()} onclick={sendChat}>Send</button>
-              </div>
-            {/if}
-          </div>
-        {/if}
       {/if}
     </section>
-  {/each}
+  {/snippet}
 {/if}
 
 {#if placing}
@@ -364,9 +377,45 @@
     flex-direction: column;
     gap: 10px;
   }
-  .ask textarea,
-  .chat textarea {
-    margin: 0;
+  .cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .top,
+  .rest {
+    min-width: 0;
+  }
+  /* Narrow: the chat sits under the latest plan, with a fixed height. */
+  .chatcol {
+    height: min(70vh, 560px);
+    margin-bottom: 14px;
+  }
+  .chatcol.empty {
+    height: auto;
+  }
+  @media (min-width: 1000px) {
+    .cols {
+      grid-template-columns: minmax(0, 1fr) 400px;
+      grid-template-rows: auto 1fr;
+      grid-template-areas: 'top chat' 'rest chat';
+      column-gap: 16px;
+      align-items: start;
+    }
+    .top {
+      grid-area: top;
+    }
+    .rest {
+      grid-area: rest;
+    }
+    /* As high as the window, and it stays in view while the plans scroll. */
+    .chatcol,
+    .chatcol.empty {
+      grid-area: chat;
+      position: sticky;
+      top: 72px;
+      height: calc(100vh - 96px);
+      margin-bottom: 0;
+    }
   }
   .row {
     display: flex;
@@ -377,12 +426,10 @@
   .grow {
     flex: 1;
   }
-  h2,
-  h3 {
+  h2 {
     margin: 0;
   }
-  .ask textarea,
-  .chat textarea {
+  .ask textarea {
     width: 100%;
     margin: 8px 0;
     box-sizing: border-box;
@@ -404,23 +451,5 @@
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 10px;
     margin-top: 10px;
-  }
-  .chat {
-    margin-top: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .msg {
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 6px 10px;
-    max-width: 80ch;
-  }
-  .msg.me {
-    align-self: flex-end;
-  }
-  .msg.bad {
-    border-color: var(--bad, #c55);
   }
 </style>
