@@ -1461,6 +1461,60 @@ check "the end of the job clears its waiting time" '[ ! -e "$S/oneshot.stall" ]'
 rm -f "$S/ledger/current" "$PD/$SID.jsonl"; [ -f "$S/chat.keep" ] && mv "$S/chat.keep" "$S/chat"
 echo "stop owner halt 2026-01-05T05:00:00+00:00" > "$S/control"
 
+echo "== a normal cycle started by the owner, no job (kit 0.25)"
+cp "$S/ledger/cycles.jsonl" "$T/cycles.free.keep" 2> /dev/null || : > "$T/cycles.free.keep"
+: > "$S/ledger/cycles.jsonl"
+[ -f "$T/etc/schedule" ] && mv "$T/etc/schedule" "$T/schedule.free.keep"
+rm -f "$S/oneshot" "$S/oneshot.meta" "$S/halt-after" "$S/halt-at"
+F1=20260106T100000Z-f-run-now
+refuse "a cycle with no job needs an -f- id" shot start 20260106T100000Z-o-run-now owner --free
+refuse "an -f- id is no job" bash -c "tar -c -C '$T/work/j' . | AGENT_KIT_PATH=$FB:$PATH '$BIN/agent-kit-oneshot' start $F1 owner"
+refuse "past the cap is only for a cycle with no job" bash -c "tar -c -C '$T/work/j' . | AGENT_KIT_PATH=$FB:$PATH '$BIN/agent-kit-oneshot' start 20260106T100000Z-o-capjob owner --past-cap"
+echo "stop owner halt 2026-01-06T05:00:00+00:00" > "$S/control"
+: > "$FAKE_LOG"
+out=$(shot start $F1 owner --free < /dev/null)
+check "it starts on a halted team, with nothing stored as a job" 'grep -q "cycle $F1 started. The team halts again" <<< "$out" && [ ! -e "$S/inbox/$F1" ] && grep -q "^run oneshot $F1 " "$S/control" && grep -qx "kind=free" "$S/oneshot.meta" && grep -q "start --no-block agent-kit-lead.service" "$FAKE_LOG"'
+check "show says what runs" 'grep -q "cycle started by the owner in progress: $F1" <<< "$(shot show)"'
+out=$(cycle 2>&1)
+check "the lead gets the normal prompt, with a note that the team halts again" 'grep -q "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" && grep -q "started by the owner on a halted team" "$FAKE_PROMPT" && ! grep -q "Read this first\|One-shot job: this cycle only" "$FAKE_PROMPT" && grep -q "^\*\*This is cycle 1\.\*\*" "$FAKE_PROMPT"'
+check "the ledger counts it as a normal cycle the owner started" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -c "[.kind, .free, .oneshot, .counted]")" = "[\"normal\",true,\"$F1\",true]" ]'
+shot finish > /dev/null
+check "then the team is halted again" 'grep -q "^stop one-shot job $F1 ended" "$S/control" && [ ! -e "$S/oneshot" ]'
+# On an idle team, with a schedule: no slot is needed, and no halted note.
+printf 'tz UTC\nslot daily 03:00\n' > "$T/etc/schedule"
+F2=20260106T110000Z-f-run-now
+echo "run 2026-01-06T06:00:00+00:00" > "$S/control"
+out=$(shot start $F2 owner --free < /dev/null)
+check "on a team set to run it runs on afterwards" 'grep -q "The team runs on when it ends" <<< "$out"'
+out=$(cycle 2>&1)
+check "a schedule does not hold it back, and the lead is not told of a halt" '[ -s "$FAKE_PROMPT" ] && ! grep -q "halted team" "$FAKE_PROMPT" && grep -q "TEAM-CYCLE-TEXT" "$FAKE_PROMPT"'
+shot finish > /dev/null
+check "then the team runs on" 'grep -q "^run after one-shot job $F2 ended" "$S/control"'
+# The daily cap (6 in project.env): refused, unless started past it.
+for i in 1 2 3 4; do jq -nc --arg d "$(date +%F)" '{date:$d, counted:true, kind:"normal"}'; done >> "$S/ledger/cycles.jsonl"
+F3=20260106T120000Z-f-run-now
+out=$(shot start $F3 owner --free < /dev/null 2>&1); rc=$?
+check "at the daily cap it is refused, with the count" '[ "$rc" != 0 ] && grep -q "daily cycle cap is reached (6/" <<< "$out" && [ ! -e "$S/oneshot" ] && grep -q "^run after one-shot job $F2" "$S/control"'
+out=$(shot start $F3 owner --free --past-cap < /dev/null)
+check "past the cap when the owner says so" 'grep -q "cycle $F3 started" <<< "$out" && grep -qx "pastcap=1" "$S/oneshot.meta"'
+out=$(cycle 2>&1)
+check "and lead-cycle does not stop it at the cap" '[ -s "$FAKE_PROMPT" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = "$F3" ]'
+shot finish > /dev/null
+check "no brake for a cycle with no job" '! grep -q "^minutes=" "$S/oneshot.meta" 2> /dev/null'
+# Set for a time: no job on stdin; at the cap it is dropped and logged, not queued.
+F4=20260106T130000Z-f-later F5=20260106T130100Z-f-later-past
+shot at $(($(date +%s) + 60)) $F4 owner --free < /dev/null > /dev/null
+shot at $(($(date +%s) + 60)) $F5 owner --free --past-cap < /dev/null > /dev/null
+check "a cycle set for a time keeps an empty job" '[ -f "$S/oneshot-at/$F4" ] && [ ! -s "$S/oneshot-at/$F4.job" ] && grep -q "^$F4 " <<< "$(shot list-at)"'
+sed -i "s/^[0-9]* /$(($(date +%s) - 5)) /" "$S/oneshot-at/$F4" "$S/oneshot-at/$F5"
+: > "$FAKE_LOG"; shot due
+check "at the cap a cycle set for a time is dropped and logged as missed" '[ ! -e "$S/oneshot-at/$F4" ] && grep -q "job:$F4 .* missed: daily cap (7/" "$S/schedule.log"'
+check "one set past the cap starts" '[ ! -e "$S/oneshot-at/$F5" ] && grep -q "^run oneshot $F5 " "$S/control" && grep -qx "pastcap=1" "$S/oneshot.meta"'
+shot finish > /dev/null
+rm -f "$T/etc/schedule"; [ -f "$T/schedule.free.keep" ] && mv "$T/schedule.free.keep" "$T/etc/schedule"
+cp "$T/cycles.free.keep" "$S/ledger/cycles.jsonl"
+echo "stop owner halt 2026-01-06T05:00:00+00:00" > "$S/control"
+
 echo "== the owner's cap on proposals (kit 0.15)"
 PL3=20260104T100000Z-p-capped
 printf 'Max-proposals: 2\nRead docs/ and propose the first jobs.\n' | akb plan $PL3 owner > /dev/null

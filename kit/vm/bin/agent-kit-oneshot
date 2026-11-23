@@ -7,7 +7,10 @@
 #   agent-kit-oneshot start <id> <from> [--plan]   job on stdin, as for `agent-kit-inbox put`;
 #                                         with --plan (an id with -p-) a planning cycle, focus text
 #                                         on stdin, stored by `agent-kit-backlog plan` (kit 0.10)
-#   agent-kit-oneshot at <unix> <id> <from> [--plan]   the same, started by the tick at that time
+#   agent-kit-oneshot start <id> <from> --free [--past-cap]   one normal cycle, no job (kit 0.25): the lead
+#                                         picks its work as in any cycle. An id with -f-. Refused at the
+#                                         daily cap unless --past-cap; it counts toward the cap either way.
+#   agent-kit-oneshot at <unix> <id> <from> [--plan|--free]   the same, started by the tick at that time
 #   agent-kit-oneshot unat <id>           cancel a job set for a time
 #   agent-kit-oneshot due                 start jobs whose time has come (run every minute by agent-kit-tick)
 #   agent-kit-oneshot brake               tell a job that runs far past its estimate to wrap up, then stop it
@@ -62,8 +65,10 @@ MARK=$STATE/oneshot
 LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
 ID_RE='^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$'
 PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
-# Either kind, for the marker and the control line.
-ANY_RE='^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}$'
+# A normal cycle the owner started, with no job (kit 0.25).
+FREE_RE='^[0-9]{8}T[0-9]{6}Z-f-[a-z0-9-]{1,40}$'
+# Any kind, for the marker and the control line.
+ANY_RE='^[0-9]{8}T[0-9]{6}Z-[opf]-[a-z0-9-]{1,40}$'
 REAP_AFTER=120
 AT=$STATE/oneshot-at
 # A job set for a time waits at most this long for a busy team (a cycle that
@@ -106,9 +111,10 @@ timer_on() { # the lead timer back, if it is meant to be on
 # What the console knows about a backlog job: --minutes N, --no-brake, --after id,id.
 # Sets minutes, brake, after; dies on anything else.
 job_flags() {
-  minutes="" brake=on after_ids=""
+  minutes="" brake=on after_ids="" pastcap=0
   while [ $# -gt 0 ]; do
     case "$1" in
+      --past-cap) pastcap=1 ;;
       --minutes) [[ ${2:-} =~ ^[0-9]{1,4}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 1440 ] || die "bad estimate"; minutes=$2; shift ;;
       --no-brake) brake=off ;;
       --after)
@@ -123,11 +129,22 @@ job_flags() {
   done
 }
 write_meta() { # file id
-  { echo "id=$2"; [ -z "$minutes" ] || echo "minutes=$minutes"; [ "$brake" = on ] || echo "brake=off"; [ -z "$after_ids" ] || echo "after=$after_ids"; } > "$1.tmp"
+  { echo "id=$2"; [ -z "$minutes" ] || echo "minutes=$minutes"; [ "$brake" = on ] || echo "brake=off"; [ -z "$after_ids" ] || echo "after=$after_ids"
+    [[ $2 =~ $FREE_RE ]] && echo "kind=free"; [ "$pastcap" = 0 ] || echo "pastcap=1"; } > "$1.tmp"
   chmod 644 "$1.tmp"
   mv "$1.tmp" "$1"
 }
 meta_of() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1; } # file key
+# The daily cap, counted as lead-cycle counts it (the owner's caps.env wins).
+# Prints "today/cap" and returns 0 when it is used up.
+cap_used() {
+  local cap today
+  cap=$(sed -nE 's/^MAX_CYCLES_PER_DAY=([0-9]{1,5})$/\1/p' "$ETC/project.env" "$ETC/caps.env" 2>/dev/null | tail -1)
+  [ -n "$cap" ] || return 1
+  today=$(jq -s --arg d "$(date +%F)" '[.[] | select(.date == $d and .counted != false)] | length' "$STATE/ledger/cycles.jsonl" 2>/dev/null)
+  echo "${today:-0}/$cap"
+  [ "${today:-0}" -ge "$cap" ]
+}
 # Branches the agents submitted that the gate has not judged yet (as in agent-kit-publish).
 unjudged() {
   local n=0 ref sha f
@@ -196,11 +213,13 @@ end_job() { # $1 = how it ended, for the control line
 case "${1:-show}" in
   start)
     id=${2:-} from=${3:-} kind=job
-    shift 3 2> /dev/null || die "usage: agent-kit-oneshot start <id> <from> [--plan] [--minutes N] [--no-brake]"
-    [ "${1:-}" = --plan ] && { kind=plan; shift; }
+    shift 3 2> /dev/null || die "usage: agent-kit-oneshot start <id> <from> [--plan|--free] [--minutes N] [--no-brake] [--past-cap]"
+    case "${1:-}" in --plan) kind=plan; shift ;; --free) kind=free; shift ;; esac
     job_flags "$@"
     if [ "$kind" = plan ]; then [[ $id =~ $PLAN_RE ]] || die "bad plan id"
+    elif [ "$kind" = free ]; then [[ $id =~ $FREE_RE ]] || die "bad cycle id"
     else [[ $id =~ $ID_RE ]] || die "bad id"; fi
+    [ "$kind" = free ] || [ "$pastcap" = 0 ] || die "--past-cap is for a cycle with no job (--free)"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     exec 8> "$LOCK"
     flock 8
@@ -216,10 +235,17 @@ case "${1:-show}" in
       timer_held=1
     fi
     cycle_alive && die "a cycle is running. Send an inbox message instead"
+    # A normal cycle is held to the daily cap, unless the owner says otherwise.
+    if [ "$kind" = free ] && [ "$pastcap" = 0 ] && used=$(cap_used); then
+      die "the daily cycle cap is reached ($used). Start it past the cap to run it anyway"
+    fi
     # The job is an owner message like any other: same checks, same root-owned
     # place. When a job is started again it is already there.
     stored=0
-    if [ "$kind" = plan ]; then
+    if [ "$kind" = free ]; then
+      # Nothing to store: the lead picks its work as in any cycle.
+      jobdir=""
+    elif [ "$kind" = plan ]; then
       # A planning request is not an owner message: normal cycles must not
       # see it in their inbox. It lives in the backlog folder.
       jobdir=$STATE/backlog/plans/$id
@@ -263,7 +289,10 @@ case "${1:-show}" in
     timer_held=0 # off for the job: end_job turns it back on
     # Started by hand while it was set for a time: it must not start again then.
     rm -f -- "$AT/$id" "$AT/$id.job" "$AT/$id.meta" "$AT/$id.wait"
-    if [ "$kind" = plan ]; then
+    if [ "$kind" = free ]; then
+      [ "$after" = run ] && echo "cycle $id started. The team runs on when it ends" \
+        || echo "cycle $id started. The team halts again when it ends"
+    elif [ "$kind" = plan ]; then
       [ "$after" = run ] && echo "planning cycle $id started. The team runs on when it ends" \
         || echo "planning cycle $id started. The team halts again when it ends"
     elif [ "$after" = run ]; then
@@ -296,12 +325,14 @@ case "${1:-show}" in
 
   at)
     when=${2:-} id=${3:-} from=${4:-} flag=""
-    shift 4 2> /dev/null || die "usage: agent-kit-oneshot at <unix> <id> <from> [--plan] [--minutes N] [--after id,id] [--no-brake]"
-    [ "${1:-}" = --plan ] && { flag=--plan; shift; }
+    shift 4 2> /dev/null || die "usage: agent-kit-oneshot at <unix> <id> <from> [--plan|--free] [--minutes N] [--after id,id] [--no-brake] [--past-cap]"
+    case "${1:-}" in --plan | --free) flag=$1; shift ;; esac
     job_flags "$@"
     [[ $when =~ ^[0-9]{9,11}$ ]] || die "bad time"
     if [ "$flag" = --plan ]; then [[ $id =~ $PLAN_RE ]] || die "bad plan id"
+    elif [ "$flag" = --free ]; then [[ $id =~ $FREE_RE ]] || die "bad cycle id"
     else [[ $id =~ $ID_RE ]] || die "bad id"; fi
+    [ "$flag" = --free ] || [ "$pastcap" = 0 ] || die "--past-cap is for a cycle with no job (--free)"
     [[ ",$after_ids," != *",$id,"* ]] || die "a job cannot come after itself"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     now=$(date +%s)
@@ -311,7 +342,8 @@ case "${1:-show}" in
     install -d -m 700 "$AT"
     # The job is kept here, not in the inbox, until its time: a normal cycle
     # in between must not see it as an open owner message.
-    head -c $((MAX_JOB + 1)) > "$AT/.$id.job" || die "could not store the job"
+    # A cycle with no job keeps an empty one.
+    if [ "$flag" = --free ]; then : > "$AT/.$id.job"; else head -c $((MAX_JOB + 1)) > "$AT/.$id.job" || die "could not store the job"; fi
     [ "$(stat -c %s "$AT/.$id.job")" -le "$MAX_JOB" ] || { rm -f "$AT/.$id.job"; die "the job is too large"; }
     mv "$AT/.$id.job" "$AT/$id.job"
     rm -f -- "$AT/$id.wait"
@@ -339,7 +371,7 @@ case "${1:-show}" in
       read -r when from _ < "$f"
       [[ ${when:-} =~ ^[0-9]{9,11}$ ]] || { rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"; continue; }
       [ "$now" -ge "$when" ] || continue
-      flag=(); [[ $id =~ $PLAN_RE ]] && flag=(--plan)
+      flag=(); [[ $id =~ $PLAN_RE ]] && flag=(--plan); [[ $id =~ $FREE_RE ]] && flag=(--free)
       # What it waited for at the last look, and how long of that was for the owner:
       # time spent waiting for an approval does not count against the job.
       wreason="" wdep="" wlast=$now wowner=0
@@ -360,6 +392,13 @@ case "${1:-show}" in
         printf '%s job:%s %s missed: %s\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" "$why" >> "$STATE/schedule.log"
         continue
       fi
+      # A normal cycle set for a time is held to the daily cap like a schedule slot:
+      # at the cap it is dropped, not queued (unless the owner set it past the cap).
+      if [[ $id =~ $FREE_RE ]] && [ "$(meta_of "$f.meta" pastcap)" != 1 ] && used=$(cap_used); then
+        rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"
+        printf '%s job:%s %s missed: daily cap (%s)\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" "$used" >> "$STATE/schedule.log"
+        continue
+      fi
       if [ -n "$hold" ]; then
         # It waits for another job, not for the team: the next due job may go.
         printf '%s %s %s\n' "$hold" "$now" "$wowner" > "$f.wait"
@@ -368,6 +407,7 @@ case "${1:-show}" in
       args=()
       m=$(meta_of "$f.meta" minutes); [ -z "$m" ] || args+=(--minutes "$m")
       [ "$(meta_of "$f.meta" brake)" != off ] || args+=(--no-brake)
+      [ "$(meta_of "$f.meta" pastcap)" != 1 ] || args+=(--past-cap)
       if out=$("$0" start "$id" "$from" "${flag[@]}" "${args[@]}" < "$f.job" 2>&1); then
         rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"
         printf '%s job:%s %s started\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" >> "$STATE/schedule.log"
@@ -441,13 +481,14 @@ case "${1:-show}" in
   show)
     if [ -f "$MARK" ]; then
       read -r id since after _ < "$MARK"
-      echo "one-shot job in progress: $id since $since (then: ${after:-halt})"
+      if [[ ${id:-} =~ $FREE_RE ]]; then echo "cycle started by the owner in progress: $id since $since (then: ${after:-halt})"
+      else echo "one-shot job in progress: $id since $since (then: ${after:-halt})"; fi
     else
       echo "no one-shot job in progress"
     fi
     ;;
 
   *)
-    die "usage: agent-kit-oneshot start <id> <from> [--plan] [--minutes N] [--no-brake] | at <unix> <id> <from> [--plan] [--minutes N] [--after id,id] [--no-brake] | unat <id> | due | brake | list-at | finish | reap | show"
+    die "usage: agent-kit-oneshot start <id> <from> [--plan|--free] [--minutes N] [--no-brake] [--past-cap] | at <unix> <id> <from> [--plan|--free] [--minutes N] [--after id,id] [--no-brake] [--past-cap] | unat <id> | due | brake | list-at | finish | reap | show"
     ;;
 esac

@@ -1,7 +1,8 @@
 <script>
   // One question before an action that matters.
-  // confirm: {title, body, word, danger, run} or null.
-  let { confirm = null, busy = false, oncancel } = $props();
+  // confirm: {title, body, word, danger, run, disabled} or null. `children`: more
+  // under the body (a checkbox, a note).
+  let { confirm = null, busy = false, oncancel, children } = $props();
 </script>
 
 {#if confirm}
@@ -10,9 +11,10 @@
     <div class="panel lit box">
       <h2>{confirm.title}</h2>
       <p>{confirm.body}</p>
+      {@render children?.()}
       <div class="actions end">
         <button class="btn quiet" onclick={oncancel} disabled={busy}>Cancel</button>
-        <button class="btn {confirm.danger ? 'danger' : 'primary'}" onclick={confirm.run} disabled={busy}>{busy ? 'Working…' : confirm.word}</button>
+        <button class="btn {confirm.danger ? 'danger' : 'primary'}" onclick={confirm.run} disabled={busy || !!confirm.disabled}>{busy ? 'Working…' : confirm.word}</button>
       </div>
     </div>
   </div>

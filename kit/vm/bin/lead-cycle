@@ -28,10 +28,16 @@ if [ -f "$STATE/halt-after" ]; then echo "a halt after the last cycle is pending
 # root-owned and must agree, so a stale marker cannot change a normal cycle.
 # A planning cycle (kit 0.10) is the same kind of start with a -p- id: its
 # request is in the backlog folder, not in the inbox.
-oneshot= plan= kind=normal
+# A normal cycle the owner started with no job (kit 0.25) has an -f- id: the
+# usual prompt, but like a one-shot it needs no slot and the cap was checked
+# when it was started. The ledger counts it as a normal cycle.
+oneshot= plan= free= free_after= kind=normal
 if [ -f "$STATE/oneshot" ]; then
-  read -r oneshot _ < "$STATE/oneshot"
-  if [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$ ]]; then
+  read -r oneshot _ free_after _ < "$STATE/oneshot"
+  if [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-f-[a-z0-9-]{1,40}$ ]]; then
+    grep -q "^run oneshot $oneshot " "$STATE/control" 2>/dev/null && free=$oneshot
+    oneshot=$free
+  elif [[ ${oneshot:-} =~ ^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$ ]]; then
     { grep -q "^run oneshot $oneshot " "$STATE/control" 2>/dev/null \
       && [ -f "$STATE/backlog/plans/$oneshot/request.md" ]; } && plan=$oneshot
     oneshot=$plan
@@ -40,7 +46,7 @@ if [ -f "$STATE/oneshot" ]; then
       && [ -f "$STATE/inbox/$oneshot/message.md" ]; } || oneshot=
   fi
 fi
-if [ -n "$plan" ]; then kind=plan; elif [ -n "$oneshot" ]; then kind=oneshot; fi
+if [ -n "$plan" ]; then kind=plan; elif [ -n "$free" ]; then kind=normal; elif [ -n "$oneshot" ]; then kind=oneshot; fi
 
 # A schedule (agent-kit-schedule): a normal cycle starts only at one of its
 # slots. The tick leaves a root-owned marker just before it starts this unit;
@@ -142,6 +148,21 @@ if [ -n "$plan" ]; then
   tools=(--tools "$PLAN_TOOLS")
   mkdir -p "$STATE/ledger/plans"
   printf '%s\n' "$sid" > "$STATE/ledger/plans/$plan"
+elif [ -n "$free" ]; then
+  # A normal cycle, started by the owner. On a halted team the lead is told
+  # that the team halts again after it; otherwise nothing differs.
+  if [ "${free_after:-halt}" != run ]; then
+    prompt="**This cycle was started by the owner on a halted team.** It is one normal cycle: follow your usual
+steps and pick the work as you always do. When it ends the kit halts the team again, and no cycle
+follows until the owner says so. The gate was paused while the team was halted: it may also judge
+branches submitted before the halt.
+
+$number
+
+$prompt"
+  else
+    prompt=$number$'\n\n'$prompt
+  fi
 elif [ -n "$oneshot" ]; then
   # The job and its rules go last, and a notice that this is a one-shot cycle
   # goes before the team's own instructions, which say the opposite in places.
@@ -198,7 +219,7 @@ fi
 # A cycle that was stopped leaves an empty result file. jq prints nothing for
 # an empty file and still exits 0, so check for content first: otherwise a
 # halted cycle would get no ledger line at all.
-if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched \
+if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched --argjson free "$([ -n "$free" ] && echo true || echo false)" \
       --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted --argjson overrun $overrun --argjson est $est \
   '# Tokens of the whole run, sub-agents included, per model and summed (kit 0.19).
    ((.modelUsage // {}) | if type == "object" then . else {} end
@@ -207,18 +228,18 @@ if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" -
    {date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted, overrun:$overrun,
     oneshot:(if $oneshot == "" then null else $oneshot end),
     slot:(if $slot == "" then null else $slot end),
-    kind:$kind, plan:(if $plan == "" then null else $plan end), touched_code:$touched,
+    kind:$kind, free:$free, plan:(if $plan == "" then null else $plan end), touched_code:$touched,
     cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
     est_min:$est,
     tokens:(if ($models | length) == 0 then null else ([$models[]] | {in:(map(.in) | add), out:(map(.out) | add), cr:(map(.cr) | add), cw:(map(.cw) | add), think:(map(.think) | add)}) end),
     models:(if ($models | length) == 0 then null else $models end),
     session:(.session_id // $sid), is_error:(.is_error // null),
     summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; }; then
-  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched --argjson rc $rc \
+  jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched --argjson rc $rc --argjson free "$([ -n "$free" ] && echo true || echo false)" \
      --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --argjson overrun $overrun --argjson est $est --arg err "$(tail -c 600 "$run.err")" \
      '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted, overrun:$overrun,
        oneshot:(if $oneshot == "" then null else $oneshot end),
-    slot:(if $slot == "" then null else $slot end), kind:$kind, plan:(if $plan == "" then null else $plan end),
+    slot:(if $slot == "" then null else $slot end), kind:$kind, free:$free, plan:(if $plan == "" then null else $plan end),
     touched_code:$touched, est_min:$est, session:$sid, summary:((if $overrun then "stopped: the job ran to twice its estimate. " elif $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
 fi
 echo "cycle done rc=$rc limited=$limited halted=$halted oneshot=${oneshot:-no} in $((SECONDS - t0))s"

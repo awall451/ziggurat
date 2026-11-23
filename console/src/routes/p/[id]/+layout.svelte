@@ -4,6 +4,7 @@
   import { num, usd, dur, between, ago, idleText, waitingParts, stallText, pillState } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
   import Popover from '$lib/components/Popover.svelte';
+  import RunCycle from '$lib/components/RunCycle.svelte';
 
   let { data, children } = $props();
   const p = $derived(data.project);
@@ -62,6 +63,8 @@
         <span class="pill {pillState(p.status)}" title={stallText(p.status.stalled, p.now) || null}>{STATE_WORD[pillState(p.status)] || p.status.state}</span>
         {#if p.status.leadActive && p.cycle}
           <span class="mono small dim">cycle {p.cycle.number} · {dur(between(p.cycle.started, new Date(p.now).toISOString()))}</span>
+        {:else if p.runCycle?.can}
+          <RunCycle id={p.id} name={p.name} rc={p.runCycle} quietNow={data.quietNow} small />
         {/if}
       </span>
     </div>
@@ -107,7 +110,7 @@
     </div>
   {:else if p.status.oneshot}
     <div class="note dim">
-      One-shot job in progress. {p.status.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'}
+      {p.status.oneshot.free ? 'A cycle you started is in progress.' : 'One-shot job in progress.'} {p.status.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'}
     </div>
   {:else if p.status.state === 'idle' && idleText(p.status.idle, p.now)}
     <div class="note dim">{idleText(p.status.idle, p.now)}</div>

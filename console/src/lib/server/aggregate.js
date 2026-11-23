@@ -68,6 +68,8 @@ export function readCycles(fleet) {
         // Kit 0.10: normal, oneshot, plan or chat. Older lines have no kind.
         kind: ['normal', 'oneshot', 'plan', 'chat'].includes(c.kind) ? c.kind : c.oneshot ? 'oneshot' : 'normal',
         oneshot: typeof c.oneshot === 'string' ? c.oneshot : null,
+        // A normal cycle the owner started with no job (kit 0.25).
+        free: c.free === true,
         plan: typeof c.plan === 'string' ? c.plan : null,
         // A chat turn's own id.
         chat: typeof c.chat === 'string' && /^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$/.test(c.chat) ? c.chat : null,
@@ -82,6 +84,22 @@ export function readCycles(fleet) {
     }
   }
   return out;
+}
+
+/**
+ * What a normal cycle of this team typically takes: the median length and cost
+ * of its last ten real cycles (normal ones and one-shot jobs; planning cycles
+ * and chat turns are short and say nothing about a cycle). {secs, costUsd, n}.
+ */
+export function typicalCycle(cycles) {
+  const real = cycles.filter((c) => c.counted && !c.halted && c.kind !== 'chat' && c.kind !== 'plan' && Number.isFinite(c.secs) && c.secs > 60).slice(-10);
+  const median = (xs) => {
+    const v = xs.filter(Number.isFinite).sort((a, b) => a - b);
+    if (!v.length) return null;
+    const mid = Math.floor(v.length / 2);
+    return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+  };
+  return { secs: median(real.map((c) => c.secs)), costUsd: median(real.map((c) => c.costUsd)), n: real.length };
 }
 
 // "<time> <topic> <sha> <status> <detail>"

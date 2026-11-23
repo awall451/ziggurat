@@ -31,6 +31,9 @@ export async function POST({ params, request, locals }) {
       case 'oneshot':
         out = await controls.oneshot(user, project, { text: b.text, attachments: b.attachments });
         break;
+      case 'run-cycle':
+        out = await controls.runCycle(user, project, { pastCap: b.pastCap === true });
+        break;
       case 'oneshot-again':
         out = await controls.oneshotAgain(user, project, b.id);
         break;

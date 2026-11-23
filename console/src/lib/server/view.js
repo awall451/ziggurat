@@ -1,7 +1,7 @@
 // What the pages show about a project: config, live status, progress numbers.
-import { getStatus, peekStatus, kitAtLeast } from './live.js';
+import { getStatus, peekStatus, kitAtLeast, runCycleState } from './live.js';
 import { touch, pullInfo, ledgerPulledAt } from './pull.js';
-import { summary } from './aggregate.js';
+import { summary, readCycles, typicalCycle } from './aggregate.js';
 import { tierNames } from './theme.js';
 import { listSessions } from './transcripts.js';
 import { openAskCount } from './feedback.js';
@@ -99,6 +99,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     publish: publishView(project),
     // Halting after the cycle needs kit 0.5.
     canHaltAfter: !!status.canHaltAfter,
+    // Run a cycle now (kit 0.25): whether it can, why not, and what a cycle of this team typically takes.
+    runCycle: { ...runCycleState(status), typical: typicalCycle(readCycles(project.paths.fleet)) },
     cycle: current
       ? { number: current.number, started: current.started, agents: current.agents }
       : sessions[0]
