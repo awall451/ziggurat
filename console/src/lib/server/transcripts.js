@@ -31,6 +31,7 @@ function newFold() {
     errors: new Set(), // tool_use ids whose result is an error
     lastText: '',
     lastTextMsg: null,
+    lastTextAt: null, // when the lead (or agent) last wrote text
     // Owner chat turns that resumed this session after it ended (a planning
     // cycle): folded apart, so the cycle's report and figures stop where it ended.
     chat: null,
@@ -116,6 +117,7 @@ function feed(f, o) {
         } else if (b.type === 'text' && b.text) {
           f.lastText = maskSecrets(f.lastTextMsg === id ? `${f.lastText}\n${b.text}` : b.text);
           f.lastTextMsg = id;
+          if (typeof o.timestamp === 'string') f.lastTextAt = o.timestamp;
         }
       }
     }
@@ -408,6 +410,16 @@ export function leadReport(project, sid) {
   if (!SID_RE.test(sid)) return null;
   const main = foldFile(path.join(sessionDir(project), `${sid}.jsonl`));
   return main?.lastText ? main.lastText.slice(0, TEXT_CAP) : null;
+}
+
+/**
+ * The lead's last text in one session and when it wrote it: its latest word
+ * while the cycle runs, its report once it has ended. {text, at} or null.
+ */
+export function leadLast(project, sid) {
+  if (!SID_RE.test(sid)) return null;
+  const main = foldFile(path.join(sessionDir(project), `${sid}.jsonl`));
+  return main?.lastText ? { text: main.lastText.slice(0, TEXT_CAP), at: main.lastTextAt } : null;
 }
 
 /**

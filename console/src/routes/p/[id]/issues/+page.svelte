@@ -2,6 +2,7 @@
   // Owner issues as a board: New, In progress, Done. The lead triages and
   // moves them; the owner can move a card too (drag it, or use the buttons).
   import { invalidateAll } from '$app/navigation';
+  import { page } from '$app/state';
   import { ago } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
   import NewIssue from '$lib/components/NewIssue.svelte';
@@ -20,7 +21,8 @@
   const WORD = { new: 'New', in_progress: 'In progress', done: 'Done', wontfix: "Won't fix" };
   const column = (i) => (i.status === 'wontfix' ? 'done' : i.status);
 
-  let openId = $state(null);
+  // A link from another page may name the issue to open: /issues?issue=<id>.
+  let openId = $state(page.url.searchParams.get('issue'));
   let dragId = $state(null);
   let over = $state(null);
   let busy = $state(false);

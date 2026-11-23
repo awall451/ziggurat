@@ -302,6 +302,16 @@ export function noteJob(project, id, job) {
   return issue;
 }
 
+/** The issue a one-shot job works on, by the console's own note of that job (see noteJob and fixNow). */
+export function issueForJob(project, jobId) {
+  if (!/^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(jobId || '')) return null;
+  for (const id of ids(project)) {
+    const issue = get(project, id);
+    if (issue?.job?.id === jobId) return issue;
+  }
+  return null;
+}
+
 export function get(project, id) {
   if (!ID_RE.test(id)) return null;
   return readJson(path.join(dirFor(project, id), 'issue.json'));

@@ -58,7 +58,9 @@ export function readCycles(fleet) {
         // Kit 0.10: normal, oneshot, plan or chat. Older lines have no kind.
         kind: ['normal', 'oneshot', 'plan', 'chat'].includes(c.kind) ? c.kind : c.oneshot ? 'oneshot' : 'normal',
         oneshot: typeof c.oneshot === 'string' ? c.oneshot : null,
-        plan: typeof c.plan === 'string' ? c.plan : null
+        plan: typeof c.plan === 'string' ? c.plan : null,
+        // The schedule slot that started it (kit 0.9), as "daily@18:00".
+        slot: typeof c.slot === 'string' && /^[a-z,]{3,27}@\d{2}:\d{2}$/.test(c.slot) ? c.slot : null
       });
     } catch {
       /* skip a bad line */
