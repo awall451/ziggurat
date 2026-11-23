@@ -58,6 +58,10 @@ export async function projectView(project, { wait = 3500 } = {}) {
       haltAfter: status.haltAfter || null,
       // The cycle in progress is stuck, and why (kit 0.24).
       stalled: status.stalled || null,
+      // Focus mode (kit 0.27): in focus, paused for another team's, how the last one ended.
+      focus: status.focus || null,
+      // The daily cycle cap, as the VM counts it.
+      cap: Number.isInteger(status.cap) ? status.cap : null,
       vmNow: status.vmNow || null,
       error: status.error || null,
       // The VM is not this project's (kit PROJECT= names another one), or another entry shares it.
@@ -101,6 +105,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canHaltAfter: !!status.canHaltAfter,
     // Run a cycle now (kit 0.25): whether it can, why not, and what a cycle of this team typically takes.
     runCycle: { ...runCycleState(status), typical: typicalCycle(readCycles(project.paths.fleet)) },
+    // Focus mode needs kit 0.27.
+    canFocus: kitAtLeast(status.kitVersion, '0.27.0'),
     cycle: current
       ? { number: current.number, started: current.started, agents: current.agents }
       : sessions[0]

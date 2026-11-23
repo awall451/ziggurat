@@ -1541,6 +1541,77 @@ rm -f "$T/etc/schedule"; [ -f "$T/schedule.free.keep" ] && mv "$T/schedule.free.
 cp "$T/cycles.free.keep" "$S/ledger/cycles.jsonl"
 echo "stop owner halt 2026-01-06T05:00:00+00:00" > "$S/control"
 
+echo "== focus mode (kit 0.27)"
+foc() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-focus" "$@"; }
+cp "$S/ledger/cycles.jsonl" "$T/cycles.focus.keep"
+[ -f "$T/etc/schedule" ] && mv "$T/etc/schedule" "$T/schedule.focus.keep"
+rm -f "$S/oneshot" "$S/oneshot.meta" "$S/halt-after" "$S/focus" "$S/paused" "$S/focus.ended"
+mkdir -p "$S/focus-out"
+echo "stop owner halt 2026-01-07T05:00:00+00:00" > "$S/control"
+refuse "no focus on a halted team" foc set --open --per-day 10
+echo "run 2026-01-07T06:00:00+00:00" > "$S/control"
+refuse "focus needs one end" foc set --per-day 10
+refuse "focus takes one end only" foc set --open --cycles 3 --per-day 10
+refuse "focus needs its cycles a day" foc set --open
+refuse "an end in the past" foc set --until $(($(date +%s) - 60)) --per-day 10
+FAKE_TIMER=disabled refuse "no focus with the lead timer off" foc set --open --per-day 10
+out=$(foc set --cycles 2 --per-day 50)
+check "focus is set, with what it is" 'grep -q "focus on" <<< "$out" && [ "$(foc show | jq -c "[.focus.cycles, .focus.perDay, .focus.done, .focus.until]")" = "[2,50,0,null]" ]'
+# A schedule is set aside, and the focus's own cycles a day replace the cap.
+printf 'tz UTC\nslot daily 03:00\n' > "$T/etc/schedule"
+for i in 1 2 3 4 5 6 7; do jq -nc --arg d "$(date +%F)" '{date:$d, counted:true, kind:"normal"}'; done >> "$S/ledger/cycles.jsonl"
+out=$(cycle 2>&1)
+check "in focus a cycle runs without a slot and past the usual cap" '[ -s "$FAKE_PROMPT" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .focus_since)" = "$(foc show | jq -r .focus.since)" ]'
+check "the lead is told about focus and how to say it is blocked" 'grep -q "^## Focus" "$FAKE_PROMPT" && grep -q "owner-focus blocked" "$FAKE_PROMPT"'
+check "a focus cycle says whether it changed only notes" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .notes_only)" = true ]'
+: > "$FAKE_LOG"; tick_at "$(TZ=UTC date -d "$(TZ=UTC date +%F) 03:00" +%s)" 2> /dev/null
+check "the schedule's slot is skipped while in focus" 'grep -q "skipped: in focus" "$S/schedule.log"'
+out=$(cycle 2>&1); foc check
+check "after its cycles the focus ends by itself, with the reason" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .ended.reason)" = "it ran its 2 cycles" ] && grep -q "focus .* ended: it ran its 2 cycles" "$S/schedule.log"'
+out=$(cycle 2>&1)
+check "then the schedule holds again" 'grep -q "waiting for the next slot" <<< "$out"'
+# Blocked on the owner: the lead says so.
+foc set --open --per-day 50 > /dev/null
+check "owner-focus blocked needs a reason" '! "$BIN/owner-focus" blocked > /dev/null 2>&1'
+out=$("$BIN/owner-focus" blocked "waiting for the owner to test on the device")
+foc check
+check "the lead saying it is blocked ends the focus" '[ ! -e "$S/focus" ] && grep -q "blocked on the owner: waiting for the owner to test on the device" <<< "$(foc show | jq -r .ended.reason)" && [ ! -e "$S/focus-out/blocked" ]'
+check "owner-focus says nothing when no focus is on" '[ -z "$("$BIN/owner-focus" prompt)" ] && ! "$BIN/owner-focus" blocked "x" > /dev/null 2>&1'
+# Blocked on the owner: two cycles in a row that changed only notes.
+foc set --open --per-day 50 > /dev/null
+out=$(cycle 2>&1); foc check
+check "one cycle with only notes is not enough" '[ -e "$S/focus" ]'
+out=$(cycle 2>&1); foc check
+check "two in a row end the focus" '[ ! -e "$S/focus" ] && grep -q "two cycles in a row changed only" <<< "$(foc show | jq -r .ended.reason)"'
+foc set --until $(($(date +%s) + 120)) --per-day 50 > /dev/null
+AGENT_KIT_NOW=$(($(date +%s) + 200)) foc check
+check "a focus ends at its time" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .ended.reason)" = "its time has come" ]'
+foc set --open --per-day 50 > /dev/null
+foc clear owner > /dev/null
+check "switched off" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .ended.reason)" = "switched off: owner" ]'
+# Paused for another team's focus.
+refuse "a pause needs whose focus" foc pause --open
+foc pause --open --for nocturne > /dev/null
+check "an open pause ends after seven days at most" 'u=$(foc show | jq -r .paused.until); [ "$u" -le $(($(date +%s) + 7 * 86400)) ] && [ "$u" -ge $(($(date +%s) + 7 * 86400 - 5)) ]'
+refuse "a paused team cannot be put in focus" foc set --open --per-day 10
+rm -f "$S/schedule.used"; : > "$S/schedule.log"
+out=$(cycle 2>&1)
+check "a paused team starts no cycle from its timer" 'grep -q "paused for focus on nocturne: not running" <<< "$out"'
+tick_at "$(TZ=UTC date -d "$(TZ=UTC date +%F) 03:00" +%s)" 2> /dev/null
+check "nor from its schedule, and says why" 'grep -q "skipped: paused for focus on nocturne" "$S/schedule.log"'
+F9=20260107T100000Z-f-in-pause
+shot start $F9 owner --free --past-cap < /dev/null > /dev/null; out=$(cycle 2>&1)
+check "a cycle the owner starts still runs on a paused team" '[ -s "$FAKE_PROMPT" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .oneshot)" = "$F9" ]'
+shot finish > /dev/null
+AGENT_KIT_NOW=$(($(date +%s) + 8 * 86400)) foc check
+check "the pause ends by itself" '[ ! -e "$S/paused" ]'
+foc pause --open --for nocturne > /dev/null; foc unpause > /dev/null
+check "or when the console ends it" '[ ! -e "$S/paused" ]'
+check "the tick checks focus every minute" 'grep -q "agent-kit-focus check" "$HERE/../systemd/agent-kit-tick.service"'
+rm -f "$T/etc/schedule" "$S/focus.ended"; [ -f "$T/schedule.focus.keep" ] && mv "$T/schedule.focus.keep" "$T/etc/schedule"
+cp "$T/cycles.focus.keep" "$S/ledger/cycles.jsonl"
+echo "stop owner halt 2026-01-07T05:00:00+00:00" > "$S/control"
+
 echo "== the owner's cap on proposals (kit 0.15)"
 PL3=20260104T100000Z-p-capped
 printf 'Max-proposals: 2\nRead docs/ and propose the first jobs.\n' | akb plan $PL3 owner > /dev/null

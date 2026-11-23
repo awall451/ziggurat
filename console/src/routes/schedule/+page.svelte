@@ -70,6 +70,9 @@
     if (!p.reachable && p.reachable !== null) return 'VM not reachable';
     if (!p.canSchedule) return p.kitVersion ? `kit ${p.kitVersion}: needs 0.9` : 'no kit status yet';
     if (drafts[p.id] !== undefined) return 'saving…';
+    // Focus mode (kit 0.27).
+    if (p.focus?.on) return 'in focus: back to back';
+    if (p.focus?.paused) return `paused for ${p.focus.paused.for}`;
     if (!s) return 'back to back';
     return `${s.slots.length} start time${s.slots.length === 1 ? '' : 's'}${p.cap != null ? ` · cap ${p.cap}` : ''}`;
   }

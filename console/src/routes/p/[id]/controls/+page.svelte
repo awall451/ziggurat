@@ -3,6 +3,24 @@
   import { when, idleText, stallText, pillState } from '$lib/format.js';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import RunCycle from '$lib/components/RunCycle.svelte';
+  import FocusDialog from '$lib/components/FocusDialog.svelte';
+  let focusOpen = $state(false);
+  async function stopFocus() {
+    busy = 'focus-stop';
+    problem = '';
+    done = '';
+    try {
+      const r = await fetch('/api/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop', project: p.id }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(out.message || 'That did not work');
+      done = out.detail;
+      await invalidateAll();
+    } catch (e) {
+      problem = e.message;
+    } finally {
+      busy = '';
+    }
+  }
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -322,6 +340,25 @@
         </div>
         <p class="small dim">One normal cycle now, with no job: the lead picks the work. The team goes back to how it was afterwards.</p>
       {/if}
+      {#if p.canFocus}
+        {#if st.focus?.on}
+          <div class="actions">
+            <span class="small">In focus: cycles back to back, at most {st.focus.on.perDay} a day.</span>
+            <span class="spacer"></span>
+            <button class="btn" onclick={stopFocus} disabled={!!busy}>{busy === 'focus-stop' ? 'Stopping…' : 'Stop focus'}</button>
+          </div>
+        {:else if st.focus?.paused}
+          <p class="small dim">Paused while {st.focus.paused.for} is in focus.</p>
+        {:else if st.state !== 'halted'}
+          <div class="actions">
+            <button class="btn" onclick={() => (focusOpen = true)} disabled={!!busy || !!data.focusNow}>Focus…</button>
+            <span class="small dim">{data.focusNow ? `${data.focusNow.name} is in focus now.` : 'Cycles back to back for a while; the others optionally paused.'}</span>
+          </div>
+        {/if}
+      {/if}
+      {#if focusOpen}
+        <FocusDialog id={p.id} name={p.name} cap={st.cap ?? null} typical={p.runCycle?.typical} onclose={() => (focusOpen = false)} ondone={(d) => ((focusOpen = false), (done = d))} />
+      {/if}
       {#if st.schedule}
         <p class="small dim">
           Cycles start at {st.schedule.slots} set time{st.schedule.slots === 1 ? '' : 's'} ({st.schedule.tz}){st.schedule.next ? `; the next is ${when(new Date(st.schedule.next).toISOString())}` : ''}.
@@ -330,7 +367,7 @@
       {:else if p.canSchedule}
         <p class="small dim">No schedule: cycles follow each other until the daily cap is used up. <a href="/schedule">Set times</a></p>
       {/if}
-      {#if !st.oneshot && st.state === 'idle' && idleText(st.idle, p.now)}
+      {#if !st.oneshot && st.state === 'idle' && !st.focus?.on && idleText(st.idle, p.now)}
         <p>{idleText(st.idle, p.now)}</p>
       {/if}
       {#if st.haltAfter && st.state !== 'halted'}

@@ -1,5 +1,5 @@
 [Unit]
-Description=Agent kit: every minute: a scheduled stop that is due, a one-shot job that lost its cycle or whose time has come, a cycle slot that is due
+Description=Agent kit: every minute: a scheduled stop that is due, a focus that has ended, a one-shot job that lost its cycle or whose time has come, a cycle slot that is due
 
 [Service]
 Type=oneshot
@@ -8,6 +8,7 @@ ExecStart=-/opt/agent-kit/bin/agent-kit-oneshot reap
 ExecStart=-/opt/agent-kit/bin/agent-kit-chat reap
 ExecStart=/opt/agent-kit/bin/agent-kit-halt --if-due
 # After the stop check, so that a slot never starts a cycle a due halt would cut at once.
+ExecStart=-/opt/agent-kit/bin/agent-kit-focus check
 ExecStart=-/opt/agent-kit/bin/agent-kit-schedule tick
 # A one-shot job set for a time (kit 0.10): after the slots, so a slot due this same minute goes first.
 ExecStart=-/opt/agent-kit/bin/agent-kit-oneshot due
