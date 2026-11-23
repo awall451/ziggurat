@@ -1407,6 +1407,60 @@ shot finish > /dev/null
 check "the tick runs the brake" 'grep -q "agent-kit-oneshot brake" "$HERE/../systemd/agent-kit-tick.service"'
 git -C "$T/ws" update-ref -d refs/heads/ready/from-first 2> /dev/null; rm -f "$S"/gate/results/from-first.json
 
+echo "== a stalled session, and the brake not counting the wait (kit 0.24)"
+stall() { AGENT_KIT_PATH=$FB:$PATH "$BIN/agent-kit-stall"; }
+SID=11111111-2222-4333-8444-555555555555
+PD=$T/home/.claude/projects/-ws
+mkdir -p "$PD/$SID/subagents" "$S/ledger"
+rm -f "$S/ledger/current" "$S/chat.keep"; [ -f "$S/chat" ] && mv "$S/chat" "$S/chat.keep"
+iso() { date -u -d "$1" +%FT%T.123Z; }
+said() { jq -nc --arg t "$(iso "$1")" '{type:"assistant", timestamp:$t, message:{content:"working"}}'; }
+limit() { jq -nc --arg t "$(iso "$1")" '{type:"system", subtype:"api_error", level:"error", timestamp:$t, retryInMs:30000, retryAttempt:1,
+  error:{status:429, message:"429 rate_limit_error", rateLimits:{rateLimitType:"five_hour", resetsAt:1795422000}}}'; }
+overloaded() { jq -nc --arg t "$(iso "$1")" --argjson n "$2" '{type:"system", subtype:"api_error", level:"error", timestamp:$t, retryInMs:9000, retryAttempt:$n,
+  error:{status:529, message:"529 overloaded_error", rateLimits:null}}'; }
+check "no session in progress: not stalled" '[ "$(stall)" = "{\"stalled\":false}" ]'
+echo "$SID $(date -Is -d '2 minutes ago')" > "$S/ledger/current"
+check "a session that has written nothing yet, two minutes in: not stalled" '[ "$(stall)" = "{\"stalled\":false}" ]'
+echo "$SID $(date -Is -d '40 minutes ago')" > "$S/ledger/current"
+check "nothing written forty minutes in: no progress" '[ "$(stall | jq -r "[.reason, .minutes] | join(\" \")")" = "no-progress 40" ]'
+echo "$SID $(date -Is -d '30 minutes ago')" > "$S/ledger/current"
+{ said '20 minutes ago'; limit '10 minutes ago'; limit '9 minutes ago'; limit '30 seconds ago'; } > "$PD/$SID.jsonl"
+out=$(stall)
+check "waiting on the usage window: usage limit, with the reset time" '[ "$(jq -r "[.stalled, .reason, .resetsAt, .limit, .session] | join(\" \")" <<< "$out")" = "true usage-limit 1795422000 five_hour $SID" ]'
+check "the wait counts from its first line" 'd=$(( $(jq -r .since <<< "$out") - $(date -d "10 minutes ago" +%s) )); [ "${d#-}" -le 3 ]'
+said 'now' > "$PD/$SID/subagents/agent-a1.jsonl"; touch -d "@$(($(date +%s) + 5))" "$PD/$SID/subagents/agent-a1.jsonl"
+check "a sub-agent that wrote after it: not stalled" '[ "$(stall)" = "{\"stalled\":false}" ]'
+rm -f "$PD/$SID/subagents/agent-a1.jsonl"
+{ said '5 minutes ago'; overloaded '2 minutes ago' 1; overloaded '1 minute ago' 4; } > "$PD/$SID.jsonl"
+check "other API errors: api-error, with the attempt" '[ "$(stall | jq -r "[.reason, .status, .attempt] | join(\" \")")" = "api-error 529 4" ]'
+{ said '50 minutes ago'; } > "$PD/$SID.jsonl"; touch -d '45 minutes ago' "$PD/$SID.jsonl"
+check "no line for 45 minutes: no progress" '[ "$(stall | jq -r "[.reason, .minutes] | join(\" \")")" = "no-progress 45" ]'
+{ limit '41 minutes ago'; } > "$PD/$SID.jsonl"; touch -d '40 minutes ago' "$PD/$SID.jsonl"
+check "an old error line is no retry in progress: no progress" '[ "$(stall | jq -r .reason)" = no-progress ]'
+said 'now' > "$PD/$SID.jsonl"
+check "a session that is writing: not stalled" '[ "$(stall)" = "{\"stalled\":false}" ]'
+check "a half-written last line does not break it" 'printf "{\"type\":\"assi" >> "$PD/$SID.jsonl"; [ "$(stall)" = "{\"stalled\":false}" ]'
+# The brake: a job with an estimate of 30 minutes (stop at 60) that has run 70,
+# 25 of them waiting on the usage window, is not stopped; once it has worked 60 it is.
+JW=20260105T140000Z-o-waiting
+tar -c -C "$T/work/j" . | shot start $JW owner --minutes 30 > /dev/null
+echo "$JW $(date -Is -d '70 minutes ago') halt" > "$S/oneshot"
+echo "$JW 1500 $(($(date +%s) - 60))" > "$S/oneshot.stall"
+{ limit '25 minutes ago'; limit 'now'; } > "$PD/$SID.jsonl"
+: > "$FAKE_LOG"; FAKE_ACTIVE=active shot brake > /dev/null
+check "time waiting on the usage window does not count against the estimate" '! grep -q "stop agent-kit-lead.service" "$FAKE_LOG" && w=$(cut -d" " -f2 "$S/oneshot.stall") && [ "$w" -ge 1555 ] && [ "$w" -le 1565 ]'
+check "nor is the job told to wrap up yet" '[ ! -e "$S/oneshot.wrap" ]'
+said 'now' > "$PD/$SID.jsonl"
+echo "$JW 0 $(date +%s)" > "$S/oneshot.stall"
+: > "$FAKE_LOG"; FAKE_ACTIVE=active shot brake > /dev/null
+check "working time past the stop is stopped as before" 'grep -q "stop agent-kit-lead.service" "$FAKE_LOG"'
+echo "$JW 1500 $(date +%s)" > "$S/oneshot.stall"
+shot finish > /dev/null
+check "the end of the job clears its waiting time" '[ ! -e "$S/oneshot.stall" ]'
+rm -f "$S/ledger/current" "$PD/$SID.jsonl"; [ -f "$S/chat.keep" ] && mv "$S/chat.keep" "$S/chat"
+echo "stop owner halt 2026-01-05T05:00:00+00:00" > "$S/control"
+
 echo "== the owner's cap on proposals (kit 0.15)"
 PL3=20260104T100000Z-p-capped
 printf 'Max-proposals: 2\nRead docs/ and propose the first jobs.\n' | akb plan $PL3 owner > /dev/null

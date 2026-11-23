@@ -2,7 +2,7 @@
   // "Task at hand": what the picked cycle is (or was) for, and, when no cycle
   // runs, why and what comes next. Built by lib/server/task.js. Every text here
   // that an agent wrote arrives as one short plain line and is shown as text.
-  import { usd, dur, ago, when, clock } from '$lib/format.js';
+  import { usd, dur, ago, when, clock, stallText } from '$lib/format.js';
 
   let { task, base } = $props();
   const run = $derived(task?.run || null);
@@ -108,7 +108,7 @@
     {:else if run}
       <div class="r1">
         <span class="cap">Task at hand</span>
-        <span class="pill {run.live ? 'running' : run.state}"><span class="dot"></span>{run.live ? 'Live' : STATE[run.state] || run.state}</span>
+        <span class="pill {run.live ? (run.stalled ? 'stalled' : 'running') : run.state}" title={run.stalled ? stallText(run.stalled, now) : null}><span class="dot"></span>{run.live ? (run.stalled ? 'Stalled' : 'Live') : STATE[run.state] || run.state}</span>
         <span class="kind">{kindOf(run)}</span>
         {#if run.slot}<span class="dim small mono" title="The schedule slot that started this cycle, in the schedule's time zone">{run.slot}</span>{/if}
         <span class="dim small">{run.live ? `started ${when(run.started)}` : `${when(run.started)} to ${hm(run.ended)}`}</span>

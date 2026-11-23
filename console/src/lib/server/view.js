@@ -56,6 +56,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
       idle: status.idle ? { ...status.idle, nextSlot } : null,
       schedule: schedule ? { tz: schedule.tz, slots: schedule.slots.length, next: nextSlot } : null,
       haltAfter: status.haltAfter || null,
+      // The cycle in progress is stuck, and why (kit 0.24).
+      stalled: status.stalled || null,
       vmNow: status.vmNow || null,
       error: status.error || null,
       // The VM is not this project's (kit PROJECT= names another one), or another entry shares it.

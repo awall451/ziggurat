@@ -131,6 +131,8 @@ export async function timeline({ view = 'day', date = null, from = null, to = nu
           typicalSecs: typicalSecs(cycles),
           past,
           running: Number.isFinite(since) ? { start: since } : null,
+          // The cycle or job in progress is stuck, and why (kit 0.24).
+          stalled: status.leadActive ? status.stalled || null : null,
           log: readSlotLog(p.paths.fleet, dataFrom, dataTo),
           atJobs: status.atJobs || [],
           // Backlog jobs (approved items, planning cycles set for a time), drawn with their estimate.

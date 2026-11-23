@@ -40,7 +40,9 @@
 # Markers from older kits have no third field and mean halt.
 # $STATE/oneshot.meta holds the running job's estimate ("id=", "minutes=", "brake=off");
 # $STATE/oneshot.wrap the wrap-up notice for the lead (owner-inbox-hook delivers it);
-# $STATE/oneshot.overrun the id of a job the brake stopped (lead-cycle notes it in the ledger).
+# $STATE/oneshot.overrun the id of a job the brake stopped (lead-cycle notes it in the ledger);
+# $STATE/oneshot.stall "<id> <seconds> <last look>": time the job spent waiting for the usage window (kit 0.24),
+# which does not count against its estimate.
 # A job set for a time has <id> ("<when> <from>"), <id>.job, and from kit 0.18 <id>.meta
 # and <id>.wait ("<reason> <dep> <last look> <seconds spent waiting for the owner>").
 set -uo pipefail
@@ -71,6 +73,7 @@ MAX_JOB=$((200 * 1024 * 1024))
 META=$STATE/oneshot.meta
 WRAP=$STATE/oneshot.wrap
 OVERRUN=$STATE/oneshot.overrun
+STALL=$STATE/oneshot.stall
 SHA_RE='^[0-9a-f]{40}$'
 if [ "$(id -u)" = 0 ]; then
   AG() { sudo -u agent -H git -C "$WORKSPACE" "$@"; } # the agents' workspace, read as the agent
@@ -176,7 +179,7 @@ waits_for() { # comma list
 end_job() { # $1 = how it ended, for the control line
   local id after
   read -r id _ after _ < "$MARK"
-  rm -f "$MARK" "$META" "$WRAP" "$OVERRUN"
+  rm -f "$MARK" "$META" "$WRAP" "$OVERRUN" "$STALL"
   [[ ${id:-} =~ $ANY_RE ]] || id=unknown
   if grep -q '^run oneshot ' "$STATE/control" 2>/dev/null; then
     if [ "${after:-}" = run ]; then
@@ -245,7 +248,7 @@ case "${1:-show}" in
     chmod 644 "$MARK.tmp"
     mv "$MARK.tmp" "$MARK"
     # The job's estimate, for the brake. Always written: nothing of an earlier job may stay.
-    rm -f "$WRAP" "$OVERRUN"
+    rm -f "$WRAP" "$OVERRUN" "$STALL"
     write_meta "$META" "$id"
     control "run oneshot $id $now"
     if ! systemctl start --no-block "$LEAD.service" > /dev/null 2>&1; then
@@ -385,7 +388,24 @@ case "${1:-show}" in
     minutes=$(meta_of "$META" minutes)
     [[ ${minutes:-} =~ ^[0-9]{1,4}$ ]] && [ "$minutes" -ge 1 ] || exit 0
     began=$(date -d "$since" +%s 2> /dev/null) || exit 0
-    ran=$(($(date +%s) - began))
+    # Time spent waiting for the subscription's usage window is not working
+    # time (kit 0.24): it moves the job's deadlines. The tick runs this every
+    # minute; each look that finds the job stalled on the window adds the time
+    # since the previous look (at most two minutes, should the tick have paused).
+    now=$(date +%s) waited=0 look=$now
+    if [ -f "$STALL" ]; then
+      read -r sid_ w_ l_ _ < "$STALL"
+      if [ "${sid_:-}" = "$id" ] && [[ ${w_:-} =~ ^[0-9]+$ ]]; then
+        waited=$w_
+        [[ ${l_:-} =~ ^[0-9]+$ ]] && look=$l_
+      fi
+    fi
+    if [ -x "$BIN/agent-kit-stall" ] && [ "$("$BIN/agent-kit-stall" 2> /dev/null | jq -r '.reason // ""' 2> /dev/null)" = usage-limit ]; then
+      step=$((now - look)); [ "$step" -ge 0 ] && [ "$step" -le 120 ] || step=60
+      waited=$((waited + step))
+    fi
+    printf '%s %s %s\n' "$id" "$waited" "$now" > "$STALL.tmp" && chmod 644 "$STALL.tmp" && mv "$STALL.tmp" "$STALL"
+    ran=$((now - began - waited))
     wrap_at=$((minutes * 90)); [ "$wrap_at" -ge $((minutes * 60 + 600)) ] || wrap_at=$((minutes * 60 + 600))
     stop_at=$((minutes * 120)); [ "$stop_at" -ge $((minutes * 60 + 1200)) ] || stop_at=$((minutes * 60 + 1200))
     if [ "$ran" -ge "$stop_at" ]; then

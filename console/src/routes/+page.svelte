@@ -1,5 +1,5 @@
 <script>
-  import { num, usd, dur, between, ago, waitingParts } from '$lib/format.js';
+  import { num, usd, dur, between, ago, waitingParts, stallText, pillState } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
 
   let { data } = $props();
@@ -23,7 +23,7 @@
   const count = (state) => data.projects.filter((p) => !p.hidden && p.status.state === state).length;
   const hiddenCount = $derived(data.projects.filter((p) => p.hidden).length);
 
-  const STATE_WORD = { running: 'Running', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
+  const STATE_WORD = { running: 'Running', stalled: 'Stalled', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
 </script>
 
 <div class="page">
@@ -56,7 +56,7 @@
           {#if p.hidden}
             <span class="pill idle">Hidden</span>
           {:else}
-            <span class="pill {p.status.state === 'checking' ? 'idle' : p.status.state}">{STATE_WORD[p.status.state] || p.status.state}</span>
+            <span class="pill {pillState(p.status)}" title={stallText(p.status.stalled, p.now) || null}>{STATE_WORD[pillState(p.status)] || p.status.state}</span>
           {/if}
         </div>
 

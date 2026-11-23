@@ -93,6 +93,8 @@ function runOf(project, tree, row, status) {
   return {
     ...what,
     live: !!s.live,
+    // The cycle in progress is stuck (kit 0.24): shown as Stalled, with why.
+    stalled: s.live ? status?.stalled || null : null,
     state: lead.status || null,
     number: row?.number ?? null,
     slot: line?.slot || null,

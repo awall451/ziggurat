@@ -58,6 +58,32 @@ export function clock(secs, now = Date.now()) {
   return d.toLocaleString([], sameDay ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
+const LIMIT_WORD = { five_hour: '5-hour window', seven_day: 'weekly limit', seven_day_opus: 'weekly limit', seven_day_sonnet: 'weekly limit' };
+
+/**
+ * What a stalled session waits on (status.stalled, kit 0.24), in one line:
+ * "Stalled: usage limit (5-hour window), resets at 1:00 PM". Null when not stalled.
+ */
+export function stallText(st, now = Date.now()) {
+  if (!st) return null;
+  if (st.reason === 'usage-limit') {
+    const what = LIMIT_WORD[st.limit] || (st.limit ? st.limit.replace(/_/g, ' ') : null);
+    const at = clock(st.resetsAt, now);
+    return `Stalled: usage limit${what ? ` (${what})` : ''}${at ? `, resets at ${at}` : ''}`;
+  }
+  if (st.reason === 'api-error') {
+    return `Stalled: API errors, retrying${st.attempt ? ` (attempt ${st.attempt})` : ''}`;
+  }
+  if (st.reason === 'no-progress') {
+    const min = st.minutes ?? (Number.isFinite(st.since) ? Math.floor((now / 1000 - st.since) / 60) : null);
+    return `Stalled: no progress${min != null ? ` for ${min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')} min`}` : ''}`;
+  }
+  return null;
+}
+
+/** The team's state for its pill: "stalled" for a running cycle that is stuck. */
+export const pillState = (status) => (status?.state === 'running' && status?.stalled ? 'stalled' : status?.state === 'checking' ? 'idle' : status?.state);
+
 const WAITING = [
   ['asks', 'question', 'questions'],
   ['escalations', 'escalation', 'escalations'],

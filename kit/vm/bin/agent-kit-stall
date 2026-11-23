@@ -1,0 +1,103 @@
+#!/bin/bash
+# agent-kit-stall: is the session in progress stuck, and why (kit 0.24). Read-only.
+# Run with sudo: it reads the agent's transcripts. Prints one JSON line:
+#
+#   {"stalled":false}
+#   {"stalled":true,"reason":"usage-limit","since":<unix>,"resetsAt":<unix|null>,"limit":"five_hour",...}
+#   {"stalled":true,"reason":"api-error","since":<unix>,"status":529,"attempt":5,...}
+#   {"stalled":true,"reason":"no-progress","since":<unix>,"minutes":42,...}
+#
+# The session is the lead cycle in progress ($STATE/ledger/current: normal,
+# one-shot and planning cycles) or else a chat turn ($STATE/chat). Its
+# transcripts are the session's own file and its sub-agents' files, under the
+# agent's ~/.claude/projects. What the newest line among them says decides:
+#   - Claude waiting on the subscription's usage window writes a
+#     `system/api_error` line with status 429 and `rateLimits` every 30 seconds
+#     until the window resets: usage-limit, with the reset time.
+#   - Any other `api_error` line (overloaded, 5xx, no network): api-error, with
+#     the retry attempt.
+#   - No line written by any of them for STALL_QUIET seconds: no-progress.
+# Without a session in progress it prints {"stalled":false}.
+set -uo pipefail
+PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
+export PATH
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+# shellcheck source=/dev/null
+source "$ETC/project.env"
+AGENT_HOME=${AGENT_KIT_AGENT_HOME:-/home/agent}
+PROJECTS=$AGENT_HOME/.claude/projects
+QUIET=${STALL_QUIET:-1800}
+# An error line older than this is not a retry in progress any more.
+FRESH=300
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+now=$(date +%s)
+
+none() { echo '{"stalled":false}'; exit 0; }
+
+# The session and when it started.
+sid="" started="" kind=cycle
+if [ -f "$STATE/ledger/current" ]; then
+  read -r sid started _ < "$STATE/ledger/current"
+elif [ -f "$STATE/chat" ]; then
+  read -r plan _ started _ < "$STATE/chat"
+  kind=chat
+  [[ ${plan:-} =~ ^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$ ]] && read -r sid _ < "$STATE/ledger/plans/$plan" 2> /dev/null
+fi
+[[ ${sid:-} =~ $UUID_RE ]] || none
+began=$(date -d "${started:-}" +%s 2> /dev/null) || began=$now
+
+# The session's transcripts: its own file and everything in its folder (sub-agents).
+# A chat turn more than an hour after the last starts a new session whose id the
+# kit learns only at the end: then the newest transcript written since the turn began.
+files=()
+for d in "$PROJECTS"/*/; do
+  [ -f "$d$sid.jsonl" ] && files+=("$d$sid.jsonl")
+  [ -d "$d$sid" ] && while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$d$sid" -name '*.jsonl' -type f -print0 2> /dev/null)
+done
+if [ "$kind" = chat ]; then
+  while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$PROJECTS" -maxdepth 2 -name '*.jsonl' -type f -newermt "@$began" -print0 2> /dev/null)
+fi
+
+newest="" mtime=0
+for f in "${files[@]}"; do
+  m=$(stat -c %Y "$f" 2> /dev/null) || continue
+  [ "$m" -gt "$mtime" ] && { mtime=$m; newest=$f; }
+done
+
+base() { jq -nc --arg sid "$sid" --arg kind "$kind" '{stalled:true, session:$sid, kind:$kind}'; }
+
+if [ -z "$newest" ]; then
+  # Nothing written at all yet.
+  [ $((now - began)) -ge "$QUIET" ] || none
+  base | jq -c --argjson since "$began" --argjson min $(((now - began) / 60)) '. + {reason:"no-progress", since:$since, minutes:$min}'
+  exit 0
+fi
+
+# The last lines of the newest file. A line can be large (tool output): read
+# the end of the file only and drop the first, cut-off line.
+tailjson() { tail -c 2000000 "$newest" | tail -n +2 | tail -n 400; }
+last=$(tail -c 2000000 "$newest" | tail -n 1)
+iso='(sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601? // null)'
+if [ $((now - mtime)) -le "$FRESH" ] && jq -e '.type == "system" and .subtype == "api_error"' <<< "$last" > /dev/null 2>&1; then
+  if jq -e '(.error.status == 429) or (.error.rateLimits != null)' <<< "$last" > /dev/null 2>&1; then
+    # Since when: the first line of the unbroken run of these at the end.
+    first=$(tailjson | jq -sc "[.[] | select(type == \"object\")] | (map((.type == \"system\" and .subtype == \"api_error\" and ((.error.status == 429) or (.error.rateLimits != null))) | not) | rindex(true)) as \$i | .[((\$i // -1) + 1):][0].timestamp // \"\"" 2> /dev/null)
+    since=$(jq -rn --argjson t "${first:-\"\"}" "\$t | $iso" 2> /dev/null)
+    [[ ${since:-} =~ ^[0-9]+$ ]] || since=$mtime
+    base | jq -c --argjson l "$last" --argjson since "$since" \
+      '. + {reason:"usage-limit", since:$since,
+            resetsAt:($l.error.rateLimits.resetsAt // null | if type == "number" then floor else null end),
+            limit:($l.error.rateLimits.rateLimitType // null | if type == "string" then .[0:40] else null end)}'
+  else
+    first=$(tailjson | jq -sc '[.[] | select(type == "object")] | (map((.type == "system" and .subtype == "api_error") | not) | rindex(true)) as $i | .[(($i // -1) + 1):][0].timestamp // ""' 2> /dev/null)
+    since=$(jq -rn --argjson t "${first:-\"\"}" "\$t | $iso" 2> /dev/null)
+    [[ ${since:-} =~ ^[0-9]+$ ]] || since=$mtime
+    base | jq -c --argjson l "$last" --argjson since "$since" \
+      '. + {reason:"api-error", since:$since,
+            status:($l.error.status // null | if type == "number" then . else null end),
+            attempt:($l.retryAttempt // null | if type == "number" then . else null end)}'
+  fi
+  exit 0
+fi
+[ $((now - mtime)) -ge "$QUIET" ] || none
+base | jq -c --argjson since "$mtime" --argjson min $(((now - mtime) / 60)) '. + {reason:"no-progress", since:$since, minutes:$min}'
