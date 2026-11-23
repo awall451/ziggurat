@@ -307,6 +307,24 @@
                   <button class="btn quiet sm" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'rejected' }, prop.pid)}>Reject</button>
                 {/if}
                 {#if plan.newest && !plan.ended}<button class="btn quiet sm" onclick={() => edit(prop)}>Change…</button>{/if}
+                {#if !prop.taken && prop.state !== 'rejected' && (prop.model || prop.ownerModel)}
+                  {@const placed = !!(prop.run && prop.run.rev === prop.rev && !prop.run.cancelled)}
+                  <span
+                    class="seg"
+                    title={placed
+                      ? 'The model of this job\'s tech lead. The job was already started or set for a time.'
+                      : `The model of this job's tech lead. The lead proposed ${prop.model || 'none'}${prop.ownerModel ? '; you chose ' + prop.ownerModel : ''}.`}
+                  >
+                    {#each ['sonnet', 'opus'] as m (m)}
+                      <button
+                        class="btn sm"
+                        class:on={(prop.ownerModel || prop.model) === m}
+                        disabled={!!busy || placed}
+                        onclick={() => post({ action: 'model', pid: prop.pid, model: m }, prop.pid)}
+                      >{m === 'sonnet' ? 'Sonnet' : 'Opus'}{prop.model === m && prop.ownerModel && prop.ownerModel !== m ? ' (lead)' : ''}</button>
+                    {/each}
+                  </span>
+                {/if}
                 <span class="spacer"></span>
                 {#if prop.state !== 'approved'}
                   <button class="btn primary sm" disabled={!!busy} onclick={() => post({ action: 'decide', pid: prop.pid, status: 'approved' }, prop.pid)}>Approve</button>

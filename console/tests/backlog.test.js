@@ -120,6 +120,31 @@ describe('proposals from the lead', () => {
     expect(plan.proposals[1].depends).toEqual([good]);
   });
 
+  it("shows the lead's model for a job, lets the owner choose the other, and tells the lead", () => {
+    const pid = '20260102T100900Z-b-444444';
+    fs.writeFileSync(path.join(out, `${pid}.md`), prop(fields({ Model: 'sonnet' })));
+    const other = '20260102T100950Z-b-555555';
+    fs.writeFileSync(path.join(out, `${other}.md`), prop(fields({ Model: 'the-biggest' })));
+    const find = (id) => bl.list(project).plans.find((x) => x.id === PLAN).proposals.find((x) => x.pid === id);
+    expect(find(pid)).toMatchObject({ model: 'sonnet', ownerModel: null });
+    // A model that is not offered is not shown at all.
+    expect(find(other).model).toBeNull();
+    expect(bl.jobText(find(pid))).toContain("Model for this job's tech lead: sonnet, as you proposed.");
+    expect(bl.jobText(find(other))).not.toContain('Model for');
+
+    expect(bl.setModel(user, project, pid, 'opus')).toEqual({ ok: true, model: 'opus' });
+    expect(find(pid).ownerModel).toBe('opus');
+    expect(bl.jobText(find(pid), null, bl.ownerModel(project, pid))).toContain('tech lead: opus. This is the owner\'s choice (you proposed sonnet): start that agent with model "opus".');
+    // Choosing the lead's own pick again is no override.
+    expect(bl.setModel(user, project, pid, 'sonnet').model).toBeNull();
+    bl.setModel(user, project, pid, 'opus');
+    expect(bl.setModel(user, project, pid, 'lead').model).toBeNull();
+    expect(() => bl.setModel(user, project, pid, 'fable')).toThrow('Choose sonnet or opus');
+    expect(() => bl.setModel(user, project, 'x; id', 'opus')).toThrow('Bad proposal id');
+    fs.rmSync(path.join(out, `${pid}.md`));
+    fs.rmSync(path.join(out, `${other}.md`));
+  });
+
   it('cuts a huge body', () => {
     const big = '20260102T100800Z-b-333333';
     fs.writeFileSync(path.join(out, `${big}.md`), prop(fields(), 'x'.repeat(30000)));

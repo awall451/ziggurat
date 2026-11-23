@@ -322,6 +322,11 @@ Normal cycles keep choosing and doing their own work as before.
 | `/var/lib/agent-kit/backlog-out/chat/<id>/<msgid>.md` | agent | The lead's answers (`Re`, `Status: ok|error`, `Date`, `---`, text) |
 | `/var/lib/agent-kit/ledger/plans/<id>` | agent | The planning cycle's session id |
 
+From kit 0.22 a proposal may carry `Model: sonnet` or `Model: opus` (`owner-backlog propose --model`): the
+model the lead would give the job's tech lead. The Planning tab shows it on the proposal, and the owner
+may choose the other before the job is started or set for a time. The choice is kept in the console
+(`<data>/backlog/<project>/models/`) and stated in the job's text, which is what the lead acts on.
+
 ### Chat with the lead
 
 After a planning cycle the owner can talk with the lead about its proposals. There is no process waiting

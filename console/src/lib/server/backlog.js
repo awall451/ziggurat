@@ -36,6 +36,9 @@ const plansDir = (project) => path.join(dirFor(project), 'plans');
 const chatDir = (project, plan) => path.join(dirFor(project), 'chat', plan);
 const decisionsDir = (project) => path.join(dirFor(project), 'decisions');
 const runsDir = (project) => path.join(dirFor(project), 'runs');
+// The owner's choice of model for a job's tech lead, where it differs from the lead's (kit 0.22).
+const modelsDir = (project) => path.join(dirFor(project), 'models');
+const MODELS = ['sonnet', 'opus'];
 const outDir = (project) => path.join(dirFor(project), 'out');
 
 function stamp(d = new Date()) {
@@ -266,8 +269,32 @@ export function parseProposal(file, pid, knownPlans) {
     risk: LINE(f.risk || '') || '',
     order: /^\d{1,3}$/.test(f.order || '') ? Number(f.order) : null,
     depends,
+    // The model the lead would give this job's tech lead (kit 0.22), or null.
+    model: MODELS.includes(f.model) ? f.model : null,
     text: p.body.slice(0, 8000)
   };
+}
+
+/** The owner's own choice of model for a proposal's tech lead, or null (the lead's pick stands). */
+export function ownerModel(project, pid) {
+  if (!PID_RE.test(pid || '')) return null;
+  const m = readJson(path.join(modelsDir(project), `${pid}.json`))?.model;
+  return MODELS.includes(m) ? m : null;
+}
+
+/** Choose the model for a proposal's tech lead; `lead` gives the choice back to the lead. */
+export function setModel(user, project, pid, model) {
+  if (!PID_RE.test(pid)) throw new Error('Bad proposal id');
+  if (!MODELS.includes(model) && model !== 'lead') throw new Error('Choose sonnet or opus');
+  const prop = proposal(project, pid);
+  if (!prop) throw new Error('No such proposal');
+  const run = readJson(path.join(runsDir(project), `${pid}.json`));
+  if (run && typeof run.jobId === 'string' && !run.cancelled && run.rev === prop.rev) throw new Error('This job was already started or set for a time');
+  const file = path.join(modelsDir(project), `${pid}.json`);
+  if (model === 'lead' || model === prop.model) fs.rmSync(file, { force: true });
+  else writeJson(file, { model, by: senderName(user), at: new Date().toISOString() });
+  audit(user, project.id, 'backlog-model', { pid, model, proposed: prop.model }, { ok: true, detail: null });
+  return { ok: true, model: ownerModel(project, pid) };
 }
 
 const atLeast = (version, want) => {
@@ -310,7 +337,7 @@ export async function decide(user, project, pid, status) {
     if (!issueId && atLeast(peekStatus(project.id)?.kitVersion, PLANNED_KIT)) {
       const issue = await createPlanned(project, user, {
         title: `${prop.order != null ? `${prop.order}. ` : ''}${prop.title}`,
-        body: jobText(prop),
+        body: jobText(prop, null, ownerModel(project, pid)),
         proposal: { pid, rev: prop.rev, plan: prop.plan }
       }).catch(() => null);
       if (issue) {
@@ -328,7 +355,13 @@ export async function decide(user, project, pid, status) {
 }
 
 /** The text of the one-shot job for an approved proposal (and its planned issue, if any). */
-export function jobText(prop, issueId = null) {
+export function jobText(prop, issueId = null, chosen = null) {
+  const model =
+    chosen && chosen !== prop.model
+      ? `Model for this job's tech lead: ${chosen}. This is the owner's choice${prop.model ? ` (you proposed ${prop.model})` : ''}: start that agent with model "${chosen}".`
+      : prop.model
+        ? `Model for this job's tech lead: ${prop.model}, as you proposed.`
+        : null;
   return [
     `Backlog item ${prop.pid} (revision ${prop.rev}), approved by the owner: ${prop.title}`,
     '',
@@ -336,6 +369,7 @@ export function jobText(prop, issueId = null) {
     prop.areas ? `Areas: ${prop.areas}` : null,
     prop.risk ? `Risk: ${prop.risk}` : null,
     prop.depends.length ? `Depends on: ${prop.depends.join(', ')}` : null,
+    model,
     '',
     prop.text,
     '',
@@ -380,7 +414,7 @@ function approvedProposal(project, pid) {
 export async function runNow(user, project, pid, oneshot, { noBrake = false } = {}) {
   const { prop, issueId } = approvedProposal(project, pid);
   const { flags } = flagsFor(project, prop, { noBrake });
-  const out = await oneshot(user, project, { text: jobText(prop, issueId), attachments: [], flags });
+  const out = await oneshot(user, project, { text: jobText(prop, issueId, ownerModel(project, pid)), attachments: [], flags });
   const at = new Date().toISOString();
   writeJson(path.join(runsDir(project), `${pid}.json`), { jobId: out.id, rev: prop.rev, at, scheduledFor: null, minutes: prop.minutes, noBrake: !!noBrake });
   if (issueId) noteJob(project, issueId, { id: out.id, startedAt: at });
@@ -392,7 +426,7 @@ export async function runAt(user, project, pid, at, skip = null, { noBrake = fal
   const { prop, issueId } = approvedProposal(project, pid);
   const epoch = checkTime(at);
   const { flags, after, unplaced } = flagsFor(project, prop, { noBrake });
-  const out = await scheduleOneshot(project, user, { text: jobText(prop, issueId), epoch, flags });
+  const out = await scheduleOneshot(project, user, { text: jobText(prop, issueId, ownerModel(project, pid)), epoch, flags });
   if (out.scheduled) await skipStart(user, project, skip);
   if (issueId && out.scheduled) noteJob(project, issueId, { id: out.id, scheduledFor: epoch });
   audit(user, project.id, 'job-at', { pid, id: out.id, at: new Date(epoch * 1000).toISOString() }, { ok: out.scheduled, detail: out.error });
@@ -593,6 +627,7 @@ export function list(project, status = null) {
     props.push({
       ...p,
       state,
+      ownerModel: ownerModel(project, pid),
       decidedRev: d?.rev ?? null,
       taken,
       run:

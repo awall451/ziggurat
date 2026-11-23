@@ -1163,6 +1163,9 @@ refuse "a proposal with a bad confidence" sh -c "echo x | $BIN/owner-backlog pro
 refuse "a proposal with a bad cost" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 30 --cost '1;id' --confidence low"
 refuse "a title on two lines" sh -c "echo x | $BIN/owner-backlog propose --title \"\$(printf 'a\nb')\" --minutes 30 --cost 1 --confidence low"
 refuse "a dependency that does not exist" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low --depends 20260101T000000Z-b-abcdef"
+refuse "a proposal with a model that is not offered" sh -c "echo x | $BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low --model fable"
+check "a proposal without a model has no model line" '! grep -q "^Model:" "$S/backlog-out/$B1.md"'
+check "the planning rules ask for the model of the job" 'grep -q -- "--model sonnet" <<< "$(ob plan $PL2)" && grep -q "The owner sees it and may choose the other" <<< "$(ob plan $PL2)"'
 refuse "a proposal without text" sh -c "$BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low < /dev/null"
 refuse "a proposal that is too long" sh -c "head -c 9000 /dev/zero | tr '\0' a | $BIN/owner-backlog propose --title T --minutes 30 --cost 1 --confidence low"
 B2=$(echo "Second step" | prop --order 2 --depends "$B1" | awk '{print $2}')
@@ -1401,7 +1404,7 @@ refuse "a proposal over the owner's cap" sh -c "echo 'Why: c.' | $BIN/owner-back
 check "without a cap the usual range" 'grep -q "Three to eight proposals" <<< "$(ob plan $PL)"'
 # How the estimates held up: only with three or more finished jobs that had one.
 cp "$S/ledger/cycles.jsonl" "$T/cycles.keep"
-for r in 600:10 1800:10 1200:10 9000:10; do jq -nc --argjson s "${r%%:*}" --argjson e "${r##*:}" '{start:"2026-01-01T00:00:00+00:00", kind:"oneshot", secs:$s, est_min:$e, halted:($s == 9000)}'; done >> "$S/ledger/cycles.jsonl"
+for r in 600:10 1800:10 1200:10 9000:10; do jq -nc --argjson s "${r%%:*}" --argjson e "${r##*:}" '{start:"2026-01-01T00:00:00+00:00", kind:"oneshot", secs:$s, est_min:$e, halted:($s == 9000)}'; done > "$S/ledger/cycles.jsonl"
 check "the lead is told how its estimates held up" 'grep -q "The last 3 jobs with an estimate ran 2 times their estimate" <<< "$(ob plan $PL)"'
 cp "$T/cycles.keep" "$S/ledger/cycles.jsonl"
 check "nothing is said about estimates without enough jobs" '! grep -q "times their estimate" <<< "$(ob plan $PL)"'
