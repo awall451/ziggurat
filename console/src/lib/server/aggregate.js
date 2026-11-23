@@ -4,6 +4,7 @@
 // read as data only and paths are checked before any file is served.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const DAY = 24 * 3600 * 1000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -230,6 +231,43 @@ const SHOT_FILE_RE = /^[A-Za-z0-9._-]{1,100}\.png$/;
 const TOPIC_RE = /^[A-Za-z0-9._/-]{1,120}$/;
 const ms = (iso) => Date.parse(iso || '');
 
+/** A gallery file name -> the screen it shows ("03-level-up.png" -> "level-up"). */
+export function screenKey(file) {
+  return String(file || '')
+    .replace(/\.png$/i, '')
+    .replace(/^\d+-/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+// sha256 of screenshots already hashed. A build folder never changes after the
+// pull (rsync keeps the times), so path + size + time names the content.
+const hashed = new Map();
+
+/** Screen key -> sha256 for the screenshots of one build folder. */
+function shotHashes(dir, files) {
+  const out = new Map();
+  for (const f of files) {
+    const file = path.join(dir, f);
+    try {
+      const st = fs.lstatSync(file);
+      if (!st.isFile()) continue;
+      const id = `${file}:${st.size}:${st.mtimeMs}`;
+      let h = hashed.get(id);
+      if (!h) {
+        h = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+        hashed.set(id, h);
+      }
+      out.set(screenKey(f), h);
+    } catch {
+      // unreadable: left out, so it shows as new rather than hidden
+    }
+  }
+  return out;
+}
+
 /**
  * Screenshots of every merged build (kit 0.13: the gate keeps them by sha and
  * writes shots/index, "<iso> <sha> <topic>"), grouped by the cycle that made
@@ -283,6 +321,32 @@ export function galleryCycles(project, live = null) {
   }
   const out = [...groups.values()];
   for (const g of out) g.builds.sort((a, b) => ms(b.at) - ms(a.at));
+
+  // What each cycle made or changed. The gate renders every screen again on
+  // every build, so a build folder is always the full set: a screenshot counts
+  // for a cycle only if its bytes differ from the newest build before the cycle.
+  const oldestFirst = [...out].sort((a, b) => (a.start == null ? -1 : b.start == null ? 1 : ms(a.start) - ms(b.start)));
+  let before = null;
+  for (const g of oldestFirst) {
+    for (const b of g.builds) {
+      const now = shotHashes(path.join(dir, b.sha), b.files);
+      if (!before) {
+        b.fresh = b.files.map((file) => ({ file, why: 'new' }));
+        b.removed = 0;
+      } else {
+        b.fresh = [];
+        for (const file of b.files) {
+          const was = before.get(screenKey(file));
+          if (was === undefined) b.fresh.push({ file, why: 'new' });
+          else if (was !== now.get(screenKey(file))) b.fresh.push({ file, why: 'changed' });
+        }
+        b.removed = [...before.keys()].filter((k) => !now.has(k)).length;
+      }
+      b.hashes = now;
+    }
+    before = g.builds[0].hashes;
+  }
+  for (const g of out) for (const b of g.builds) delete b.hashes;
   // Newest first; setup (before any cycle) last.
   out.sort((a, b) => (a.start == null ? 1 : b.start == null ? -1 : ms(b.start) - ms(a.start)));
   return out;

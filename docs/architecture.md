@@ -58,7 +58,9 @@ Screenshots (kit 0.13): on every merge the gate copies the build's `shots/*.png`
 `/var/lib/agent-kit/gate/shots/<sha>/` and adds `<time> <sha> <topic>` to `gate/shots/index`; only plain
 files under 10 MB with safe names, never through a link, newest 200 builds kept. The console pulls that folder
 and the Gallery groups the builds by cycle: a merge belongs to the newest cycle that started before it, and
-merges before the first cycle (the gate proof) are "setup". An issue's `--shot` names one of these files as
+merges before the first cycle (the gate proof) are "setup". Every build folder holds the full set, so the
+console compares each file's sha256 with the newest build before the cycle and shows only the new and changed
+ones; teams and the kit do nothing for this. An issue's `--shot` names one of these files as
 `shots/<sha>/<file>.png`.
 
 ## Publishing to a remote repository
