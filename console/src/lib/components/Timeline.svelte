@@ -26,7 +26,7 @@
     now = Date.now(),
     selected = null, // {project, slot}
     onmove = () => {}, // (project, slot index, 'HH:MM', the bar that was dragged)
-    onadd = () => {}, // (project, 'HH:MM', day name)
+    onadd = () => {}, // (project, 'HH:MM', day name, the moment clicked in ms)
     onselect = () => {}, // (project, slot index, the bar that was picked)
     onzoom = () => {}, // (from, to)
     onpan = () => {}, // (milliseconds, positive is later)
@@ -140,7 +140,7 @@
       if (!p.row?.editable) return;
       const t = timeAt(p.x0);
       const c = wallClock(p.row.tz, t);
-      onadd(p.row.id, timeOfDay(p.row.tz, t), DAYS[(new Date(Date.UTC(c.y, c.m - 1, c.d)).getUTCDay() + 6) % 7]);
+      onadd(p.row.id, timeOfDay(p.row.tz, t), DAYS[(new Date(Date.UTC(c.y, c.m - 1, c.d)).getUTCDay() + 6) % 7], t);
       return;
     }
     const a = timeAt(Math.min(p.x0, p.x1));
@@ -406,6 +406,7 @@
               <g
                 class="job {job.state}"
                 class:plan={job.kind === 'plan'}
+                class:once={job.kind === 'once'}
                 class:late={!!late || !!job.wait}
                 class:stopped={!!job.stopped}
                 class:clickable={!!onjob}
@@ -415,7 +416,7 @@
                 transform="translate({mv ? x(mv.t) - x(job.start) : 0} 0)"
                 role={onjob ? 'button' : 'img'}
                 tabindex={onjob ? 0 : -1}
-                aria-label="{job.kind === 'plan' ? 'Planning cycle' : `Planned job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}{movable(job) ? '. Arrow keys move it, Enter confirms' : ''}"
+                aria-label="{job.kind === 'plan' ? 'Planning cycle' : job.kind === 'once' ? 'One-time cycle' : `Planned job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}{movable(job) ? '. Arrow keys move it, Enter confirms' : ''}"
                 onpointerdown={(e) => grabJob(e, row, job)}
                 onpointerenter={(e) => showTip(e, row, job)}
                 onpointermove={(e) => pullJob(e, row, job)}
@@ -481,7 +482,7 @@
   {#if tip}
     <div class="tip panel lit" style="left: {tip.left}px; top: {tip.top}px" role="tooltip">
       <div class="tt">
-        {#if tip.job.kind === 'plan'}Planning cycle{:else}{tip.job.order != null ? `#${tip.job.order} · ` : ''}{tip.job.title}{/if}
+        {#if tip.job.kind === 'plan'}Planning cycle{:else if tip.job.kind === 'once'}One-time cycle{tip.job.pastCap ? ', even past the daily cap' : ''}{:else}{tip.job.order != null ? `#${tip.job.order} · ` : ''}{tip.job.title}{/if}
       </div>
       <div class="small dim">
         {tip.row.name} · {JOB_STATE[tip.job.state]} {clockText(tip.job.start)}{tip.job.state === 'done' ? ` to ${clockText(tip.job.end)}` : ''}{tip.job.state === 'running' && tip.row.stalled ? ` · ${stallText(tip.row.stalled, now)}` : ''}
@@ -631,6 +632,11 @@
   }
   .job.plan .est {
     stroke: var(--ink-2);
+  }
+  /* a one-time cycle (kit 0.26): a cycle at one time, drawn in the team's colour */
+  .job.once .est {
+    stroke: var(--row);
+    stroke-dasharray: none;
   }
   .job.clickable {
     cursor: pointer;
