@@ -51,7 +51,7 @@ describe('files from the fleet folder', () => {
     fs.mkdirSync(path.join(fleet, 'notes', 'agents', 'issues'), { recursive: true });
     fs.mkdirSync(path.join(fleet, 'shots', '2026-01-01'), { recursive: true });
     fs.writeFileSync(path.join(fleet, 'notes', 'agents', 'STATE.md'), '# State');
-    fs.writeFileSync(path.join(fleet, 'notes', 'agents', 'ESCALATIONS.md'), '# E\n\n## one\n\n## two\n');
+    fs.writeFileSync(path.join(fleet, 'notes', 'agents', 'ESCALATIONS.md'), '# E\n\n## one\n\n## two\n\n## three\n\nAsk: yes or no?\n\nResolved: 2026-01-02, the owner said yes.\n');
     fs.writeFileSync(path.join(fleet, 'notes', 'agents', 'issues', '001-a.md'), '---\nseverity: minor\n---\nx');
     fs.writeFileSync(path.join(fleet, 'notes', 'agents', 'issues', '002-b.md'), '---\nseverity: blocker\nstatus: fixed\n---\nx');
     fs.writeFileSync(path.join(fleet, 'notes', 'design.md'), '# Design');
@@ -75,7 +75,11 @@ describe('files from the fleet folder', () => {
     expect(s.last24).toEqual({ cycles: 1, costUsd: 1.23, merged: 1, failed: 1, minutes: 10 });
     expect(s.testsNow).toBe(10);
     expect(s.issuesOpen).toBe(1);
-    expect(s.escalations).toBe(2);
+  });
+
+  it('counts only the escalations that are still open', () => {
+    // Three entries are filed; the third carries a "Resolved:" line.
+    expect(summary(project).escalations).toBe(2);
   });
 
   it('does not count a gate proof as the team\'s merges or failures', () => {

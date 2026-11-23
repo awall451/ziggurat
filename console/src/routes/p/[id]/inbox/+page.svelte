@@ -129,6 +129,32 @@
     upload([...(e.dataTransfer?.files || [])]);
   }
 
+  // Escalations from the team's file: open ones wait for an answer or a dismissal.
+  const openEsc = $derived(data.escalations.filter((e) => e.open));
+  const closedEsc = $derived(data.escalations.filter((e) => !e.open));
+  const ESC_HOW = { answered: 'you answered', dismissed: 'you dismissed it', resolved: 'the team marked it resolved', question: 'its question is answered' };
+  let escFor = $state(null); // key of the entry being answered
+  let escText = $state('');
+  let escBusy = $state(false);
+  let escProblem = $state('');
+  async function escAct(action, key) {
+    escBusy = true;
+    escProblem = '';
+    try {
+      const out = await post('escalation', { action, key, text: action === 'answer' ? escText : undefined });
+      if (action === 'answer') {
+        if (!out.delivered) escProblem = `Saved, but not delivered yet: ${out.error || 'the VM did not accept it'}. Use Retry on the message.`;
+        escFor = null;
+        escText = '';
+      }
+      await invalidateAll();
+    } catch (e) {
+      escProblem = e.message;
+    } finally {
+      escBusy = false;
+    }
+  }
+
   async function post(path, body) {
     const res = await fetch(`${base}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const out = await res.json().catch(() => ({}));
@@ -513,14 +539,41 @@
 
     <section class="block">
       <h2>Escalations</h2>
-      <p class="dim small">Requests the team filed in its repo (ESCALATIONS.md). Read-only here.</p>
-      {#if data.escalations.trim()}
-        <details class="panel esc" open={p.summary.escalations > 0}>
-          <summary>{p.summary.escalations} filed</summary>
-          <div class="md">{@html md(data.escalations)}</div>
-        </details>
+      <p class="dim small">Requests the team filed in its repo (ESCALATIONS.md). Answer one and {lead} gets it as a note; dismiss one that needs no answer. Either way it stops waiting on you.</p>
+      {#if escProblem}<p class="s-failed small" role="alert">{escProblem}</p>{/if}
+      {#each openEsc as e (e.key)}
+        <article class="panel esc">
+          <h3>{e.title}</h3>
+          {#if e.body}<div class="md escbody">{@html md(e.body)}</div>{/if}
+          {#if escFor === e.key}
+            <textarea class="field" rows="3" placeholder="Your answer to {lead}" bind:value={escText}></textarea>
+            <div class="actions end">
+              <button class="btn quiet sm" disabled={escBusy} onclick={() => (escFor = null)}>Cancel</button>
+              <button class="btn primary sm" disabled={escBusy || !escText.trim()} onclick={() => escAct('answer', e.key)}>Send answer</button>
+            </div>
+          {:else}
+            <div class="actions end">
+              <button class="btn quiet sm" disabled={escBusy} onclick={() => escAct('dismiss', e.key)}>Dismiss</button>
+              <button class="btn sm" disabled={escBusy} onclick={() => ((escFor = e.key), (escText = ''))}>Answer…</button>
+            </div>
+          {/if}
+        </article>
       {:else}
-        <p class="dim">None.</p>
+        <p class="dim">{closedEsc.length ? 'None open.' : 'None.'}</p>
+      {/each}
+      {#if closedEsc.length}
+        <details class="panel esc">
+          <summary>Closed ({closedEsc.length})</summary>
+          {#each closedEsc as e (e.key)}
+            <div class="escdone">
+              <span class="grow">{e.title}</span>
+              <span class="small dim">{ESC_HOW[e.closed.how]}{e.closed.at ? `, ${when(e.closed.at)}` : ''}</span>
+              {#if e.closed.how === 'answered' || e.closed.how === 'dismissed'}
+                <button class="btn quiet sm" disabled={escBusy} onclick={() => escAct('reopen', e.key)}>Reopen</button>
+              {/if}
+            </div>
+          {/each}
+        </details>
       {/if}
     </section>
   </aside>
@@ -741,6 +794,33 @@
   .esc summary {
     cursor: pointer;
     color: var(--cyan);
+  }
+  article.esc {
+    margin-bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .esc h3 {
+    margin: 0;
+    font-size: 14px;
+  }
+  .escbody {
+    max-height: 260px;
+    overflow: auto;
+    font-size: 13px;
+  }
+  .escdone {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid var(--line);
+    margin-top: 6px;
+  }
+  .escdone .grow {
+    flex: 1;
+    min-width: 0;
   }
   @media (max-width: 1100px) {
     .cols {

@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { openEscalationCount } from './escalations.js';
 
 const DAY = 24 * 3600 * 1000;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -145,7 +146,6 @@ export function summary(project) {
   const issues = listDir(issuesDir)
     .filter((d) => d.isFile() && d.name.endsWith('.md'))
     .map((d) => parseIssue(d.name, readText(path.join(issuesDir, d.name), 20000)));
-  const esc = readText(path.join(fleet, 'notes', 'agents', 'ESCALATIONS.md'));
   const last = cycles.findLast((c) => c.kind !== 'chat') || null;
   return {
     last24: {
@@ -159,7 +159,8 @@ export function summary(project) {
     cyclesCounted: cycles.filter((c) => c.counted).length,
     lastCycle: last,
     issuesOpen: issues.filter((i) => !CLOSED.has(i.status) && i.severity !== 'n/a').length,
-    escalations: (esc.match(/^##\s/gm) || []).length
+    // Only the entries that still wait for the owner (see escalations.js).
+    escalations: openEscalationCount(project)
   };
 }
 
