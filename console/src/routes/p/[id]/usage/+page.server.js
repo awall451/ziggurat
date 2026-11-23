@@ -5,6 +5,8 @@ import { getProject, getPricing } from '$lib/server/config.js';
 import { listSessions, sessionUsage } from '$lib/server/transcripts.js';
 import { makeLabeler } from '$lib/server/theme.js';
 import { trials, parseGateLog } from '$lib/server/aggregate.js';
+import { readMetrics, recordMetrics, weekly } from '$lib/server/metrics.js';
+import { itemForJob } from '$lib/server/backlog.js';
 
 const MAX_CYCLES = 30;
 
@@ -44,5 +46,11 @@ export function load({ params }) {
     cycles.push({ ...u, number: s.number, state: s.state, ledgerUsd: s.costUsd });
   }
   cycles.reverse(); // oldest first, for the charts
-  return { cycles, trials: trials(project), maxCycles: MAX_CYCLES };
+  // Normally written after each pull; here too, so the history is never behind the ledger shown.
+  try {
+    recordMetrics(project, { itemForJob });
+  } catch {
+    /* the page still shows what is recorded */
+  }
+  return { cycles, trials: trials(project), maxCycles: MAX_CYCLES, overTime: weekly(readMetrics(project)).slice(0, 40) };
 }

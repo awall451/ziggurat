@@ -260,6 +260,10 @@ Then end the cycle with a short summary of what you proposed. Do not look for mo
 EOF
     if [ -s "$LEDGER" ]; then
       tail -n 10 "$LEDGER" | jq -r '"- \(.start // "?" | .[0:16])  \(.kind // (if .oneshot then "oneshot" else "normal" end))  \((.secs // 0) / 60 | floor) min  $\(.cost_usd // 0 | . * 100 | round / 100)  \(.turns // "?") turns"' 2>/dev/null
+      # How the estimates held up (kit 0.19): jobs that had one and ran to their end.
+      jq -rs '[.[] | select((.est_min // 0) > 0 and (.secs // 0) > 0 and .halted != true and .limited != true and .overrun != true)
+                   | (.secs / 60 / .est_min)] | .[-10:] | sort
+              | if length >= 3 then "\nThe last \(length) jobs with an estimate ran \(.[((length - 1) / 2 | floor)] * 10 | round / 10) times their estimate (the middle one). Allow for that in your estimates." else empty end' "$LEDGER" 2>/dev/null
     else
       echo "No cycles recorded yet."
     fi

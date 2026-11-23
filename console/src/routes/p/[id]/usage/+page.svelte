@@ -310,6 +310,45 @@
     </section>
   </div>
 
+  {#if data.overTime?.length}
+    <section class="panel block">
+      <h2>Over time</h2>
+      <div class="scroll-x">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>Week of</th><th>Kind</th><th class="num">Runs</th><th class="num">Median</th><th class="num">Median time</th>
+              <th class="num">Time against estimate</th><th class="num">Cost against estimate</th><th class="num">Written again</th>
+              <th class="num">Done again</th><th class="num">Merged / refused</th><th class="num">Estimate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each data.overTime as w (w.week + w.kind)}
+              <tr>
+                <td class="mono">{w.week}</td>
+                <td>{KIND_NAME[w.kind] || 'Chat with the lead'}</td>
+                <td class="num">{num(w.runs)}{#if w.notDone}<span class="dim small"> ({w.notDone} not finished)</span>{/if}</td>
+                <td class="num">{usd(w.medianUsd)}</td>
+                <td class="num">{w.medianMin == null ? '–' : `${num(w.medianMin)} min`}</td>
+                <td class="num">{w.timeRatio == null ? '–' : `${w.timeRatio}× (${w.estimated})`}</td>
+                <td class="num">{w.costRatio == null ? '–' : `${w.costRatio}×`}</td>
+                <td class="num">{w.kind === 'chat' ? '–' : `${pct(w.rewriteUsd, w.costUsd)}%`}</td>
+                <td class="num">{w.redo ? `${w.redo} (${usd(w.redoUsd)})` : '–'}</td>
+                <td class="num">{w.kind === 'chat' || w.kind === 'plan' ? '–' : `${w.merged} / ${w.refused}`}</td>
+                <td class="num">{usd(w.costUsd)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+      <p class="dim small">
+        One line per finished run is kept, so this goes back further than the cycles above. "Against estimate" is what a job took divided by
+        what the lead estimated, for the jobs that had an estimate and finished (how many, in brackets); the middle value. Weeks start on Monday,
+        UTC. The same figures as data: <a href="/p/{p.id}/usage/metrics.json">metrics.json</a>.
+      </p>
+    </section>
+  {/if}
+
   <section class="panel block">
     <h2>Cycles</h2>
     <div class="scroll-x">

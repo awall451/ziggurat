@@ -171,24 +171,38 @@ fi
 # Stopped by the brake (agent-kit-oneshot brake, kit 0.18): the job ran to twice its estimate.
 overrun=false
 [ -n "$oneshot" ] && [ "$(head -c 80 "$STATE/oneshot.overrun" 2>/dev/null)" = "$oneshot" ] && overrun=true
+# The job's estimate in minutes (agent-kit-oneshot writes it for this job), for
+# the history of estimates against what a job really took (kit 0.19).
+est=null
+if [ -n "$oneshot" ] && [ "$(sed -n 's/^id=//p' "$STATE/oneshot.meta" 2>/dev/null | head -1)" = "$oneshot" ]; then
+  m=$(sed -n 's/^minutes=//p' "$STATE/oneshot.meta" 2>/dev/null | head -1)
+  [[ ${m:-} =~ ^[0-9]{1,4}$ ]] && est=$m
+fi
 # A cycle that was stopped leaves an empty result file. jq prints nothing for
 # an empty file and still exits 0, so check for content first: otherwise a
 # halted cycle would get no ledger line at all.
 if ! { [ -s "$run.json" ] && jq -e -c --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched \
-      --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted --argjson overrun $overrun \
-  '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted, overrun:$overrun,
+      --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson limited $limited --argjson halted $halted --argjson overrun $overrun --argjson est $est \
+  '# Tokens of the whole run, sub-agents included, per model and summed (kit 0.19).
+   ((.modelUsage // {}) | if type == "object" then . else {} end
+     | map_values({in:(.inputTokens // 0), out:(.outputTokens // 0), cr:(.cacheReadInputTokens // 0),
+                   cw:(.cacheCreationInputTokens // 0), think:(.thinkingTokens // 0), usd:(.costUSD // 0)})) as $models |
+   {date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted, overrun:$overrun,
     oneshot:(if $oneshot == "" then null else $oneshot end),
     slot:(if $slot == "" then null else $slot end),
     kind:$kind, plan:(if $plan == "" then null else $plan end), touched_code:$touched,
     cost_usd:(.total_cost_usd // null), turns:(.num_turns // null),
+    est_min:$est,
+    tokens:(if ($models | length) == 0 then null else ([$models[]] | {in:(map(.in) | add), out:(map(.out) | add), cr:(map(.cr) | add), cw:(map(.cw) | add), think:(map(.think) | add)}) end),
+    models:(if ($models | length) == 0 then null else $models end),
     session:(.session_id // $sid), is_error:(.is_error // null),
     summary:((.result // "") | tostring | .[-600:])}' "$run.json" >> "$LEDGER" 2>/dev/null; }; then
   jq -nc --arg date "$today" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg oneshot "$oneshot" --arg slot "$slot" --arg kind "$kind" --arg plan "$plan" --argjson touched $touched --argjson rc $rc \
-     --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --argjson overrun $overrun --arg err "$(tail -c 600 "$run.err")" \
+     --argjson secs $((SECONDS - t0)) --argjson limited $limited --argjson halted $halted --argjson overrun $overrun --argjson est $est --arg err "$(tail -c 600 "$run.err")" \
      '{date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:$limited, counted:($limited | not), halted:$halted, overrun:$overrun,
        oneshot:(if $oneshot == "" then null else $oneshot end),
     slot:(if $slot == "" then null else $slot end), kind:$kind, plan:(if $plan == "" then null else $plan end),
-    touched_code:$touched, session:$sid, summary:((if $overrun then "stopped: the job ran to twice its estimate. " elif $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
+    touched_code:$touched, est_min:$est, session:$sid, summary:((if $overrun then "stopped: the job ran to twice its estimate. " elif $halted then "halted by the owner mid-cycle. " else "no json output: " end) + $err)}' >> "$LEDGER"
 fi
 echo "cycle done rc=$rc limited=$limited halted=$halted oneshot=${oneshot:-no} in $((SECONDS - t0))s"
 exit 0

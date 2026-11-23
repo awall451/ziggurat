@@ -37,6 +37,13 @@ function listDir(dir) {
   }
 }
 
+/** The ledger's token counts as plain numbers, or null. */
+function tokensOf(t) {
+  if (!t || typeof t !== 'object') return null;
+  const n = (v) => (Number.isFinite(v) && v >= 0 ? v : 0);
+  return { in: n(t.in), out: n(t.out), cr: n(t.cr), cw: n(t.cw), think: n(t.think) };
+}
+
 export function readCycles(fleet) {
   const out = [];
   for (const line of readText(path.join(fleet, 'cycles.jsonl')).split('\n')) {
@@ -53,6 +60,8 @@ export function readCycles(fleet) {
         session: c.session ?? null,
         limited: !!c.limited,
         halted: !!c.halted,
+        // The overrun brake stopped it (kit 0.18).
+        overrun: !!c.overrun,
         counted: c.counted !== false,
         isError: !!c.is_error,
         summary: c.summary || '',
@@ -60,6 +69,11 @@ export function readCycles(fleet) {
         kind: ['normal', 'oneshot', 'plan', 'chat'].includes(c.kind) ? c.kind : c.oneshot ? 'oneshot' : 'normal',
         oneshot: typeof c.oneshot === 'string' ? c.oneshot : null,
         plan: typeof c.plan === 'string' ? c.plan : null,
+        // A chat turn's own id.
+        chat: typeof c.chat === 'string' && /^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$/.test(c.chat) ? c.chat : null,
+        // Kit 0.19: the job's estimate in minutes, and the tokens of the whole run.
+        estMin: Number.isInteger(c.est_min) && c.est_min > 0 && c.est_min <= 1440 ? c.est_min : null,
+        tokens: tokensOf(c.tokens),
         // The schedule slot that started it (kit 0.9), as "daily@18:00".
         slot: typeof c.slot === 'string' && /^[a-z,]{3,27}@\d{2}:\d{2}$/.test(c.slot) ? c.slot : null
       });
