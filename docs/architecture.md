@@ -252,7 +252,7 @@ next cycle. Not while a cycle runs: that cycle takes inbox messages.
    work, resume or remove leftover worktrees). The rules: do this job and nothing else, leave interrupted work
    alone, plan, delegate as usual, ask with a default if unsure, wait for the gate with `gate-wait`, reply to
    the message, end. The team's own `lead-cycle.md` is not changed, and a normal cycle's prompt is the same
-   as before.
+   as before. (From kit 0.23 the cycle's number comes right after the notice; see "The cycle's number".)
 3. When the cycle ends for any reason, the unit's `ExecStopPost` runs `agent-kit-oneshot finish`. On a halted
    team it writes `stop` again and no second cycle starts. On an idle team it writes `run after one-shot job
    <id> ...` and starts the lead timer again (if it is enabled): the next normal cycle comes 15 minutes later,
@@ -549,6 +549,16 @@ or null). Planning and chat lines also carry `touched_code`.
 From kit 0.19 a cycle's line also has `tokens` (input, output, cache read, cache write and thinking of the
 whole run, sub-agents included), `models` (the same per model, with Claude Code's own cost figure) and
 `est_min` (the estimate of a job that had one, else null).
+
+### The cycle's number (kit 0.23)
+
+`lead-cycle` tells the lead which cycle this is: one short paragraph, first in a normal cycle's prompt and
+right after the notice of a one-shot or planning cycle. The number is the cycle's place in the ledger,
+counted as the console counts it: every counted cycle with a session (normal, one-shot, planning), plus
+one. A try that hit a usage limit takes no number. The lead uses it in its report, its notes, its briefs
+and its branch names, so the number the owner sees in the console is the number the lead writes. Before
+this, each lead kept its own count, which drifted (one skipped planning cycles, another early one-shot
+jobs). Earlier entries in a team's notes keep their old numbers.
 
 ### Cost rules from the kit (kit 0.20)
 

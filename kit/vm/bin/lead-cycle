@@ -115,6 +115,17 @@ fi
 if [ -x "$KIT/bin/agent-kit-rules" ]; then
   rules=$("$KIT/bin/agent-kit-rules" lead "$kind" 2>/dev/null) && [ -n "$rules" ] && prompt+=$'\n\n'"$rules"
 fi
+# The cycle's number (kit 0.23): its place in the ledger, counted the way the
+# owner's console counts (every counted cycle with a session: normal, one-shot
+# and planning). Leads used to keep their own count, which drifted from the
+# console's; now they are told the number and use it.
+n_cycle=$(jq -s '[.[] | select(.counted != false and (.session // "") != "")] | length' "$LEDGER" 2>/dev/null)
+[[ ${n_cycle:-} =~ ^[0-9]+$ ]] || n_cycle=0
+number="**This is cycle $((n_cycle + 1)).** The owner's console counts every cycle of this team: normal cycles,
+one-shot jobs and planning cycles. Use this number wherever you number this cycle: your report and
+cycle summary, STATE.md, the journal, briefs to your agents, branch and note names. If your own notes
+count differently, this number wins from now on. Do not renumber earlier entries; note the change of
+count once in the journal."
 budget=$CYCLE_BUDGET_USD
 tools=()
 if [ -n "$plan" ]; then
@@ -126,7 +137,7 @@ if [ -n "$plan" ]; then
     rm -f "$STATE/ledger/current"
     echo "planning cycle $plan: could not build its prompt: not running"; exit 1
   fi
-  prompt=$head$'\n\n'$prompt$'\n\n'$job
+  prompt=$head$'\n\n'$number$'\n\n'$prompt$'\n\n'$job
   budget=${PLAN_BUDGET_USD:-2}
   tools=(--tools "$PLAN_TOOLS")
   mkdir -p "$STATE/ledger/plans"
@@ -141,7 +152,9 @@ elif [ -n "$oneshot" ]; then
     rm -f "$STATE/ledger/current"
     echo "one-shot job $oneshot: could not build its prompt: not running"; exit 1
   fi
-  prompt=$head$'\n\n'$prompt$'\n\n'$job
+  prompt=$head$'\n\n'$number$'\n\n'$prompt$'\n\n'$job
+else
+  prompt=$number$'\n\n'$prompt
 fi
 settings=()
 [ -f "$KIT/lead-settings.json" ] && settings=(--settings "$KIT/lead-settings.json")
