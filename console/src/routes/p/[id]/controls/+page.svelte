@@ -224,6 +224,8 @@
     // Kit 0.10: shown only when the VM reports them.
     ['PLAN_BUDGET_USD', 'Budget per planning cycle, USD', 'For "Find what to do next" on the Planning tab. Keep it small.'],
     ['CHAT_BUDGET_USD', 'Budget per chat answer, USD', 'Each message to the lead in a planning chat.'],
+    // Kit 0.21.
+    ['CHAT_EFFORT', 'Thinking effort of a chat answer', 'low, medium, high, xhigh or max. Medium is the usual. Thinking is a small part of what a chat answer costs.'],
     ['FREE_TAKE_APPROVED', 'Normal cycles may take approved proposals', 'Off: approved items wait for Run now or a set time. On: a normal cycle may pick one up by itself.']
   ];
   const ACTION_BACKLOG = {

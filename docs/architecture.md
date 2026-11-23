@@ -346,8 +346,15 @@ what it read.
    turn is gone. A cycle may start while a turn answers. A halt stops a turn too. With a cycle running
    next to a turn, its `touched_code` is null: the workspace changes for the cycle's own reasons.
 
-On a subscription the prompt cache lasts an hour. A turn later than that reads the whole session again at
-the full rate, so the first answer after a long pause costs more than the next ones.
+On a subscription the prompt cache lasts an hour. A turn later than that would read the whole session
+again at the full rate (measured: 40 to 65 thousand tokens). So from kit 0.21 a turn that comes more
+than an hour after the session last ran does not resume it: `lead-chat` starts a new session from
+`owner-backlog chat <plan> <msg> --fresh` (the planning request, the plan's proposals with the owner's
+decisions, the last twelve exchanges of the chat), and writes the new session id to `ledger/plans/<plan>`,
+so later turns resume that one. The lead reads code again only when a question needs it.
+
+`CHAT_EFFORT` (agent-kit-caps, Controls) is the thinking effort of a chat answer; `medium`, the default, is
+what Claude Code uses anyway. Thinking was about 2% of what chat costs, so a lower level saves little.
 
 ### Scheduled one-shot job
 

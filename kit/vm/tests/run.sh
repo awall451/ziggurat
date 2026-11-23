@@ -1234,6 +1234,31 @@ check "with a cycle running next to it, a chat turn does not claim the workspace
 check "a chat turn does not pose as the cycle's lead session" '! grep -q ZIGGURAT_LEAD_SESSION=  "$BIN/lead-chat" || grep -q "unset ZIGGURAT_LEAD_SESSION" "$BIN/lead-chat"'
 rm -f "$S/ledger/current"
 chat finish
+# Kit 0.21: after a long pause a chat turn starts a new session from the proposals and the chat so far.
+check "a chat turn asks for medium effort unless the owner set another" '[ "$(grep -A1 -x -- --effort "$FAKE_ARGS" | tail -1)" = medium ]'
+M6=20260102T140000Z-c-ffffff
+echo "Back after a break. Code word JADE." | chat say $PL2 $M6 owner > /dev/null
+rm -f "$FAKE_PROMPT"
+AGENT_KIT_CHAT_FRESH_SECS=-1 FAKE_COST=0.3 FAKE_RESULT="Welcome back" AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+SID3=$(cat "$S/ledger/plans/$PL2")
+check "after a long pause the turn starts a new session" '[ "$SID3" != "$SID2" ] && [ "$(grep -A1 -x -- --session-id "$FAKE_ARGS" | tail -1)" = "$SID3" ] && ! grep -qx -- --resume "$FAKE_ARGS"'
+check "the new session is told what the old one knew" 'grep -q "no longer" "$FAKE_PROMPT" && grep -q "^## Your proposals" "$FAKE_PROMPT" && grep -q MICA "$FAKE_PROMPT" && grep -q "Made it smaller" "$FAKE_PROMPT"'
+check "the new message comes last, once" '[ "$(grep -c JADE "$FAKE_PROMPT")" = 1 ] && [ "$(grep -n JADE "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "Made it smaller" "$FAKE_PROMPT" | tail -1 | cut -d: -f1)" ]'
+check "it still starts with the chat notice" '[ "$(head -c 22 "$FAKE_PROMPT")" = "[agent-kit owner chat]" ]'
+L=$(tail -1 "$S/ledger/cycles.jsonl")
+check "ledger: the new session, with its whole cost" '[ "$(jq -r .session <<< "$L")" = "$SID3" ] && [ "$(jq -r ".cost_usd * 100 | round" <<< "$L")" = 30 ] && [ "$(jq -r .plan <<< "$L")" = "$PL2" ]'
+check "the answer is written as for any turn" 'grep -q "Welcome back" "$S/backlog-out/chat/$PL2/$M6.md"'
+chat finish
+"$BIN/agent-kit-caps" set CHAT_EFFORT low > /dev/null
+M7=20260102T140100Z-c-abcdef
+echo "And one more." | chat say $PL2 $M7 owner > /dev/null
+FAKE_COST=0.4 FAKE_RESULT="Sure" AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+check "the next turn resumes the new session" '[ "$(grep -A1 -x -- --resume "$FAKE_ARGS" | tail -1)" = "$SID3" ] && [ "$(cat "$S/ledger/plans/$PL2")" = "$SID3" ]'
+check "with the effort the owner set" '[ "$(grep -A1 -x -- --effort "$FAKE_ARGS" | tail -1)" = low ]'
+check "ledger: only this turn's cost of the new session" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r ".cost_usd * 100 | round")" = 10 ]'
+chat finish
+refuse "CHAT_EFFORT must be a known level" "$BIN/agent-kit-caps" set CHAT_EFFORT tiny
+check "the effort is listed with the other settings" '"$BIN/agent-kit-caps" show | grep -qx "CHAT_EFFORT=low"'
 shot finish > /dev/null
 check "a cycle starts while a chat turn is answering" 'echo "$PL2 $M4 2026-01-02T13:01:00+00:00" > "$S/chat"; echo "run 2026-01-02T13:02:00+00:00" > "$S/control"; : > "$S/ledger/cycles.jsonl"; cycle > /dev/null 2>&1; [ -s "$FAKE_PROMPT" ]'
 rm -f "$S/chat"; echo "stop owner 2026-01-02T13:03:00+00:00" > "$S/control"

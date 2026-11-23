@@ -11,7 +11,9 @@
 #   owner-backlog list | show <pid>
 #   owner-backlog prompt                              protocol, recent cycle numbers, proposals
 #   owner-backlog plan <plan-id> [--head]             the rules of a planning cycle
-#   owner-backlog chat <plan-id> <msgid>              the notice of a chat turn, with the message
+#   owner-backlog chat <plan-id> <msgid> [--fresh]    the notice of a chat turn, with the message;
+#                                                     --fresh: for a new session after a long pause, with
+#                                                     the proposals and the chat so far (kit 0.21)
 #
 # Layout: see agent-kit-backlog. Everything this script writes is data the
 # console checks; nothing here can change what the owner decided.
@@ -271,14 +273,69 @@ EOF
 
   chat)
     id=${2:-} msg=${3:-}
-    [[ $id =~ $PLAN_RE ]] && [[ $msg =~ $MSG_RE ]] && [ -f "$BL/chat/$id/$msg.md" ] || die "usage: owner-backlog chat <plan-id> <msgid>"
-    cat <<EOF
+    [[ $id =~ $PLAN_RE ]] && [[ $msg =~ $MSG_RE ]] && [ -f "$BL/chat/$id/$msg.md" ] || die "usage: owner-backlog chat <plan-id> <msgid> [--fresh]"
+    fresh=0
+    if [ "${4:-}" = "--fresh" ]; then fresh=1; elif [ -n "${4:-}" ]; then die "usage: owner-backlog chat <plan-id> <msgid> [--fresh]"; fi
+    if [ "$fresh" = 1 ]; then
+      # A new session after a long pause (kit 0.21): the planning session would
+      # have to be read again in full, so this one starts from what matters of it.
+      cat <<EOF
+[agent-kit owner chat] This is the owner, through the kit, about the proposals of a planning session.
+You are the lead of this project's team. You planned this work in an earlier session that is no longer
+in your memory: the pause since was long, and reading all of it again would cost more than it is worth.
+Below are the planning request, your proposals as they stand with the owner's decisions, and the chat
+so far. Your charter is \`/opt/agent-kit/CHARTER.md\` and your notes are in \`docs/agents/STATE.md\`: read
+them, or code, only when the owner's message needs it.
+
+Answer in a few plain lines. You may change proposals (\`owner-backlog revise <pid>\`) or add new ones
+(\`owner-backlog propose\`) when the owner asks or agrees; say which you changed. No code: no edits, no
+branches, no agents. The owner decides on the backlog page.
+
+## The planning request
+
+EOF
+      focus=$(body "$BL/plans/$id/request.md" 2>/dev/null | head -c 4000)
+      if [ -n "${focus//[[:space:]]/}" ]; then printf '%s\n' "$focus"; else echo "Find what to do next."; fi
+      printf '\n## Your proposals\n\n'
+      n=0
+      for f in "$OUT"/*.md; do
+        pid=$(basename "$f" .md)
+        [[ $pid =~ $PID_RE ]] && [ "$(header "$f" Plan)" = "$id" ] || continue
+        n=$((n + 1))
+        printf '### `%s` %s\n' "$pid" "$(header "$f" Title)"
+        printf 'Status: %s. Revision %s. Estimate: %s minutes, $%s, confidence %s.\n\n' "$(status_of "$pid")" "$(header "$f" Rev)" "$(header "$f" Minutes)" "$(header "$f" Cost-usd)" "$(header "$f" Confidence)"
+        body "$f" | head -c 3000
+        printf '\n\n'
+      done
+      [ "$n" -gt 0 ] || printf 'None on file.\n\n'
+      printf '## The chat so far (oldest first)\n\n'
+      n=0
+      for f in "$BL/chat/$id"/*.md; do
+        m=$(basename "$f" .md)
+        [[ $m =~ $MSG_RE ]] && [ "$m" != "$msg" ] || continue
+        n=$((n + 1))
+      done
+      skip=$((n > 12 ? n - 12 : 0)) i=0
+      [ "$skip" -gt 0 ] && printf '(%s earlier messages left out.)\n\n' "$skip"
+      for f in "$BL/chat/$id"/*.md; do
+        m=$(basename "$f" .md)
+        [[ $m =~ $MSG_RE ]] && [ "$m" != "$msg" ] || continue
+        i=$((i + 1)); [ "$i" -gt "$skip" ] || continue
+        printf '**Owner:**\n'; body "$f" | head -c 2000; printf '\n\n'
+        if [ -f "$OUT/chat/$id/$m.md" ] && [ "$(header "$OUT/chat/$id/$m.md" Status)" = ok ]; then
+          printf '**You:**\n'; body "$OUT/chat/$id/$m.md" | head -c 2000; printf '\n\n'
+        fi
+      done
+      [ "$n" -gt 0 ] || printf 'Nothing yet.\n\n'
+    else
+      cat <<EOF
 [agent-kit owner chat] This is the owner, through the kit, about the proposals of this planning
 session. Answer in a few plain lines. You may change proposals (\`owner-backlog revise <pid>\`) or add
 new ones (\`owner-backlog propose\`) when the owner asks or agrees; say which you changed. Still no
 code: no edits, no branches, no agents. The owner decides on the backlog page.
 
 EOF
+    fi
     # What the team is doing right now, so the lead can keep it in mind.
     job=""
     [ -r "$STATE/oneshot" ] && read -r job jsince _ < "$STATE/oneshot"

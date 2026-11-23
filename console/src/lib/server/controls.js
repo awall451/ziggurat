@@ -6,9 +6,9 @@ import { invalidateStatus, getStatus } from './live.js';
 import { sendOneshot, startOneshot, markStarted } from './feedback.js';
 import { readToken } from './token.js';
 
-export const CAP_KEYS = ['MAX_CYCLES_PER_DAY', 'CYCLE_BUDGET_USD', 'LEAD_MODEL', 'FALLBACK_MODEL', 'PLAN_BUDGET_USD', 'CHAT_BUDGET_USD', 'FREE_TAKE_APPROVED'];
+export const CAP_KEYS = ['MAX_CYCLES_PER_DAY', 'CYCLE_BUDGET_USD', 'LEAD_MODEL', 'FALLBACK_MODEL', 'PLAN_BUDGET_USD', 'CHAT_BUDGET_USD', 'FREE_TAKE_APPROVED', 'CHAT_EFFORT'];
 // Shown only when the VM has them (kit 0.10).
-export const BACKLOG_CAP_KEYS = ['PLAN_BUDGET_USD', 'CHAT_BUDGET_USD', 'FREE_TAKE_APPROVED'];
+export const BACKLOG_CAP_KEYS = ['PLAN_BUDGET_USD', 'CHAT_BUDGET_USD', 'FREE_TAKE_APPROVED', 'CHAT_EFFORT'];
 
 /** Free text becomes safe, separate words for the kit script's arguments. */
 function words(text, fallback) {
@@ -125,7 +125,9 @@ export function setCap(user, project, key, value) {
           ? /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(v) && Number(v) > 0
           : key === 'FREE_TAKE_APPROVED'
             ? /^[01]$/.test(v)
-            : /^[a-z][a-z0-9.-]{1,39}$/.test(v);
+            : key === 'CHAT_EFFORT'
+              ? /^(low|medium|high|xhigh|max)$/.test(v)
+              : /^[a-z][a-z0-9.-]{1,39}$/.test(v);
   if (!ok) throw new Error('That value is not allowed');
   return run(user, project, 'set-cap', 'agent-kit-caps', ['set', key, v], { key, value: v });
 }

@@ -1,7 +1,10 @@
 #!/bin/bash
 # lead-chat: one chat turn of the lead (kit 0.10). Runs as `agent` from
 # agent-kit-chat.service, which agent-kit-chat starts for one owner message.
-# Resumes the planning cycle's own session for one answer.
+# Resumes the chat's session for one answer: the planning cycle's own, or,
+# after a pause of more than an hour, a new one that starts from the
+# proposals and the chat so far (kit 0.21). The prompt cache lives one hour:
+# after that a resumed session is paid for again in full.
 set -uo pipefail
 ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 KIT=${AGENT_KIT_HOME:-/opt/agent-kit}
@@ -31,7 +34,13 @@ reply() { # $1 status ok|error; body on stdin
   mv "$out/.$msg.tmp" "$out/$msg.md"
 }
 
-prompt=$("$KIT/bin/owner-backlog" chat "$plan" "$msg" 2>/dev/null)
+# How long since this session last ran? Over an hour: start a new one.
+fresh=()
+last=$(jq -rs --arg s "$sid" '[.[] | select(.session == $s) | .end // empty] | last // empty' "$LEDGER" 2>/dev/null)
+if [ -n "$last" ] && t=$(date -d "$last" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -gt "${AGENT_KIT_CHAT_FRESH_SECS:-3600}" ]; then
+  fresh=(--fresh)
+fi
+prompt=$("$KIT/bin/owner-backlog" chat "$plan" "$msg" "${fresh[@]}" 2>/dev/null)
 [ -n "$prompt" ] || { echo "could not build the chat prompt" | reply error; exit 1; }
 settings=()
 [ -f "$KIT/lead-settings.json" ] && settings=(--settings "$KIT/lead-settings.json")
@@ -43,6 +52,16 @@ busy() { [ -s "$STATE/ledger/current" ]; }
 before=$(workspace_print); busy && before=
 # The session's total so far: a resumed run reports the total of all its runs.
 prev=$(jq -s --arg s "$sid" '[.[] | select(.session == $s) | .cost_usd // 0] | add // 0' "$LEDGER" 2>/dev/null || echo 0)
+session=(--resume "$sid")
+if [ ${#fresh[@]} -gt 0 ]; then
+  old=$sid
+  sid=$(cat /proc/sys/kernel/random/uuid)
+  session=(--session-id "$sid")
+  prev=0
+fi
+# Thinking effort of a chat answer (agent-kit-caps CHAT_EFFORT): medium is Claude Code's own default.
+effort=()
+[[ ${CHAT_EFFORT:-medium} =~ ^(low|medium|high|xhigh|max)$ ]] && effort=(--effort "${CHAT_EFFORT:-medium}")
 start=$(date -Is); t0=$SECONDS
 run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)-chat
 # Not the cycle's lead session: the inbox hook must not deliver owner
@@ -50,15 +69,21 @@ run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)-chat
 unset ZIGGURAT_LEAD_SESSION
 export CLAUDE_CODE_RETRY_WATCHDOG=1
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
-# After a pause of more than an hour the prompt cache is gone and the whole
-# session is read again: that first answer costs more (kit 0.12: default 3).
 budget=${CHAT_BUDGET_USD:-3}
-claude -p "$prompt" --resume "$sid" "${settings[@]}" --tools "$CHAT_TOOLS" \
-  --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" \
+claude -p "$prompt" "${session[@]}" "${settings[@]}" --tools "$CHAT_TOOLS" \
+  --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" "${effort[@]}" \
   --dangerously-skip-permissions \
   --max-budget-usd "$budget" \
   --output-format json > "$run.json" 2> "$run.err"
 rc=$?
+# The new session is the chat's session from now on, once it has answered or at least exists.
+if [ ${#fresh[@]} -gt 0 ]; then
+  if [ -s "$run.json" ] && jq -e '.session_id // .total_cost_usd // .result' "$run.json" > /dev/null 2>&1; then
+    printf '%s\n' "$sid" > "$STATE/ledger/plans/$plan"
+  else
+    sid=$old
+  fi
+fi
 touched=false
 if [ -z "$before" ] || busy; then touched=null
 elif [ "$(workspace_print)" != "$before" ]; then touched=true; fi
@@ -69,7 +94,7 @@ if [ -s "$run.json" ] && jq -e . "$run.json" > /dev/null 2>&1; then
     subtype=$(jq -r '.subtype // ""' "$run.json")
     spent=$(jq -r --argjson prev "${prev:-0}" '((.total_cost_usd // 0) - $prev) | if . < 0 then 0 else . end | . * 100 | round / 100' "$run.json")
     if [ "$subtype" = error_max_budget_usd ]; then
-      printf 'Stopped at the chat budget ($%s) before answering. After a pause of more than an hour the whole planning session is read again, which costs more (about $%s this time). Raise "Budget per chat answer" on Controls, or send it again: the session is now in the cache, so the next try should cost less.\n' "$budget" "$spent" | reply error
+      printf 'Stopped at the chat budget ($%s) before answering (about $%s spent). Raise "Budget per chat answer" on Controls, or send it again: what it read is now in the cache, so the next try should cost less.\n' "$budget" "$spent" | reply error
     else
       { echo "The lead did not answer (${subtype:-rc=$rc})."; jq -r '(.errors // []) | map(tostring) | join("; ")' "$run.json" | head -c 600; } | reply error
     fi
