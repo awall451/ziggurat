@@ -433,6 +433,9 @@
     width: 100%;
     margin: 8px 0;
     box-sizing: border-box;
+    /* A long request scrolls inside the box. */
+    max-height: 50vh;
+    overflow: auto;
   }
   .flash {
     padding: 8px 10px;

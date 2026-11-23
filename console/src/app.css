@@ -290,6 +290,11 @@ span.field {
   border: 1px solid var(--line);
   background: var(--panel-solid);
 }
+/* A text box grows downwards only: dragged sideways it would leave its panel. */
+textarea.field {
+  max-width: 100%;
+  resize: vertical;
+}
 
 .pill {
   display: inline-flex;
