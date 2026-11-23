@@ -74,6 +74,11 @@ When frames exist, also write the newest set to `build/screens/*.png`.
 - you believe the charter itself should change
 - anything that looks like a security problem
 
+Every entry there waits on the owner until it is closed. When one is answered or
+no longer needed, add a line `Resolved: <date>, <one sentence>` under its heading.
+If you also ask the same thing with `owner-inbox ask`, write that question's id in
+the entry. Notes with nothing for the owner to decide go in the journal instead.
+
 ## Quality bar
 
 Judge progress against the bar above, not against "it works". QA plays the
