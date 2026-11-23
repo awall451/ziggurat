@@ -14,6 +14,7 @@ export async function GET({ url }) {
  * Cycle schedules: {action: 'set', project, tz, slots} replaces a project's
  * schedule on its VM, {action: 'clear', project} removes it, and
  * {action: 'settings', timezone, quiet, clock} saves the owner's time zone, quiet hours and 12 or 24 hour clock.
+ * {action: 'once-set' | 'once-move' | 'once-cancel', project, at, id, pastCap} sets, moves or cancels a one-time cycle.
  */
 export async function POST({ request, locals }) {
   const b = await body(request);
@@ -24,6 +25,10 @@ export async function POST({ request, locals }) {
     if (!project) error(404, 'No such project');
     if (b.action === 'set') return schedule.setSchedule(user, project, { tz: b.tz, slots: b.slots, changes: b.changes });
     if (b.action === 'clear') return schedule.clearSchedule(user, project);
+    // One-time cycles (kit 0.26): {at} in unix seconds, {id}, and "past the cap".
+    if (b.action === 'once-set') return schedule.onceSet(user, project, { at: b.at, pastCap: b.pastCap === true });
+    if (b.action === 'once-move') return schedule.onceMove(user, project, { id: b.id, at: b.at, pastCap: b.pastCap === true });
+    if (b.action === 'once-cancel') return schedule.onceCancel(user, project, { id: b.id });
     error(400, 'Unknown action');
   });
 }

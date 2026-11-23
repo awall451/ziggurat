@@ -105,13 +105,15 @@ function atJobsOf(text) {
     .split('\n')
     .map((l) => l.trim().split(/\s+/))
     .filter(([id, at]) => /^[0-9]{8}T[0-9]{6}Z-[opf]-[a-z0-9-]{1,40}$/.test(id || '') && /^\d{9,11}$/.test(at || ''))
-    .map(([id, at, from, why, dep]) => ({
+    .map(([id, at, from, why, dep, pc]) => ({
       id,
       at: Number(at),
       from: /^[A-Za-z0-9._@-]{1,80}$/.test(from || '') ? from : null,
       plan: /-p-/.test(id),
       // A normal cycle set for a time, with no job (kit 0.25).
       free: /-f-/.test(id),
+      // Set to run past the daily cap (kit 0.26).
+      pastCap: pc === 'past-cap',
       wait: WAIT_RE.test(why || '') ? { reason: why, job: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(dep || '') ? dep : null } : null
     }));
 }

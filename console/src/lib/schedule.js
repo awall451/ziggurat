@@ -4,9 +4,18 @@
 // A schedule is {tz, slots: [{days, time}]}: `days` is ['daily'] or a list of
 // mon..sun, `time` is HH:MM, local to `tz`. The VM holds the same thing as text
 // (kit script agent-kit-schedule) and is the one that starts the cycles.
+// From kit 0.26 a slot may also have `every` (every N days for daily, every N
+// weeks for weekdays, counted from the Monday of the week of `from`), `from`
+// and `until` (first and last local date, YYYY-MM-DD) and `count` (it ends
+// after that many starts from `from`).
 
 export const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 export const MAX_SLOTS = 100;
+export const MAX_EVERY = 52;
+export const MAX_COUNT = 500;
+/** The kit that knows every, from, until and count on a start time. */
+export const REPEAT_KIT = '0.26.0';
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const TZ_RE = /^[A-Za-z][A-Za-z0-9_+-]{0,30}(\/[A-Za-z0-9_+-]{1,30}){0,2}$/;
 const DAY_MS = 86_400_000;
@@ -21,14 +30,100 @@ export function validTimeZone(tz) {
   }
 }
 
-/** ['wed','mon','wed'] -> ['mon','wed']; ['daily'] stays; anything else: null. */
-function cleanDays(days) {
+/**
+ * ['wed','mon','wed'] -> ['mon','wed']; ['daily'] stays; anything else: null.
+ * All seven days are 'daily', except for a slot every N weeks (`keepWeek`).
+ */
+function cleanDays(days, keepWeek = false) {
   if (!Array.isArray(days) || !days.length || days.length > 7) return null;
   if (days.length === 1 && days[0] === 'daily') return ['daily'];
   if (!days.every((d) => DAYS.includes(d))) return null;
   const out = DAYS.filter((d) => days.includes(d));
-  return out.length === 7 ? ['daily'] : out;
+  return out.length === 7 && !keepWeek ? ['daily'] : out;
 }
+
+/** A real date, YYYY-MM-DD. */
+export function validDate(s) {
+  if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+}
+/** Days since 1970-01-01 of a date string; its weekday is DAYS[(n + 3) % 7]. */
+const eday = (s) => {
+  const [y, m, d] = s.split('-').map(Number);
+  return Math.round(Date.UTC(y, m - 1, d) / DAY_MS);
+};
+const dayString = (n) => new Date(n * DAY_MS).toISOString().slice(0, 10);
+const mondayOf = (n) => n - ((n + 3) % 7);
+
+/** Does a slot start on that date (YYYY-MM-DD)? Its days, every, from and until (as the kit's tick). */
+export function occursOn(slot, ds) {
+  const name = DAYS[(eday(ds) + 3) % 7];
+  if (slot.days[0] !== 'daily' && !slot.days.includes(name)) return false;
+  if (slot.from && ds < slot.from) return false;
+  const until = endOf(slot);
+  if (until && ds > until) return false;
+  const every = slot.every || 1;
+  if (every <= 1) return true;
+  if (!slot.from) return false;
+  const d = eday(ds);
+  const f = eday(slot.from);
+  if (slot.days[0] === 'daily') return (d - f) % every === 0;
+  return ((mondayOf(d) - mondayOf(f)) / 7) % every === 0;
+}
+
+/** The date of the count-th start of a slot from its `from` (as the kit works it out at set). */
+export function lastOf(slot) {
+  if (!slot.count || !slot.from) return null;
+  const every = slot.every || 1;
+  const f = eday(slot.from);
+  if (slot.days[0] === 'daily') return dayString(f + (slot.count - 1) * every);
+  const wf = mondayOf(f);
+  let d = f - 1;
+  let n = 0;
+  while (n < slot.count) {
+    d += 1;
+    const mon = mondayOf(d);
+    if (((mon - wf) / 7) % every !== 0) {
+      d = mon + 6;
+      continue;
+    }
+    if (slot.days.includes(DAYS[(d + 3) % 7])) n += 1;
+  }
+  return dayString(d);
+}
+
+/** The last date a slot may start on: its until, or the date of its last start by count, whichever is first. */
+export function endOf(slot) {
+  const byCount = lastOf(slot);
+  if (byCount && slot.until) return byCount < slot.until ? byCount : slot.until;
+  return byCount || slot.until || null;
+}
+
+/** The repeat fields of a slot, checked. Throws an Error that says what is wrong. */
+function repeatOf(s, i) {
+  const out = {};
+  if (s.every != null && s.every !== 1) {
+    if (!Number.isInteger(s.every) || s.every < 1 || s.every > MAX_EVERY) throw new Error(`slot ${i + 1}: every must be 1 to ${MAX_EVERY}`);
+    out.every = s.every;
+  }
+  for (const k of ['from', 'until']) {
+    if (s[k] == null || s[k] === '') continue;
+    if (!validDate(s[k])) throw new Error(`slot ${i + 1}: ${k} must be a date, YYYY-MM-DD`);
+    out[k] = s[k];
+  }
+  if (s.count != null) {
+    if (!Number.isInteger(s.count) || s.count < 1 || s.count > MAX_COUNT) throw new Error(`slot ${i + 1}: the number of times must be 1 to ${MAX_COUNT}`);
+    out.count = s.count;
+  }
+  if ((out.every || out.count) && !out.from) throw new Error(`slot ${i + 1}: every and count need a first date`);
+  if (out.from && out.until && out.until < out.from) throw new Error(`slot ${i + 1}: it ends before it starts`);
+  return out;
+}
+
+/** Does a slot use what only kit 0.26 knows? */
+export const usesRepeat = (slot) => !!(slot.every > 1 || slot.from || slot.until || slot.count);
 
 export const slotId = (slot) => `${slot.days.join(',')}@${slot.time}`;
 
@@ -41,10 +136,10 @@ export function validateSchedule(input) {
   const seen = new Set();
   const slots = [];
   for (const [i, s] of input.slots.entries()) {
-    const days = cleanDays(s?.days);
+    const days = cleanDays(s?.days, s?.every > 1);
     if (!days) throw new Error(`slot ${i + 1}: days must be daily or a list of ${DAYS.join(' ')}`);
     if (typeof s.time !== 'string' || !TIME_RE.test(s.time)) throw new Error(`slot ${i + 1}: the time must be HH:MM`);
-    const slot = { days, time: s.time };
+    const slot = { days, time: s.time, ...repeatOf(s, i) };
     if (seen.has(slotId(slot))) throw new Error(`slot ${i + 1}: the same slot twice (${days.join(',')} ${s.time})`);
     seen.add(slotId(slot));
     slots.push(slot);
@@ -75,7 +170,12 @@ export function formatScheduleText(schedule) {
   return (
     [
       `tz ${s.tz}`,
-      ...s.slots.map((x) => `slot ${x.days.join(',')} ${x.time}`),
+      // With a count the kit works out the last date itself: an until it wrote earlier is not sent back.
+      ...s.slots.map((x) =>
+        [`slot ${x.days.join(',')} ${x.time}`, x.every > 1 ? `every=${x.every}` : null, x.from ? `from=${x.from}` : null, x.until && !x.count ? `until=${x.until}` : null, x.count ? `count=${x.count}` : null]
+          .filter(Boolean)
+          .join(' ')
+      ),
       ...s.changes.map((c) => (c.kind === 'move' ? `move ${c.date} ${c.slot} ${c.time}` : `skip ${c.date} ${c.slot}`))
     ].join('\n') + '\n'
   );
@@ -91,9 +191,16 @@ export function parseScheduleText(text) {
     if (w[0] === 'move' && w.length === 4) changes.push({ kind: 'move', date: w[1], slot: w[2], time: w[3] });
     else if (w[0] === 'skip' && w.length === 3) changes.push({ kind: 'skip', date: w[1], slot: w[2] });
     else if (w[0] === 'tz' && w.length === 2 && validTimeZone(w[1])) tz = w[1];
-    else if (w[0] === 'slot' && w.length === 3 && TIME_RE.test(w[2])) {
-      const days = cleanDays(w[1].split(','));
-      if (days) slots.push({ days, time: w[2] });
+    else if (w[0] === 'slot' && w.length >= 3 && w.length <= 7 && TIME_RE.test(w[2])) {
+      const extra = {};
+      let ok = true;
+      for (const kv of w.slice(3)) {
+        const m = /^(every|from|until|count)=(\S+)$/.exec(kv);
+        if (!m) ok = false;
+        else extra[m[1]] = m[1] === 'every' || m[1] === 'count' ? Number(m[2]) : m[2];
+      }
+      const days = cleanDays(w[1].split(','), extra.every > 1);
+      if (days && ok) slots.push({ days, time: w[2], ...extra });
     }
   }
   if (!tz || !slots.length) return null;
@@ -243,6 +350,7 @@ export function occurrences(schedule, from, to, { skipped = false } = {}) {
     const ds = dateString(date);
     schedule.slots.forEach((slot, index) => {
       if (slot.days[0] !== 'daily' && !slot.days.includes(name)) return;
+      if (!occursOn(slot, ds)) return;
       const id = slotId(slot);
       const change = (schedule.changes || []).find((c) => c.date === ds && c.slot === id);
       const skip = change?.kind === 'skip';

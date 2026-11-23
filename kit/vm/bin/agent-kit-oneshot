@@ -474,7 +474,9 @@ case "${1:-show}" in
       # From kit 0.18: why a job whose time has come has not started ("-" when it has not been looked at).
       wreason="" wdep=""
       read -r wreason wdep _ 2> /dev/null < "$f.wait" || true
-      echo "$id $when $from ${wreason:--} ${wdep:--}"
+      # From kit 0.26: whether a cycle with no job was set to run past the daily cap.
+      pc=-; [ "$(meta_of "$f.meta" pastcap)" = 1 ] && pc=past-cap
+      echo "$id $when $from ${wreason:--} ${wdep:--} $pc"
     done
     ;;
 

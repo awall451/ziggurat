@@ -3,11 +3,12 @@
   import Timeline from '$lib/components/Timeline.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import RunCycle from '$lib/components/RunCycle.svelte';
+  import StartTimeDialog from '$lib/components/StartTimeDialog.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
   import { conflictsAt, placeAfter, dateString, expectedStarts, gapNote, usageOverlaps, waitText } from '$lib/schedule.js';
-  import { DAYS, plan, occurrences, markFresh, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
+  import { DAYS, plan, occurrences, markFresh, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel, instantOf, endOf } from '$lib/schedule.js';
 
   let { data } = $props();
   const tl = $derived(data.timeline);
@@ -52,7 +53,6 @@
   const copy = (v) => JSON.parse(JSON.stringify(v));
   const scheduleOf = (p) => (drafts[p.id] !== undefined ? drafts[p.id] : p.schedule);
   const usable = (s) => !!s && s.slots.length > 0 && validTimeZone(s.tz);
-  const changed = $derived(tl.projects.filter((p) => drafts[p.id] !== undefined));
 
   // What is planned in the shown stretch, with changes counted as if they were applied.
   const planning = $derived(
@@ -69,7 +69,7 @@
     const s = scheduleOf(p);
     if (!p.reachable && p.reachable !== null) return 'VM not reachable';
     if (!p.canSchedule) return p.kitVersion ? `kit ${p.kitVersion}: needs 0.9` : 'no kit status yet';
-    if (drafts[p.id] !== undefined) return 'changed, not applied';
+    if (drafts[p.id] !== undefined) return 'saving…';
     if (!s) return 'back to back';
     return `${s.slots.length} start time${s.slots.length === 1 ? '' : 's'}${p.cap != null ? ` · cap ${p.cap}` : ''}`;
   }
@@ -131,6 +131,15 @@
   // A job dragged on the timeline: the same path as Move, with the place already picked.
   function dragMove(projectId, job, at) {
     if (busy) return;
+    if (job.kind === 'once') {
+      // A one-time cycle dragged along its row: moved on the VM at once.
+      busy = 'move';
+      call({ action: 'once-move', project: projectId, id: job.id, at: Math.round(at / 1000), pastCap: !!job.pastCap })
+        .then(() => (done = `${project(projectId).name}: the one-time cycle now starts ${whenAt(at)}.`))
+        .catch((e) => (problem = e.message))
+        .finally(() => (busy = ''));
+      return;
+    }
     moving = { project: projectId, job };
     movePick = at;
     moveHit = null;
@@ -198,7 +207,7 @@
     d.changes = (d.changes || []).filter((c) => !(c.date === bar.date && c.slot === key));
     if (time !== slot.time) d.changes.push({ kind: 'move', date: bar.date, slot: key, time });
     problem = '';
-    selected = { project: id, slot: index };
+    commit(id);
   }
   function moveAll() {
     const { id, index, time } = scope;
@@ -217,40 +226,187 @@
     d.slots[index].time = time;
     const after = slotId(d.slots[index]);
     d.changes = (d.changes || []).map((c) => (c.slot === before ? { ...c, slot: after } : c));
-    selected = { project: id, slot: index };
+    commit(id);
   }
-  function add(id, time, day) {
-    const d = draftOf(id);
-    // In a stretch of several days a click means that day; otherwise every day.
-    const slot = { days: span > 36 * 3_600_000 ? [day] : ['daily'], time };
-    if (clash(d, slot, -1)) return;
+
+  // ---- the pop-up for one start time (#90) ------------------------------------
+  // pop: {project, mode: 'new' | 'slot' | 'once', index, bar, job, form}. Done sends it to the VM at once.
+  let pop = $state(null);
+  let popBusy = $state(false);
+  let popProblem = $state('');
+  const tzOf = (p) => (validTimeZone(scheduleOf(p)?.tz) ? scheduleOf(p).tz : settings.timezone);
+  const dayName = (ds) => DAYS[(Math.round(Date.parse(`${ds}T00:00:00Z`) / 86_400_000) + 3) % 7];
+  const blankForm = (date, time, unit = 'day', day = null) => ({ date, time, repeat: true, unit, every: 1, days: day ? [day] : [dayName(date)], ends: 'never', until: date, count: 5, pastCap: false });
+  function openPop(next) {
+    popProblem = '';
     problem = '';
-    d.slots.push(slot);
-    selected = { project: id, slot: d.slots.length - 1 };
+    pop = next;
+  }
+  function add(id, time, day, ms = null) {
+    const p = project(id);
+    const tz = tzOf(p);
+    const date = ms != null ? dateString(wallClock(tz, ms)) : todayIn(tz, tl.now);
+    // In a stretch of several days a click means that weekday; otherwise every day.
+    openPop({ project: id, mode: 'new', form: blankForm(date, time, span > 36 * 3_600_000 ? 'week' : 'day', span > 36 * 3_600_000 ? day : null) });
+  }
+  function addNow(id) {
+    const tz = tzOf(project(id));
+    const c = wallClock(tz, tl.now + 3_600_000);
+    add(id, `${String(c.H).padStart(2, '0')}:00`, null, tl.now + 3_600_000);
   }
   function select(id, index, bar = null) {
-    selected = { project: id, slot: index, date: bar?.date || null, at: bar?.at ?? null };
+    const p = project(id);
+    const slot = scheduleOf(p)?.slots[index];
+    if (!slot) return;
+    const today = todayIn(tzOf(p), tl.now);
+    const weekly = slot.days[0] !== 'daily';
+    const end = endOf(slot);
+    openPop({
+      project: id,
+      mode: 'slot',
+      index,
+      bar,
+      form: {
+        // A start time with no first date is shown from today: Done keeps it without one.
+        date: slot.from && slot.from > today ? slot.from : today,
+        time: slot.time,
+        repeat: true,
+        unit: weekly ? 'week' : 'day',
+        every: slot.every || 1,
+        days: weekly ? [...slot.days] : [dayName(today)],
+        ends: slot.count ? 'after' : slot.until ? 'on' : 'never',
+        until: end || today,
+        count: slot.count || 5,
+        pastCap: false,
+        from: slot.from || null
+      }
+    });
   }
-  const sel = $derived(selected && scheduleOf(project(selected.project))?.slots[selected.slot] ? { p: project(selected.project), slot: scheduleOf(project(selected.project)).slots[selected.slot] } : null);
+  function openOnce(id, job) {
+    const tz = tzOf(project(id));
+    const c = wallClock(tz, job.start);
+    const date = dateString(c);
+    openPop({ project: id, mode: 'once', job, form: { ...blankForm(date, `${String(c.H).padStart(2, '0')}:${String(c.M).padStart(2, '0')}`), repeat: false, pastCap: !!job.pastCap } });
+  }
+  /** The slot a repeating form stands for. */
+  function slotOf(f, today) {
+    const weekly = f.unit === 'week';
+    const days = weekly ? DAYS.filter((d) => f.days.includes(d)) : ['daily'];
+    const slot = { days: weekly && days.length === 7 && f.every === 1 ? ['daily'] : days, time: f.time };
+    if (f.every > 1) slot.every = f.every;
+    // A first date only where it matters: every N counts from it, a count starts there, or it is later than today.
+    if (f.every > 1 || f.ends === 'after' || f.date > today) slot.from = f.date;
+    if (f.ends === 'on') slot.until = f.until;
+    if (f.ends === 'after') slot.count = f.count;
+    return slot;
+  }
+  async function popDone() {
+    const p = project(pop.project);
+    const f = pop.form;
+    const tz = tzOf(p);
+    popBusy = true;
+    popProblem = '';
+    try {
+      if (!f.repeat) {
+        const [y, m, d] = f.date.split('-').map(Number);
+        const [H, M] = f.time.split(':').map(Number);
+        const at = Math.round(instantOf(tz, y, m, d, H, M) / 1000);
+        if (pop.mode === 'once') {
+          if (at * 1000 !== pop.job.start || f.pastCap !== !!pop.job.pastCap) await call({ action: 'once-move', project: p.id, id: pop.job.id, at, pastCap: f.pastCap });
+        } else {
+          await call({ action: 'once-set', project: p.id, at, pastCap: f.pastCap });
+          // A repeating start time turned into a one-time cycle: the old one goes.
+          if (pop.mode === 'slot') {
+            const dr = draftOf(p.id);
+            dr.slots.splice(pop.index, 1);
+            await commit(p.id, true);
+          }
+        }
+        done = `${p.name}: one cycle set for ${whenAt(at * 1000)}.`;
+      } else {
+        const slot = slotOf(f, todayIn(tz, tl.now));
+        const dr = draftOf(p.id);
+        const index = pop.mode === 'slot' ? pop.index : -1;
+        if (clash(dr, slot, index)) throw new Error('There is already a start time then, on the same days.');
+        if (index >= 0) {
+          // One-day changes follow their slot to its new time.
+          const before = slotId(dr.slots[index]);
+          dr.slots[index] = slot;
+          dr.changes = (dr.changes || []).map((c) => (c.slot === before ? { ...c, slot: slotId(slot) } : c));
+        } else dr.slots.push(slot);
+        await commit(p.id, true);
+        if (pop.mode === 'once') await call({ action: 'once-cancel', project: p.id, id: pop.job.id });
+        done = `${p.name}: start times saved on its VM.`;
+      }
+      pop = null;
+    } catch (e) {
+      popProblem = e.message;
+      delete drafts[p.id];
+    } finally {
+      popBusy = false;
+    }
+  }
+  async function popDelete() {
+    const p = project(pop.project);
+    if (pop.mode === 'once') {
+      popBusy = true;
+      try {
+        await call({ action: 'once-cancel', project: p.id, id: pop.job.id });
+        done = `${p.name}: the one-time cycle is cancelled.`;
+        pop = null;
+      } catch (e) {
+        popProblem = e.message;
+      } finally {
+        popBusy = false;
+      }
+      return;
+    }
+    if (pop.mode !== 'slot') return (pop = null);
+    const { index, bar } = pop;
+    pop = null;
+    selected = { project: p.id, slot: index, date: bar?.date || null, at: bar?.at ?? null };
+    askDelete();
+  }
+  /** One request to /api/schedule; throws the server's words. */
+  async function call(body) {
+    const res = await fetch('/api/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.message || 'The action failed');
+    await invalidateAll();
+    return out;
+  }
+  /**
+   * Send a team's changed start times to its VM at once (no Apply step since #90).
+   * With `raise`, a refusal throws; otherwise it is shown, and the page goes back to what the VM has.
+   */
+  async function commit(id, raise = false) {
+    const p = project(id);
+    const d = drafts[id];
+    if (d === undefined) return;
+    busy = `apply-${id}`;
+    try {
+      if (!d.slots.length) await call({ action: 'clear', project: id });
+      else {
+        const s = validateSchedule(d);
+        await call({ action: 'set', project: id, tz: s.tz, slots: s.slots, changes: s.changes });
+      }
+      delete drafts[id];
+      if (!raise) done = `${p.name}: saved on its VM.`;
+    } catch (e) {
+      delete drafts[id];
+      if (raise) throw e;
+      problem = `${p.name}: ${e.message}`;
+    } finally {
+      busy = '';
+    }
+  }
 
-  function setTime(time) {
-    if (/^\d{2}:\d{2}$/.test(time)) move(selected.project, selected.slot, time);
-  }
-  function toggleDay(day) {
-    const d = draftOf(selected.project);
-    const slot = d.slots[selected.slot];
-    let days = slot.days[0] === 'daily' ? [...DAYS] : [...slot.days];
-    days = days.includes(day) ? days.filter((x) => x !== day) : [...days, day];
-    if (!days.length) return;
-    days = DAYS.filter((x) => days.includes(x));
-    const next = { ...slot, days: days.length === 7 ? ['daily'] : days };
-    if (clash(d, next, selected.slot)) return;
-    d.slots[selected.slot] = next;
-  }
   function removeSlot() {
-    const d = draftOf(selected.project);
+    const id = selected.project;
+    const d = draftOf(id);
     d.slots.splice(selected.slot, 1);
     selected = null;
+    commit(id);
   }
   // Deleting one start of a repeating slot asks, like a calendar: that day only, or every day.
   let del = $state(null); // {project, slot, date}
@@ -269,6 +425,7 @@
     d.changes.push({ kind: 'skip', date, slot: key });
     problem = '';
     selected = null;
+    commit(id);
   }
   function deleteAll() {
     selected = { project: del.project, slot: del.slot };
@@ -286,6 +443,7 @@
     const d = draftOf(id);
     d.changes = (d.changes || []).filter((x) => !(x.kind === 'skip' && x.date === c.date && x.slot === c.slot));
     problem = '';
+    commit(id);
   }
   function discard(id) {
     delete drafts[id];
@@ -310,19 +468,6 @@
       busy = '';
       confirm = null;
     }
-  }
-  async function apply(p) {
-    let s;
-    try {
-      s = validateSchedule(drafts[p.id]);
-    } catch (e) {
-      problem = `${p.name}: ${e.message}`;
-      return;
-    }
-    const out = await send({ action: 'set', project: p.id, tz: s.tz, slots: s.slots, changes: s.changes }, `apply-${p.id}`);
-    if (!out) return;
-    discard(p.id);
-    done = `${p.name}: applied. Its cycles now start at these times only.`;
   }
   function askClear(p) {
     confirm = {
@@ -368,7 +513,13 @@
   const zones = $derived(zoneChoices([settings.timezone, ...tl.projects.map((p) => scheduleOf(p)?.tz).filter(Boolean), quietDraft?.timezone].filter(Boolean), tl.now));
   const link = (view, date) => `/schedule?view=${view}${date ? `&date=${date}` : ''}`;
   const has = (slot, day) => slot.days[0] === 'daily' || slot.days.includes(day);
-  const daysText = (slot) => (slot.days[0] === 'daily' ? 'every day' : slot.days.map((d) => d[0].toUpperCase() + d.slice(1)).join(', '));
+  const daysText = (slot) => {
+    const days = slot.days[0] === 'daily' ? (slot.every > 1 ? `every ${slot.every} days` : 'every day') : slot.days.map((d) => d[0].toUpperCase() + d.slice(1)).join(', ') + (slot.every > 1 ? `, every ${slot.every} weeks` : '');
+    // From kit 0.26: a first date, and an end.
+    const from = slot.from && slot.from > todayIn(settings.timezone, tl.now) ? `, from ${dateText(slot.from, { day: 'numeric', month: 'short' })}` : '';
+    const end = slot.count ? `, ${slot.count} times` : slot.until ? `, until ${dateText(slot.until, { day: 'numeric', month: 'short' })}` : '';
+    return days + from + end;
+  };
   const two = (n) => String(n).padStart(2, '0');
   const clockAt = (ms) => {
     const c = wallClock(settings.timezone, ms);
@@ -474,7 +625,7 @@
       </div>
       <p class="dim small">Per day: cycles that ran (filled) and start times still to come (outlined). Open a day or the week to change times.</p>
     {:else}
-      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (jobOpen = { project, job })} onjobmove={editable ? dragMove : null} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => ((movePick = ms), (moveHit = null))} />
+      <Timeline {rows} {range} tz={settings.timezone} {clock} {quiet} now={tl.now} {selected} onmove={move} onadd={add} onselect={select} onzoom={zoom} onpan={pan} onjob={(project, job) => (job.kind === 'once' ? openOnce(project, job) : (jobOpen = { project, job }))} onjobmove={editable ? dragMove : null} ghost={moving ? { project: moving.project, minutes: moving.job.minutes, at: movePick } : null} onpick={(_, ms) => ((movePick = ms), (moveHit = null))} />
     {#if moving && moveHit}
       <ConflictChoice conflicts={moveHit} team={project(moving.project)?.name} {clockAt} busy={!!busy} onafter={moveAfter} onskip={canSkipMove ? skipMove : null} oncancel={() => (moveHit = null)} />
     {/if}
@@ -502,56 +653,10 @@
     {/if}
       <p class="dim small">
         <b>Move through time:</b> the arrows, or scroll sideways (Shift + wheel). <b>Zoom in:</b> drag across empty space. <b>Change times:</b> drag a planned start, or
-        click an empty place in a row to add one. Changes are not active until you apply them. <b>Move a planned job:</b> drag it along its row; that is done at once.
+        click an empty place in a row to add one (repeating, or one time only), or click a start to change it. Every change is sent to the team's VM at once. <b>Move a planned job or one-time cycle:</b> drag it along its row.
       </p>
     {/if}
   </section>
-
-  {#if changed.length}
-    <section class="panel note caution block" aria-label="Changes not applied yet">
-      <h2>Not active yet</h2>
-      <p class="small">You changed start times here. A team keeps its old times until you apply the change, which sends the new times to that team's VM.</p>
-      {#each changed as p (p.id)}
-        <div class="actions">
-          <span><b>{p.name}</b>: {scheduleOf(p).slots.length ? scheduleOf(p).slots.map((s) => `${clockLabel(s.time, clock)} ${daysText(s)}`).join(' · ') : 'no start times left'}{#each scheduleOf(p).changes || [] as c (c.date + c.slot)}{' · '}{dateText(c.date, { weekday: 'short', day: 'numeric', month: 'short' })} only: {clockLabel(c.slot.split('@')[1], clock)} {c.kind === 'move' ? `→ ${clockLabel(c.time, clock)}` : 'skipped'}{/each}</span>
-          <span class="spacer"></span>
-          <button class="btn quiet" onclick={() => discard(p.id)} disabled={!!busy}>Undo changes</button>
-          <button class="btn primary" onclick={() => apply(p)} disabled={!!busy || !usable(scheduleOf(p))}>{busy === `apply-${p.id}` ? 'Applying…' : `Apply to ${p.name}`}</button>
-        </div>
-      {/each}
-    </section>
-  {/if}
-
-  {#if sel && editable}
-    <section class="panel lit block" aria-label="Selected start time">
-      <div class="row">
-        <h2>{sel.p.name}: starts at {clockLabel(sel.slot.time, clock)}, {daysText(sel.slot)}</h2>
-        <span class="grow"></span>
-        <button class="btn quiet icon" onclick={() => (selected = null)} aria-label="Close" title="Close">×</button>
-      </div>
-      <div class="row wrap">
-        <label class="stack"
-          ><span class="small dim">Start</span>
-          <input class="field mono" type="time" step="900" value={sel.slot.time} onchange={(e) => setTime(e.currentTarget.value)} /></label
-        >
-        <div class="stack">
-          <span class="small dim">On</span>
-          <div class="days">
-            {#each DAYS as day (day)}
-              <button class="btn quiet sm" class:on={has(sel.slot, day)} aria-pressed={has(sel.slot, day)} onclick={() => toggleDay(day)}>{day[0].toUpperCase() + day.slice(1)}</button>
-            {/each}
-          </div>
-        </div>
-      </div>
-      <div class="actions">
-        <button class="btn danger sm" onclick={askDelete}>{selected.date && selected.at > tl.now ? 'Delete…' : 'Remove this start time'}</button>
-      </div>
-      <p class="dim small">
-        Time zone: {zoneLabel(scheduleOf(sel.p).tz, tl.now)}. A cycle of {sel.p.name} typically takes {lengthText(sel.p.typicalSecs)}. If its previous cycle is still running at a
-        start time, that one is skipped.
-      </p>
-    </section>
-  {/if}
 
   {#if usage.length}
     <section class="panel note caution block">
@@ -588,7 +693,6 @@
         {:else}
           <p class="small dim">
             {#if !s}No start times: its cycles follow each other until the daily cap{p.cap != null ? ` (${p.cap})` : ''} is used up.
-            {:else if drafts[p.id] !== undefined}Changed here. Not active until you apply it.
             {:else}Its cycles start only at these times. Daily cap: {p.cap ?? 'not known'}. Typical cycle: {lengthText(p.typicalSecs)}.{/if}
           </p>
           {#if s}
@@ -603,7 +707,7 @@
             {#each skipsOf(p) as c (c.date + c.slot)}
               <div class="actions">
                 <span class="small">{dateText(c.date, { weekday: 'short', day: 'numeric', month: 'short' })} only: {clockLabel(c.slot.split('@')[1], clock)} skipped</span>
-                {#if editable}<button class="btn quiet sm" onclick={() => undoSkip(p.id, c)} title="Run this start again on that day. Active once you apply it.">Undo</button>{/if}
+                {#if editable}<button class="btn quiet sm" onclick={() => undoSkip(p.id, c)} disabled={!!busy} title="Run this start again on that day">Undo</button>{/if}
               </div>
             {/each}
             <label class="stack"
@@ -613,6 +717,7 @@
                 value={s.tz}
                 onchange={(e) => {
                   draftOf(p.id).tz = e.currentTarget.value;
+                  commit(p.id);
                 }}
                 disabled={!editable}
               >
@@ -622,12 +727,7 @@
           {/if}
           <div class="actions">
             {#if p.schedule}<button class="btn danger sm" onclick={() => askClear(p)} disabled={!!busy}>Remove all…</button>{/if}
-            <button class="btn quiet sm" onclick={() => add(p.id, '00:00', range.days[0].name)} disabled={!editable || !!busy} title="Adds a start time at midnight; then set its time and days">+ Start time</button>
-            {#if drafts[p.id] !== undefined}
-              <span class="spacer"></span>
-              <button class="btn quiet sm" onclick={() => discard(p.id)} disabled={!!busy}>Undo</button>
-              <button class="btn primary sm" onclick={() => apply(p)} disabled={!!busy || !usable(s)} title="Send these start times to {p.name}'s VM">{busy === `apply-${p.id}` ? 'Applying…' : 'Apply'}</button>
-            {/if}
+            <button class="btn quiet sm" onclick={() => addNow(p.id)} disabled={!editable || !!busy} title="A start time, repeating or one time only">+ Start time</button>
           </div>
         {/if}
       </section>
@@ -695,7 +795,7 @@
       <button class="btn danger" onclick={deleteAll}>This and every later day</button>
     </div>
     <p class="small dim">
-      "Only that day" keeps the start time and skips that one start; you can undo it in the team's panel. Like any change here, it is active once you apply it.
+      "Only that day" keeps the start time and skips that one start; you can undo it in the team's panel. It is sent to the VM at once.
     </p>
   </Modal>
 {/if}
@@ -712,8 +812,27 @@
       <button class="btn" onclick={moveOnce}>Only {dateText(scope.bar.date, { weekday: 'short', day: 'numeric', month: 'short' })}</button>
       <button class="btn primary" onclick={moveAll}>{slot.days[0] === 'daily' ? 'Every day' : `Every ${daysText(slot)}`}</button>
     </div>
-    <p class="small dim">Like any change here, it is active once you apply it.</p>
+    <p class="small dim">It is sent to the VM at once.</p>
   </Modal>
+{/if}
+
+{#if pop}
+  {@const pp = project(pop.project)}
+  <StartTimeDialog
+    title={pop.mode === 'new' ? `${pp?.name}: add a start time` : pop.mode === 'once' ? `${pp?.name}: one-time cycle` : `${pp?.name}: start time`}
+    bind:form={pop.form}
+    existing={pop.mode !== 'new'}
+    canRepeatMore={!!pp?.canRepeat}
+    canOnce={!!pp?.canRepeat}
+    zone={zoneLabel(tzOf(pp), tl.now)}
+    typical={`A cycle of ${pp?.name} typically takes ${lengthText(pp?.typicalSecs || 3600)}.`}
+    today={todayIn(tzOf(pp), tl.now)}
+    busy={popBusy}
+    problem={popProblem}
+    ondone={popDone}
+    ondelete={popDelete}
+    oncancel={() => (pop = null)}
+  />
 {/if}
 
 {#if jobOpen}

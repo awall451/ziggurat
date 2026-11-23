@@ -831,6 +831,32 @@ echo "stop owner 2026-01-01T09:00:00+00:00" > "$S/control"
 # The sections below build their own workspace and gate results: leave none behind.
 rm -rf "$T/ws" "$S/gate/results"
 
+echo "== a start time that repeats less often, or ends (kit 0.26)"
+rm -f "$T/etc/schedule" "$S/slot" "$S/schedule.used" "$S/schedule.log" "$S/oneshot"
+echo "run 2026-02-01T00:00:00+00:00" > "$S/control"
+bad "every without a first date" 'tz UTC\nslot daily 06:00 every=2\n'
+bad "count without a first date" 'tz UTC\nslot daily 06:00 count=3\n'
+bad "every 0" 'tz UTC\nslot daily 06:00 every=0 from=2026-02-02\n'
+bad "a count over the limit" 'tz UTC\nslot daily 06:00 from=2026-02-02 count=501\n'
+bad "a date that does not exist" 'tz UTC\nslot daily 06:00 from=2026-02-30\n'
+bad "an end before the start" 'tz UTC\nslot daily 06:00 from=2026-02-10 until=2026-02-01\n'
+bad "an unknown field" 'tz UTC\nslot daily 06:00 often=2\n'
+# 2026-02-02 is a Monday.
+printf 'tz America/New_York\nslot daily 06:00 every=2 from=2026-02-02\nslot tue,thu 09:00 every=2 from=2026-02-02\nslot daily 22:00 from=2026-02-02 count=3\nslot mon,fri 10:00 every=2 from=2026-02-04 count=3\nslot daily 07:00 until=2026-02-01\nslot daily 08:00 from=2026-02-10\n' | sch set > /dev/null
+check "a count is stored with the date of its last start" 'grep -qx "slot daily 22:00 from=2026-02-02 until=2026-02-04 count=3" "$T/etc/schedule" && grep -qx "slot mon,fri 10:00 every=2 from=2026-02-04 until=2026-02-20 count=3" "$T/etc/schedule"'
+check "every 1 is not written" 'grep -qx "slot daily 07:00 until=2026-02-01" "$T/etc/schedule"'
+check "show gives the new fields as data" '[ "$(sch show | jq -c ".slots[] | select(.time == \"22:00\") | [.from, .until, .count, .every]")" = "[\"2026-02-02\",\"2026-02-04\",3,null]" ] && [ "$(sch show | jq -c ".slots[] | select(.time == \"06:00\") | .every")" = 2 ]'
+ran() { grep -q " $1 $2 started$" "$S/schedule.log"; }
+for d in 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24; do
+  for hm in 06:00 07:00 08:00 09:00 10:00 22:00; do tick_at "$(ny "2026-02-$d $hm")"; rm -f "$S/slot"; done
+done
+check "every other day, from its first date" 'ran daily@06:00 2026-02-02 && ! ran daily@06:00 2026-02-03 && ran daily@06:00 2026-02-04 && ran daily@06:00 2026-02-24'
+check "every other week on its days" 'ran tue,thu@09:00 2026-02-03 && ran tue,thu@09:00 2026-02-05 && ! ran tue,thu@09:00 2026-02-10 && ! ran tue,thu@09:00 2026-02-12 && ran tue,thu@09:00 2026-02-17'
+check "three times, then no more" 'ran daily@22:00 2026-02-04 && ! ran daily@22:00 2026-02-05 && [ "$(grep -c " daily@22:00 .* started$" "$S/schedule.log")" = 3 ]'
+check "every other week, three times, from a Wednesday" '! ran mon,fri@10:00 2026-02-02 && ran mon,fri@10:00 2026-02-06 && ! ran mon,fri@10:00 2026-02-09 && ran mon,fri@10:00 2026-02-16 && ran mon,fri@10:00 2026-02-20 && [ "$(grep -c " mon,fri@10:00 .* started$" "$S/schedule.log")" = 3 ]'
+check "not after its last date, not before its first" '! grep -q " daily@07:00 .* started$" "$S/schedule.log" && ! ran daily@08:00 2026-02-09 && ran daily@08:00 2026-02-10'
+rm -f "$T/etc/schedule" "$S/slot" "$S/schedule.used" "$S/schedule.log"
+
 echo "== syntax"
 for f in "$BIN"/* "$HERE/../install.sh" "$HERE/../gate/bin/gate-run"; do
   check "bash -n $(basename "$f")" 'bash -n "$f"'
@@ -1317,10 +1343,10 @@ for bad in "--minutes 0" "--minutes 1441" "--minutes x" "--after not-a-job" "--a
   refuse "a timed job with $bad" sh -c "tar -c -C $T/work/j . | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-oneshot at $((now + 3600)) $JE owner $bad"
 done
 atjob $((now + 3600)) $JE owner --minutes 30 --after "$JD"
-check "a timed job keeps its estimate and what it builds on" 'grep -qx "minutes=30" "$S/oneshot-at/$JE.meta" && grep -qx "after=$JD" "$S/oneshot-at/$JE.meta" && grep -q "^$JE [0-9]* owner - -$" <<< "$(shot list-at)"'
+check "a timed job keeps its estimate and what it builds on" 'grep -qx "minutes=30" "$S/oneshot-at/$JE.meta" && grep -qx "after=$JD" "$S/oneshot-at/$JE.meta" && grep -q "^$JE [0-9]* owner - - -$" <<< "$(shot list-at)"'
 due_at() { echo "$((now - ${2:-30})) owner" > "$S/oneshot-at/$1"; }
 due_at $JE; shot due
-check "it does not start when the job it builds on never ran" '[ -f "$S/oneshot-at/$JE" ] && [ ! -e "$S/oneshot" ] && grep -q "^$JE [0-9]* owner failed $JD$" <<< "$(shot list-at)"'
+check "it does not start when the job it builds on never ran" '[ -f "$S/oneshot-at/$JE" ] && [ ! -e "$S/oneshot" ] && grep -q "^$JE [0-9]* owner failed $JD -$" <<< "$(shot list-at)"'
 atjob $((now + 3600)) $JD owner --minutes 20
 shot due
 check "nor while that job is itself still set for a time" 'grep -q "^pending $JD " "$S/oneshot-at/$JE.wait"'
