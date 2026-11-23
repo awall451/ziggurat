@@ -79,6 +79,7 @@ check "show prints text and attachment path" 'grep -q QUARTZ <<< "$shown" && gre
 refuse "show with a path instead of an id" "$BIN/owner-inbox" show ../../etc/passwd
 rm -rf "$S/outbox/.seen"
 out=$("$BIN/owner-inbox" prompt)
+check "prompt tells the lead how to close an escalation" 'grep -q "add a line \`Resolved: <date>, <one sentence>\`" <<< "$out" && grep -q "write the id that \`ask\`" <<< "$out"'
 check "prompt tells the lead about the wrap-up notice" 'grep -q "halt the team when this cycle ends" <<< "$out"'
 check "prompt has the protocol and all open messages" 'grep -q "## Owner inbox" <<< "$out" && grep -q QUARTZ <<< "$out" && grep -q "smaller rooms" <<< "$out" && grep -q "Nice work" <<< "$out"'
 check "prompt marks messages as seen" '[ -e "$S/outbox/.seen/$U" ] && [ -e "$S/outbox/.seen/$P" ]'

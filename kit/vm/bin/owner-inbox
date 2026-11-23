@@ -170,6 +170,16 @@ To ask the owner something (a design decision you are unsure about), use
 `owner-inbox ask <slug> --default "<what you will do if there is no answer>"` with the question and the
 options on stdin. Then carry on with that default: never wait for an answer. The answer comes back as
 an owner message. Only you, the lead, reply or ask; your agents do not.
+
+### Escalations
+
+Every entry (a `## ` heading) in `docs/agents/ESCALATIONS.md` is shown to the owner as waiting on them
+until it is closed. Keep that list true:
+- When an entry is answered or no longer needed, add a line `Resolved: <date>, <one sentence>` under its
+  heading (or delete the entry). An owner message that answers an escalation is your cue to do this.
+- If you also put the same question to the owner with `owner-inbox ask`, write the id that `ask`
+  printed into the entry. The owner's answer to the question then closes the entry for them.
+- A note for the kit's maintainer, with nothing for the owner to decide, goes in the journal, not there.
 EOF
     ids=$(open_ids)
     echo
