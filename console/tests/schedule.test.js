@@ -147,6 +147,25 @@ describe('jobs placed close together (kit 0.18)', () => {
   });
 });
 
+describe('start times that have passed, while a change is open', () => {
+  it('marks only the starts the change brings, not the ones that were there', () => {
+    const r = lib.rangeFor('day', '2026-01-26', NY);
+    const applied = lib.validateSchedule({ tz: NY, slots: [{ days: ['daily'], time: '09:00' }, { days: ['daily'], time: '21:00' }] });
+    const plannedOf = (s) => lib.occurrences(s, r.from, r.to).map((o) => ({ ...o, end: o.at + 3600000, flags: [] }));
+    const fresh = (draft) => lib.markFresh(plannedOf(draft), applied, r.from, r.to).filter((b) => b.fresh).map((b) => b.id);
+    // Nothing changed: nothing is fresh.
+    expect(fresh(applied)).toEqual([]);
+    // A start time added: only that one.
+    expect(fresh({ tz: NY, slots: [...applied.slots, { days: ['daily'], time: '03:00' }] })).toEqual(['daily@03:00']);
+    // One moved: the moved one, at its new time.
+    expect(fresh({ tz: NY, slots: [{ days: ['daily'], time: '10:30' }, { days: ['daily'], time: '21:00' }] })).toEqual(['daily@10:30']);
+    // Moved for that day only: the same slot, at another time.
+    expect(fresh({ ...applied, changes: [{ kind: 'move', date: '2026-01-26', slot: 'daily@09:00', time: '11:00' }] })).toEqual(['daily@09:00']);
+    // A team that had no start times: all of them are new.
+    expect(lib.markFresh(plannedOf(applied), null, r.from, r.to).every((b) => b.fresh)).toBe(true);
+  });
+});
+
 describe('dragging a job that is set for a time', () => {
   it('lands on the quarter hour, and not in the past or where it was', () => {
     const Q = 15 * 60000;

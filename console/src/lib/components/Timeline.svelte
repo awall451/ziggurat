@@ -16,6 +16,7 @@
 
   let {
     rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, skipped, log, expected}]
+    // planned: [{at, end, slot, id, flags, fresh}]; fresh = brought by a change that is not applied yet
     // expected: {job id: ms}, where a waiting job is likely to start when that is later than set
     range, // {from, to, days}
     tz, // the time zone the axis is drawn in
@@ -347,12 +348,15 @@
           {/each}
 
           {#each row.planned as bar (bar.at + bar.id)}
-            {#if (bar.at >= now || row.draft) && visible(bar.at, bar.end)}
+            <!-- A start that has passed is not drawn, unless the owner has just placed or moved it there
+                 (bar.fresh): then it is drawn faint, since it will not run today. -->
+            {#if (bar.at >= now || bar.fresh) && visible(bar.at, bar.end)}
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <g
                 class="slot"
                 class:editable={row.editable}
                 class:sel={selected && selected.project === row.id && selected.slot === bar.slot}
+                class:passed={bar.at < now}
                 class:overlap={bar.flags.includes('overlap')}
                 class:inquiet={bar.flags.includes('quiet')}
                 transform="translate({shift(row, bar)} 0)"
@@ -367,7 +371,7 @@
               >
                 <rect x={x(bar.at)} y={y + 8} width={Math.max(6, x(bar.end) - x(bar.at))} height={ROW - 16} rx="4" />
                 {#if inside(bar.at)}<line class="start" x1={x(bar.at)} x2={x(bar.at)} y1={y + 5} y2={y + ROW - 5} />{/if}
-                <title>{row.name}: starts {clockText(bar.at)}, typical length {lengthText(bar.end - bar.at)}{bar.flags.includes('overlap') ? '. Likely overlaps another team' : ''}{bar.flags.includes('quiet') ? '. In your quiet hours' : ''}{row.editable ? '. Drag to move, click to change' : ''}</title>
+                <title>{row.name}: starts {clockText(bar.at)}, typical length {lengthText(bar.end - bar.at)}{bar.flags.includes('overlap') ? '. Likely overlaps another team' : ''}{bar.flags.includes('quiet') ? '. In your quiet hours' : ''}{bar.at < now ? '. This time has already passed today: it does not run' : ''}{row.editable ? '. Drag to move, click to change' : ''}</title>
               </g>
             {/if}
           {/each}
@@ -750,6 +754,9 @@
   .slot .start {
     stroke: var(--row);
     stroke-width: 3;
+  }
+  .slot.passed {
+    opacity: 0.45;
   }
   .slot.editable {
     cursor: grab;

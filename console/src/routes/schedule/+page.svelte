@@ -6,7 +6,7 @@
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
   import { conflictsAt, placeAfter, dateString, expectedStarts, gapNote, usageOverlaps, waitText } from '$lib/schedule.js';
-  import { DAYS, plan, occurrences, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
+  import { DAYS, plan, occurrences, markFresh, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel } from '$lib/schedule.js';
 
   let { data } = $props();
   const tl = $derived(data.timeline);
@@ -83,7 +83,8 @@
       note: noteFor(p),
       past: p.past,
       running: p.running,
-      planned: planning.planned[p.id] || [],
+      // With a change open, the starts it brings are marked: only those show when their time has passed.
+      planned: drafts[p.id] !== undefined ? markFresh(planning.planned[p.id] || [], p.schedule, range.from, range.to) : planning.planned[p.id] || [],
       // Starts skipped for one day: drawn struck through, they do not run.
       skipped: occurrences(scheduleOf(p), range.from, range.to, { skipped: true })
         .filter((o) => o.skipped)

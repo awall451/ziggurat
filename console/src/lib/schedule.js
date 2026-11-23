@@ -256,6 +256,19 @@ export function occurrences(schedule, from, to, { skipped = false } = {}) {
   return out.sort((a, b) => a.at - b.at);
 }
 
+/**
+ * While a team's start times are being changed: mark the planned starts the
+ * change brings (`fresh`), by comparing with what the schedule in force plans
+ * in the same stretch. A start that is the same as before is not fresh. The
+ * timeline hides starts that have passed, and shows a passed one only when it
+ * is fresh: what the owner just placed must not vanish, and what was already
+ * there must not appear because of a change somewhere else.
+ */
+export function markFresh(planned = [], applied = null, from, to) {
+  const before = new Set(occurrences(applied, from, to).map((o) => o.at));
+  return planned.map((bar) => (before.has(bar.at) ? bar : { ...bar, fresh: true }));
+}
+
 /** The next planned start after `now`, or null. */
 export function nextStart(schedule, now = Date.now()) {
   return occurrences(schedule, now, now + 8 * DAY_MS)[0]?.at ?? null;
