@@ -2,7 +2,7 @@
 // when no cycle runs, why and what comes next.
 //
 // Nothing here asks the VM anything. The kind of run and its job come from
-// the live status and the cycle ledger; the backlog item and the issue from
+// the live status and the cycle ledger; the planned job and the issue from
 // this console's own records of the job; the lead's words from its transcript.
 // What an agent wrote (the lead's text, a proposal's title) is data: it is cut
 // to a short plain line here and shown as text.
@@ -49,7 +49,7 @@ const issueShape = (i) => (i ? { id: i.id, number: Number.isInteger(i.number) ? 
 /**
  * What a job id stands for: {kind, item, issue, plan, text}.
  *   plan     a planning cycle, with the owner's focus
- *   job      an approved backlog item, with its planned issue when it has one
+ *   job      an approved proposal of the Planning tab, with its planned issue when it has one
  *   fix      Fix now on an issue
  *   oneshot  an owner message started as a one-shot job
  * `brief` is the cycle's prompt, when there is one: an older job whose record

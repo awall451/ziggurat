@@ -174,7 +174,7 @@ describe('no cycle runs', () => {
     const { run, team } = task(7, { status, following: true });
     expect(run.kind).toBe('cycle');
     expect(team).toMatchObject({ state: 'idle', idle, haltAfter: false });
-    expect(team.next).toMatchObject({ at: 1767304800000, kind: 'job', item: { pid: '20260101T090200Z-b-bbbbbb', title: 'Backlog item', minutes: 45 } });
+    expect(team.next).toMatchObject({ at: 1767304800000, kind: 'job', item: { pid: '20260101T090200Z-b-bbbbbb', title: 'Planned job', minutes: 45 } });
   });
 
   it('a planning cycle set for a time is the next job', () => {

@@ -15,7 +15,7 @@
     return () => clearInterval(t);
   });
 
-  const KIND = { job: 'Backlog job', fix: 'Fix now', plan: 'Planning', oneshot: 'One-shot job' };
+  const KIND = { job: 'Planned job', fix: 'Fix now', plan: 'Planning', oneshot: 'One-shot job' };
   const STATE = { done: 'Done', failed: 'Failed', interrupted: 'Interrupted', ending: 'Ending', running: 'Live', waiting: 'Live', queued: 'Queued' };
   const ISSUE = { new: 'new', in_progress: 'in progress', done: 'done', wontfix: "won't fix" };
 
@@ -54,7 +54,7 @@
 
 {#snippet what(r, big)}
   {#if r.kind === 'job' && r.item}
-    <a class="key" href="{base}/backlog">Item{r.item.order != null ? ` ${r.item.order}` : ''}</a>
+    <a class="key" href="{base}/backlog">Job{r.item.order != null ? ` ${r.item.order}` : ''}</a>
     <a class="what" class:big href="{base}/backlog" title={r.item.title}>{r.item.title}</a>
     {#if r.issue}
       <span class="dim small">tracked by</span>
@@ -134,7 +134,7 @@
             <span class="what big dim">{run.live ? 'The lead has not written anything yet' : 'The lead wrote nothing in this cycle'}</span>
           {/if}
         </div>
-        <div class="r3 dim">The lead picks the work in this cycle: no issue or backlog item is tied to it.</div>
+        <div class="r3 dim">The lead picks the work in this cycle: no issue or planned job is tied to it.</div>
       {:else}
         <div class="r2">{@render what(run, true)}</div>
         {#if run.said}

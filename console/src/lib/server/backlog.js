@@ -504,7 +504,7 @@ function proposal(project, pid) {
 
 /** Ids of jobs set for a time that the VM dropped (`job:<id> <date> missed…` in schedule.log). */
 /**
- * The backlog item a one-shot job does, from this console's own run record:
+ * The approved proposal a one-shot job does, from this console's own run record:
  * {pid, order, title, minutes, cost, issueId}, or null. Title and estimate are
  * the proposal's (agent-written, checked by parseProposal).
  */
@@ -518,7 +518,7 @@ export function itemForJob(project, jobId) {
     return {
       pid,
       order: prop?.order ?? null,
-      title: prop?.title || 'Backlog item',
+      title: prop?.title || 'Planned job',
       minutes: prop?.minutes || (Number.isInteger(run.minutes) && run.minutes > 0 && run.minutes <= 90 ? run.minutes : null),
       cost: prop?.cost ?? null,
       issueId: typeof d?.issueId === 'string' ? d.issueId : null
