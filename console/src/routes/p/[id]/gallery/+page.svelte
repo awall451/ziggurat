@@ -12,6 +12,26 @@
   let big = $state(null);
   let showAll = $state(false);
 
+  // Tile width, like a file manager's thumbnail size. Kept per browser.
+  const SIZES = { min: 200, max: 1000, step: 50, start: 300 };
+  const stored = () => {
+    try {
+      const n = Number(localStorage.getItem('gallery-tile'));
+      return n >= SIZES.min && n <= SIZES.max ? n : SIZES.start;
+    } catch {
+      return SIZES.start;
+    }
+  };
+  let tile = $state(stored());
+  function resize(n) {
+    tile = n;
+    try {
+      localStorage.setItem('gallery-tile', String(n));
+    } catch {
+      // private window: the size lasts for this visit only
+    }
+  }
+
   const cycles = $derived(data.sets.filter((x) => x.kind !== 'day'));
   const days = $derived(data.sets.filter((x) => x.kind === 'day'));
   const set = $derived(data.sets.find((x) => x.key === setKey) || data.sets[0] || null);
@@ -125,17 +145,21 @@
         {#each data.sets.filter((x) => x.key !== set.key) as x (x.key)}<option value={x.key}>{label(x)}</option>{/each}
       </select>
     </label>
+    {#if partial}
+      <button class="btn quiet" onclick={() => (showAll = !showAll)} aria-pressed={showAll}>{showAll ? 'Show only new and changed' : `Show all ${current.files.length}`}</button>
+    {/if}
     <span class="dim small">
       {#if current.sha}
-        {#if current.fresh}{current.fresh.length} new or changed of {/if}{current.files.length} screenshots of {current.topic || 'a build'} ({current.sha.slice(0, 7)}), merged {at(current.at)}{#if current.removed}
+        {current.fresh ? `${current.fresh.length} new or changed of ` : ''}{current.files.length} screenshots of {current.topic || 'a build'} ({current.sha.slice(0, 7)}), merged {at(current.at)}{#if current.removed}
           · {current.removed} removed{/if}
       {:else}
         {current.files.length} screenshots from the newest passing build on {current.folder}
       {/if}
     </span>
-    {#if partial}
-      <button class="btn quiet" onclick={() => (showAll = !showAll)} aria-pressed={showAll}>{showAll ? 'Show only new and changed' : `Show all ${current.files.length}`}</button>
-    {/if}
+    <label class="size">
+      <span class="dim small">Size</span>
+      <input type="range" min={SIZES.min} max={SIZES.max} step={SIZES.step} value={tile} oninput={(e) => resize(Number(e.currentTarget.value))} aria-label="Screenshot size" />
+    </label>
     {#if flash}<span class="small s-done">{flash} <a href="/p/{p.id}/issues">Open Issues</a></span>{/if}
   </div>
 
@@ -149,7 +173,7 @@
     </div>
   {/if}
 
-  <div class="shots">
+  <div class="shots" style="--tile: {tile}px">
     {#each shown as f (f)}
       <figure class="panel">
         <div class="pair" class:two={compare}>
@@ -214,9 +238,16 @@
     align-items: center;
     gap: 8px;
   }
+  .size {
+    margin-left: auto;
+  }
+  .size input {
+    width: 140px;
+    accent-color: var(--ink);
+  }
   .shots {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--tile, 300px), 100%), 1fr));
     gap: 14px;
   }
   figure {
