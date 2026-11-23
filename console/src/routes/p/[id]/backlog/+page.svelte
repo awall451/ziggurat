@@ -181,14 +181,14 @@
   const timedJob = (id) => data.atJobs.find((j) => j.id === id) || null;
 </script>
 
-<svelte:head><title>Backlog · {p.name}</title></svelte:head>
+<svelte:head><title>Planning · {p.name}</title></svelte:head>
 <svelte:window onscroll={fitChat} onresize={fitChat} />
 
 {#if !data.ready}
   <section class="panel block">
-    <h2>Backlog</h2>
+    <h2>Planning</h2>
     {#if data.kitVersion}
-      <p>The backlog needs kit 0.10.0 on this team's VM (it has {data.kitVersion}).</p>
+      <p>Planning needs kit 0.10.0 on this team's VM (it has {data.kitVersion}).</p>
     {:else}
       <p class="dim">The VM is not reachable right now.</p>
     {/if}

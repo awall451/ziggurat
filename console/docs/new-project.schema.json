@@ -38,7 +38,7 @@
     "plan": {
       "type": "object",
       "additionalProperties": false,
-      "description": "When it's ready: one planning cycle after the gate proof passes. The lead writes no code; proposals appear on the Backlog tab; the team stays halted.",
+      "description": "When it's ready: one planning cycle after the gate proof passes. The lead writes no code; proposals appear on the Planning tab; the team stays halted.",
       "properties": {
         "on": { "type": "boolean", "default": false },
         "focus": { "type": "string", "maxLength": 8000 },

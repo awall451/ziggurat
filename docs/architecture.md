@@ -394,7 +394,7 @@ time are pointed out, since every team draws on the same usage limit.
 
 ### Planned issues and jobs on the timeline
 
-From kit 0.11. Approving a proposal on the Backlog also raises an owner issue of kind `planned` (made by the
+From kit 0.11. Approving a proposal on the Planning tab also raises an owner issue of kind `planned` (made by the
 console, not by the owner's own forms). It holds the job's text and a link to the proposal. Normal cycles do
 not see planned issues (`owner-issues prompt` leaves them out) unless the owner allows them to take approved
 items (`FREE_TAKE_APPROVED=1`). The one-shot job of that item names the issue, so the lead sets it
@@ -404,7 +404,7 @@ items (`FREE_TAKE_APPROVED=1`). The one-shot job of that item names the issue, s
 The Schedule page draws backlog jobs from the console's own run records, the VM's status (jobs set for a
 time, the job running) and the ledger: the estimate dashed, what ran hatched, hover for the title, click for
 the proposal. Run now shows a running bar at once. A job set for a time can be moved (`unat`, then `at` again
-with the stored job) or cancelled there. On the Backlog, "Schedule ▾ → On the timeline…" opens a day of all
+with the stored job) or cancelled there. On the Planning tab, "Schedule ▾ → On the timeline…" opens a day of all
 teams in a pop-up: the job's estimate follows the pointer in its team's row and a click picks the start.
 
 ### Issues as tickets

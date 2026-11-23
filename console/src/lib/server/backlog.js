@@ -653,7 +653,7 @@ export function jobsFor(project, status = null, now = Date.now()) {
       kind: 'job',
       pid,
       order: prop?.order ?? null,
-      title: prop?.title || 'Backlog item',
+      title: prop?.title || 'Planned job',
       minutes,
       cost: prop?.cost ?? null,
       end: null,

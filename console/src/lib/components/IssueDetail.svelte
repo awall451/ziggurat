@@ -300,8 +300,8 @@
           <dd class="mono small" title={issue.resolution.fixedIn}>{issue.resolution.fixedIn.slice(0, 9)}</dd>
         {/if}
         {#if issue.proposal}
-          <dt>Backlog</dt>
-          <dd class="small"><a href="{base}/backlog">approved item, revision {issue.proposal.rev}</a></dd>
+          <dt>Planning</dt>
+          <dd class="small"><a href="{base}/backlog">approved proposal, revision {issue.proposal.rev}</a></dd>
         {/if}
         {#if issue.job}
           <dt>Job</dt>

@@ -37,7 +37,7 @@ checks (`tools/check`). The gate holds that change until you approve it.
 ## 3. When it's ready
 
 Leave **Start a planning cycle** on. Once the VM is ready and its gate is proven, the lead reads your goal
-and documents, writes no code, and proposes at most N jobs (5 by default) on the **Backlog** tab. The team
+and documents, writes no code, and proposes at most N jobs (5 by default) on the **Planning** tab. The team
 stays halted throughout.
 
 ## 4. Check, dry run, create
@@ -49,7 +49,7 @@ stays halted throughout.
 
 ## 5. After the first plan
 
-- **Backlog tab:** read the proposals, talk them over in the chat, approve what should run, and run it now or
+- **Planning tab:** read the proposals, talk them over in the chat, approve what should run, and run it now or
   set a time.
 - **Inbox tab:** the first job is usually the team's real `tools/check`. Read the lead's explanation and the
   diff, then approve or decline. When the team asks for a system package or a domain, approving it adds the

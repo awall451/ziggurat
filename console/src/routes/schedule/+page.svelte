@@ -446,7 +446,7 @@
       <span class="grow"></span>
       <span class="legend small dim">
         <span class="key past"></span> ran <span class="key plan"></span> planned (typical length) <span class="key quiet"></span> quiet hours
-        <span class="key over"></span> likely overlap <span class="key job"></span> backlog job (estimate dashed)
+        <span class="key over"></span> likely overlap <span class="key job"></span> planned job (estimate dashed)
       </span>
     </div>
 
@@ -500,7 +500,7 @@
     {/if}
       <p class="dim small">
         <b>Move through time:</b> the arrows, or scroll sideways (Shift + wheel). <b>Zoom in:</b> drag across empty space. <b>Change times:</b> drag a planned start, or
-        click an empty place in a row to add one. Changes are not active until you apply them. <b>Move a backlog job:</b> drag it along its row; that is done at once.
+        click an empty place in a row to add one. Changes are not active until you apply them. <b>Move a planned job:</b> drag it along its row; that is done at once.
       </p>
     {/if}
   </section>
@@ -716,7 +716,7 @@
 {#if jobOpen}
   {@const j = jobOpen.job}
   {@const team = tl.projects.find((x) => x.id === jobOpen.project)}
-  <Modal title={j.kind === 'plan' ? `${team?.name}: planning cycle` : `${team?.name}: backlog job`} onclose={() => (jobOpen = null)}>
+  <Modal title={j.kind === 'plan' ? `${team?.name}: planning cycle` : `${team?.name}: planned job`} onclose={() => (jobOpen = null)}>
     <p class="small">
       {JOB_STATE[j.state]} <b>{whenAt(j.start)}</b>{j.state === 'done' ? `, until ${clockAt(j.end)}` : ''}. Estimate {j.minutes} min{j.state === 'done' ? `, took ${lengthText((j.end - j.start) / 1000)}` : ''}.
     </p>
