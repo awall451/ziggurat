@@ -1,6 +1,6 @@
 <script>
   import { invalidateAll } from '$app/navigation';
-  import { when, idleText } from '$lib/format.js';
+  import { when, idleText, stallText, pillState } from '$lib/format.js';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { data } = $props();
@@ -296,9 +296,12 @@
     <section class="panel block">
       <h2>Team</h2>
       <p class="dim small">
-        State: <span class="pill {st.state}">{st.state}</span>
+        State: <span class="pill {pillState(st)}">{pillState(st)}</span>
         {#if st.control}<span class="mono"> {st.control}</span>{/if}
       </p>
+      {#if st.stalled}
+        <p class="s-stalled">{stallText(st.stalled, p.now)}.</p>
+      {/if}
       {#if st.oneshot}
         <p>
           A one-shot job is in progress. {st.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'} Follow it under Topology; {lead}'s reply and any

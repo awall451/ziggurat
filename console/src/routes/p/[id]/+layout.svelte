@@ -1,7 +1,7 @@
 <script>
   import { page } from '$app/state';
   import { invalidateAll } from '$app/navigation';
-  import { num, usd, dur, between, ago, idleText, waitingParts } from '$lib/format.js';
+  import { num, usd, dur, between, ago, idleText, waitingParts, stallText, pillState } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
   import Popover from '$lib/components/Popover.svelte';
 
@@ -40,7 +40,7 @@
     tabMenu = false;
   });
 
-  const STATE_WORD = { running: 'Running', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
+  const STATE_WORD = { running: 'Running', stalled: 'Stalled', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
 
   let refreshing = $state(false);
   async function refresh() {
@@ -59,7 +59,7 @@
     <div class="stat panel">
       <span class="k">State</span>
       <span class="v">
-        <span class="pill {p.status.state === 'checking' ? 'idle' : p.status.state}">{STATE_WORD[p.status.state] || p.status.state}</span>
+        <span class="pill {pillState(p.status)}" title={stallText(p.status.stalled, p.now) || null}>{STATE_WORD[pillState(p.status)] || p.status.state}</span>
         {#if p.status.leadActive && p.cycle}
           <span class="mono small dim">cycle {p.cycle.number} · {dur(between(p.cycle.started, new Date(p.now).toISOString()))}</span>
         {/if}
@@ -87,6 +87,9 @@
     </a>
   </div>
 
+  {#if p.status.stalled && p.status.state !== 'unreachable'}
+    <div class="note s-stalled" role="status">{stallText(p.status.stalled, p.now)}{p.status.stalled.chat ? ' (chat turn)' : ''}. The {p.status.stalled.reason === 'usage-limit' ? 'cycle carries on by itself once the window resets' : 'cycle may still recover; you can halt it under Controls'}.</div>
+  {/if}
   {#if p.publish.blocked}
     <div class="note s-failed">Publish refused: {p.publish.blocked.reason} <a href="/p/{p.id}/controls#publishing">Publishing</a></div>
   {/if}

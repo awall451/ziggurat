@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { _test, kitAtLeast } from '../src/lib/server/live.js';
-import { idleText, waitingParts } from '../src/lib/format.js';
+import { _test, kitAtLeast, stallOf } from '../src/lib/server/live.js';
+import { idleText, waitingParts, stallText, pillState } from '../src/lib/format.js';
 
 // Raw status as the VM script prints it (all strings), for an idle team.
 const raw = (o = {}) => ({ control: 'run 2026-11-20T00:00:33+00:00', lead: 'inactive', timer: 'enabled', cap: '1', today: '1', next: '1795139944', dayend: '1795219200', now: '1795139000', ...o });
@@ -79,6 +79,47 @@ describe('status of an idle team', () => {
   it('reads whether a one-shot job ends in a halt or runs on', () => {
     expect(_test.shape(raw({ oneshot: '20261120T020000Z-o-abc 2026-11-20T02:00:00+00:00 run' })).oneshot).toMatchObject({ id: '20261120T020000Z-o-abc', runsOn: true });
     expect(_test.shape(raw({ oneshot: '20261120T020000Z-o-abc 2026-11-20T02:00:00+00:00' })).oneshot.runsOn).toBe(false);
+  });
+});
+
+describe('a stalled session (kit 0.24)', () => {
+  const limit = '{"stalled":true,"session":"x","kind":"cycle","reason":"usage-limit","since":1795418000,"resetsAt":1795422000,"limit":"five_hour"}';
+
+  it('reads what agent-kit-stall says, only while a cycle or chat turn runs', () => {
+    expect(_test.shape(raw({ lead: 'active', stall: limit })).stalled).toEqual({
+      reason: 'usage-limit', since: 1795418000, resetsAt: 1795422000, limit: 'five_hour', status: null, attempt: null, minutes: null, chat: false
+    });
+    expect(_test.shape(raw({ stall: limit })).stalled).toBeNull();
+    expect(_test.shape(raw({ lead: 'active', stall: '{"stalled":false}' })).stalled).toBeNull();
+    // An older kit prints nothing.
+    expect(_test.shape(raw({ lead: 'active' })).stalled).toBeNull();
+    expect(_test.shape(raw({ chat: '20261120T020000Z-p-plan 20261120T020500Z-c-abcdef 2026-11-20T02:05:00+00:00', stall: limit.replace('"cycle"', '"chat"') })).stalled.chat).toBe(true);
+  });
+
+  it('keeps only what it knows', () => {
+    expect(stallOf('{"stalled":true,"reason":"rm -rf"}')).toBeNull();
+    expect(stallOf('not json')).toBeNull();
+    expect(stallOf('{"stalled":true,"reason":"api-error","since":1795418000,"status":529,"attempt":4,"resetsAt":1795422000}')).toMatchObject({ reason: 'api-error', status: 529, attempt: 4, resetsAt: null });
+    expect(stallOf('{"stalled":true,"reason":"usage-limit","since":"soon","resetsAt":-1,"limit":"<b>"}')).toMatchObject({ since: null, resetsAt: null, limit: null });
+  });
+
+  it('the status script asks the kit for it with sudo, and only when the kit has it', () => {
+    const script = _test.statusScript({ slug: 's', kit: { state: '/var/lib/agent-kit', leadUnit: 'agent-kit-lead', bare: '/b', workspace: '/w', agentHome: '/home/agent' } });
+    expect(script).toMatch(/stall=\$\(\[ -x \/opt\/agent-kit\/bin\/agent-kit-stall \] && sudo -n \/opt\/agent-kit\/bin\/agent-kit-stall/);
+    execFileSync('bash', ['-n'], { input: script });
+  });
+
+  it('is said in one line, and shows as Stalled', () => {
+    const now = 1795418000 * 1000;
+    expect(stallText(stallOf(limit), now)).toMatch(/^Stalled: usage limit \(5-hour window\), resets at \S+/);
+    expect(stallText({ reason: 'usage-limit', limit: null, resetsAt: null }, now)).toBe('Stalled: usage limit');
+    expect(stallText({ reason: 'api-error', attempt: 5 }, now)).toBe('Stalled: API errors, retrying (attempt 5)');
+    expect(stallText({ reason: 'no-progress', minutes: 42 }, now)).toBe('Stalled: no progress for 42 min');
+    expect(stallText({ reason: 'no-progress', minutes: 95 }, now)).toBe('Stalled: no progress for 1 h 35 min');
+    expect(stallText(null)).toBeNull();
+    expect(pillState({ state: 'running', stalled: { reason: 'api-error' } })).toBe('stalled');
+    expect(pillState({ state: 'running', stalled: null })).toBe('running');
+    expect(pillState({ state: 'checking' })).toBe('idle');
   });
 });
 

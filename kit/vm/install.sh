@@ -87,7 +87,7 @@ for b in gate-status agent-kit-status agent-kit-stop agent-kit-halt agent-kit-re
          agent-kit-halt-after agent-kit-caps agent-kit-gate agent-kit-units agent-kit-inbox agent-kit-oneshot \
          agent-kit-auth agent-kit-gate-proof \
          owner-inbox gate-wait agent-kit-issues owner-issues agent-kit-publish owner-publish agent-kit-schedule \
-         agent-kit-backlog owner-backlog agent-kit-chat owner-gate owner-packages agent-kit-packages; do
+         agent-kit-backlog owner-backlog agent-kit-chat owner-gate owner-packages agent-kit-packages agent-kit-stall; do
   ln -sf /opt/agent-kit/bin/$b /usr/local/bin/$b
 done
 

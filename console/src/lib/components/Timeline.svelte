@@ -13,6 +13,7 @@
   // parent passes the picked start back as ghost.at, which stays drawn and can
   // be dragged, or picked again with another click.
   import { wallClock, timeOfDay, hourLabel, clockLabel, draggedStart, waitText, DAYS } from '$lib/schedule.js';
+  import { stallText } from '$lib/format.js';
 
   let {
     rows = [], // [{id, name, accent, tz, editable, draft, note, past, running, planned, skipped, log, expected}]
@@ -336,9 +337,10 @@
           {/each}
 
           {#if row.running && visible(row.running.start, now)}
-            <rect class="running" x={x(row.running.start)} y={y + 10} width={Math.max(4, x(now) - x(row.running.start))} height={ROW - 20} rx="3">
-              <title>{row.name}: a cycle is running since {clockText(row.running.start)}</title>
+            <rect class="running" class:stalled={!!row.stalled} x={x(row.running.start)} y={y + 10} width={Math.max(4, x(now) - x(row.running.start))} height={ROW - 20} rx="3">
+              <title>{row.name}: a cycle is running since {clockText(row.running.start)}{row.stalled ? `. ${stallText(row.stalled, now)}` : ''}</title>
             </rect>
+            {#if row.stalled?.reason === 'usage-limit'}<rect class="limited" fill="url(#{uid}-limit)" x={x(row.running.start)} y={y + 10} width={Math.max(4, x(now) - x(row.running.start))} height={ROW - 20} rx="3" />{/if}
           {/if}
 
           {#each row.log as l (l.at + l.slot)}
@@ -482,7 +484,7 @@
         {#if tip.job.kind === 'plan'}Planning cycle{:else}{tip.job.order != null ? `#${tip.job.order} · ` : ''}{tip.job.title}{/if}
       </div>
       <div class="small dim">
-        {tip.row.name} · {JOB_STATE[tip.job.state]} {clockText(tip.job.start)}{tip.job.state === 'done' ? ` to ${clockText(tip.job.end)}` : ''}
+        {tip.row.name} · {JOB_STATE[tip.job.state]} {clockText(tip.job.start)}{tip.job.state === 'done' ? ` to ${clockText(tip.job.end)}` : ''}{tip.job.state === 'running' && tip.row.stalled ? ` · ${stallText(tip.row.stalled, now)}` : ''}
       </div>
       <div class="small">
         est {lengthText(tip.job.estEnd - tip.job.start)}{tip.job.cost != null ? ` · $${tip.job.cost.toFixed(2)}` : ''}{tip.job.state === 'done' ? ` · took ${lengthText(tip.job.end - tip.job.start)}` : ''}
@@ -723,6 +725,11 @@
   .running {
     fill: var(--row);
     animation: pulse 1.6s ease-in-out infinite;
+  }
+  .running.stalled {
+    fill: var(--warn);
+    animation: none;
+    opacity: 0.6;
   }
   @keyframes pulse {
     50% {

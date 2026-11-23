@@ -345,7 +345,8 @@ textarea.field {
 .pill.done {
   color: var(--good);
 }
-.pill.interrupted {
+.pill.interrupted,
+.pill.stalled {
   color: var(--warn);
 }
 .pill.waiting,
@@ -364,7 +365,8 @@ textarea.field {
 .s-failed {
   color: var(--critical);
 }
-.s-interrupted {
+.s-interrupted,
+.s-stalled {
   color: var(--warn);
 }
 .s-queued,

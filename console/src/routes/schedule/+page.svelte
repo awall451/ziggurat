@@ -83,6 +83,7 @@
       note: noteFor(p),
       past: p.past,
       running: p.running,
+      stalled: p.stalled || null,
       // With a change open, the starts it brings are marked: only those show when their time has passed.
       planned: drafts[p.id] !== undefined ? markFresh(planning.planned[p.id] || [], p.schedule, range.from, range.to) : planning.planned[p.id] || [],
       // Starts skipped for one day: drawn struck through, they do not run.
