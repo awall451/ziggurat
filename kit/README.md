@@ -12,7 +12,7 @@ running (see "Upgrading the kit while a cycle runs" in [docs/architecture.md](..
 | `vm/bin/gate-status`, `agent-kit-status` | verdicts, owner overview |
 | `vm/bin/agent-kit-halt`, `agent-kit-resume`, `agent-kit-halt-at` | stop now, undo a stop, stop at a set time (`agent-kit-stop` is the old name for halt) |
 | `vm/bin/agent-kit-halt-after` | halt when the cycle in progress has ended and the gate has run, optionally asking the team to wrap up |
-| `vm/bin/agent-kit-oneshot` | one cycle for one job from the owner on a halted or idle team, then back to halted or running (`start`, `finish`, `reap`) |
+| `vm/bin/agent-kit-oneshot` | one cycle for one job from the owner on a halted or idle team, then back to halted or running (`start`, `finish`, `reap`); with `--free` (kit 0.25) one normal cycle with no job, held to the daily cap unless `--past-cap` |
 | `vm/bin/agent-kit-stall` | whether the session in progress is stuck, and why: waiting on the usage window (with the reset time), API errors, or no progress for 30 minutes (one JSON line, read by the console) |
 | `vm/bin/gate-wait` | for the lead: wait for the gate's verdict on submitted branches (used in a one-shot job) |
 | `vm/bin/agent-kit-caps`, `agent-kit-gate`, `agent-kit-units` | brakes and models, gate pause, the team's own units |

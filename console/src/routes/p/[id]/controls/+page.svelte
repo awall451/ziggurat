@@ -2,6 +2,7 @@
   import { invalidateAll } from '$app/navigation';
   import { when, idleText, stallText, pillState } from '$lib/format.js';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import RunCycle from '$lib/components/RunCycle.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -304,12 +305,22 @@
       {/if}
       {#if st.oneshot}
         <p>
-          A one-shot job is in progress. {st.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'} Follow it under Topology; {lead}'s reply and any
-          questions come to the <a href="/p/{p.id}/inbox">Inbox</a>.
+          {#if st.oneshot.free}
+            A cycle you started is in progress. {st.oneshot.runsOn ? 'The team goes back to running when it ends.' : 'The team halts again when it ends.'} Follow it under Topology.
+          {:else}
+            A one-shot job is in progress. {st.oneshot.runsOn ? 'The team goes back to running when this cycle ends.' : 'The team halts again when this cycle ends.'} Follow it under Topology; {lead}'s reply and any
+            questions come to the <a href="/p/{p.id}/inbox">Inbox</a>.
+          {/if}
         </p>
       {:else if st.state === 'halted' || !st.timerEnabled}
         <p>The team is stopped. Nothing spends tokens until you resume it{p.canOneshot ? ' or start a one-shot job' : ''}.</p>
         <div class="actions"><button class="btn primary" onclick={askResume} disabled={!!busy}>Resume team…</button></div>
+      {/if}
+      {#if p.runCycle}
+        <div class="actions">
+          <RunCycle id={p.id} name={p.name} rc={p.runCycle} quietNow={data.quietNow} showWhy ondone={(d) => (done = d)} />
+        </div>
+        <p class="small dim">One normal cycle now, with no job: the lead picks the work. The team goes back to how it was afterwards.</p>
       {/if}
       {#if st.schedule}
         <p class="small dim">

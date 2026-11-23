@@ -104,12 +104,14 @@ function atJobsOf(text) {
   return String(text || '')
     .split('\n')
     .map((l) => l.trim().split(/\s+/))
-    .filter(([id, at]) => /^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}$/.test(id || '') && /^\d{9,11}$/.test(at || ''))
+    .filter(([id, at]) => /^[0-9]{8}T[0-9]{6}Z-[opf]-[a-z0-9-]{1,40}$/.test(id || '') && /^\d{9,11}$/.test(at || ''))
     .map(([id, at, from, why, dep]) => ({
       id,
       at: Number(at),
       from: /^[A-Za-z0-9._@-]{1,80}$/.test(from || '') ? from : null,
       plan: /-p-/.test(id),
+      // A normal cycle set for a time, with no job (kit 0.25).
+      free: /-f-/.test(id),
       wait: WAIT_RE.test(why || '') ? { reason: why, job: /^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(dep || '') ? dep : null } : null
     }));
 }
@@ -195,12 +197,15 @@ function shape(raw) {
     kitVersion: raw.kitver || null,
     // The daily cycle cap, and the schedule file as the VM holds it (parsed by lib/schedule.js).
     cap: count(raw.cap),
+    // Cycles counted today by the VM's own date, as lead-cycle counts them.
+    today: count(raw.today),
     schedule: typeof raw.schedule === 'string' ? raw.schedule.slice(0, 6000) : '',
     // A one-shot job in progress: one cycle for one owner message, then halted
     // again, or (started on an idle team, kit 0.6) back to running.
     // From kit 0.10 also a planning cycle (an id with -p-).
-    oneshot: /^[0-9]{8}T[0-9]{6}Z-[op]-[a-z0-9-]{1,40}$/.test(jobId || '')
-      ? { id: jobId, since: jobSince || null, runsOn: jobAfter === 'run', plan: /-p-/.test(jobId) }
+    // From kit 0.25 also a normal cycle the owner started with no job (an id with -f-).
+    oneshot: /^[0-9]{8}T[0-9]{6}Z-[opf]-[a-z0-9-]{1,40}$/.test(jobId || '')
+      ? { id: jobId, since: jobSince || null, runsOn: jobAfter === 'run', plan: /-p-/.test(jobId), free: /-f-/.test(jobId) }
       : null,
     chat: chatOf(raw.chat),
     atJobs: atJobsOf(raw.atjobs),
@@ -276,6 +281,26 @@ export function invalidateStatus(id) {
 }
 
 /** Kit version on the VM is at least `want` ("0.6.0"). */
+/** The kit that can start a normal cycle with no job (agent-kit-oneshot --free). */
+export const FREE_KIT = '0.25.0';
+
+/**
+ * Can the owner start one normal cycle now ("Run a cycle now", kit 0.25)?
+ * {can, why} and, when it can, whether the team is halted (it halts again
+ * after) and whether the daily cap is reached (then only past the cap).
+ */
+export function runCycleState(st) {
+  const no = (why) => ({ can: false, why });
+  if (!st?.reachable) return no(st?.state === 'checking' ? 'Checking the VM' : 'The VM is not reachable');
+  if (st.vmMismatch || st.vmShared) return no('Not this project\'s VM');
+  if (!kitAtLeast(st.kitVersion, FREE_KIT)) return no(`The VM needs kit ${FREE_KIT} or later (it has ${st.kitVersion || 'an older one'})`);
+  if (st.oneshot) return no(st.oneshot.free ? 'A cycle you started is running' : st.oneshot.plan ? 'A planning cycle is running' : 'A one-shot job is running');
+  if (st.leadActive) return no('A cycle is running');
+  if (st.haltAfter) return no('A halt is pending. Cancel it under Controls first');
+  const atCap = Number.isInteger(st.cap) && Number.isInteger(st.today) && st.today >= st.cap;
+  return { can: true, why: null, halted: st.state === 'halted', atCap, today: st.today ?? null, cap: st.cap ?? null };
+}
+
 export function kitAtLeast(have, want) {
   const a = String(have || '').trim().split('.').map(Number);
   const b = want.split('.').map(Number);

@@ -2,6 +2,7 @@
   import { goto, invalidateAll } from '$app/navigation';
   import Timeline from '$lib/components/Timeline.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import RunCycle from '$lib/components/RunCycle.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
@@ -579,6 +580,7 @@
         <div class="row">
           <h2><span class="dot"></span>{p.name}</h2>
           <span class="grow"></span>
+          {#if p.runCycle}<RunCycle id={p.id} name={p.name} rc={p.runCycle} quietNow={quietIntervals(settings, Date.now() - 1000, Date.now() + 1000).some((q) => Date.now() >= q.from && Date.now() < q.to)} small />{/if}
           <a class="small" href="/p/{p.id}/controls">Controls</a>
         </div>
         {#if !p.canSchedule}

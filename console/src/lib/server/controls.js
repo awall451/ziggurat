@@ -2,7 +2,7 @@
 // with checked arguments, and every action is written to the audit log.
 import { kit } from './ssh.js';
 import { audit } from './audit.js';
-import { invalidateStatus, getStatus } from './live.js';
+import { invalidateStatus, getStatus, runCycleState } from './live.js';
 import { sendOneshot, startOneshot, markStarted } from './feedback.js';
 import { readToken } from './token.js';
 
@@ -72,6 +72,65 @@ export async function oneshotAgain(user, project, id) {
   const out = await startOneshot(project, String(id || ''));
   if (out.refused) throw new Error(out.error);
   return settle(user, project, out, { again: true });
+}
+
+const FREE_ID = /^[0-9]{8}T[0-9]{6}Z-f-[a-z0-9-]{1,40}$/;
+const SENDER = /^[A-Za-z0-9._@-]{1,80}$/;
+
+/** The id of a cycle the owner starts with no job: "<UTC stamp>-f-run-now". */
+export function freeCycleId(d = new Date()) {
+  return `${d.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')}-f-run-now`;
+}
+
+/** What agent-kit-oneshot is called with to start one normal cycle now. */
+export function runCycleArgs(id, user, pastCap = false) {
+  if (!FREE_ID.test(id)) throw new Error('Bad cycle id');
+  return ['start', id, user?.name && SENDER.test(user.name) ? user.name : 'owner', '--free', ...(pastCap ? ['--past-cap'] : [])];
+}
+
+/** The VM's refusal in plain words: "agent-kit-oneshot: the daily cycle cap is reached (6/6). ..." → "The daily cycle cap is reached (6/6). ...". */
+export function refusalText(res) {
+  const line = String(res?.stderr || res?.stdout || '').trim().split('\n').at(-1) || `exit ${res?.code}`;
+  const t = line.replace(/^agent-kit-oneshot:\s*/, '').slice(0, 300);
+  return t.charAt(0).toUpperCase() + t.slice(1) + (/[.!?]$/.test(t) ? '' : '.');
+}
+
+/**
+ * Run a cycle now (#94, kit 0.25): one normal cycle with no job, the lead picks
+ * its work. When it ends the VM puts the team back as it was (halted, or
+ * running). Refused at the daily cap unless `pastCap`; it counts toward the cap.
+ * A refusal by the VM throws (the caller reports it).
+ */
+export async function runCycle(user, project, { pastCap = false } = {}) {
+  const st = await getStatus(project, { fresh: true });
+  const can = runCycleState(st);
+  if (!can.can) throw new Error(can.why);
+  if (can.atCap && !pastCap) throw new Error(`Today's cycle cap is reached (${can.today}/${can.cap}). Tick "run anyway, past the cap" to start it.`);
+  const id = freeCycleId();
+  const res = await kit(project, 'agent-kit-oneshot', runCycleArgs(id, user, !!pastCap), { timeout: 120000 });
+  let started = res.code === 0;
+  // The kit says no with exit 2: nothing was started.
+  if (res.code === 2) {
+    audit(user, project.id, 'run-cycle', { id, pastCap: pastCap ? 'yes' : null }, { ok: false, detail: refusalText(res) });
+    throw new Error(refusalText(res));
+  }
+  if (!started) {
+    // No clear answer (the line dropped, a timeout): ask the VM before saying it did not start.
+    const status = await getStatus(project, { fresh: true });
+    started = status.oneshot?.id === id;
+  }
+  audit(user, project.id, 'run-cycle', { id, pastCap: pastCap ? 'yes' : null }, { ok: started, detail: started ? null : refusalText(res) });
+  invalidateStatus(project.id);
+  return {
+    ok: true,
+    started,
+    id,
+    detail: started
+      ? can.halted
+        ? 'Cycle started. The team halts again when it ends.'
+        : 'Cycle started. The team goes back to how it was when it ends.'
+      : `No clear answer from the VM (${refusalText(res)}). Look again in a minute: it may have started.`
+  };
 }
 
 async function settle(user, project, out, shown = {}) {

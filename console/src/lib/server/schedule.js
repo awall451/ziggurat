@@ -9,8 +9,8 @@ import path from 'node:path';
 import { CONFIG_DIR, listProjects, readJson, writeJson } from './config.js';
 import { kit } from './ssh.js';
 import { audit } from './audit.js';
-import { invalidateStatus, kitAtLeast, peekStatus } from './live.js';
-import { readCycles } from './aggregate.js';
+import { invalidateStatus, kitAtLeast, peekStatus, runCycleState } from './live.js';
+import { readCycles, typicalCycle } from './aggregate.js';
 import { statusSoon } from './view.js';
 import { jobsFor } from './backlog.js';
 import { parseScheduleText, formatScheduleText, validateSchedule, validateSettings, validTimeZone, rangeFor, windowRange, cleanWindow } from '../schedule.js';
@@ -129,6 +129,8 @@ export async function timeline({ view = 'day', date = null, from = null, to = nu
           cap: Number.isInteger(status.cap) ? status.cap : null,
           schedule: parseScheduleText(status.schedule),
           typicalSecs: typicalSecs(cycles),
+          // Run a cycle now (kit 0.25).
+          runCycle: { ...runCycleState(status), typical: typicalCycle(cycles) },
           past,
           running: Number.isFinite(since) ? { start: since } : null,
           // The cycle or job in progress is stuck, and why (kit 0.24).
