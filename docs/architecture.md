@@ -538,6 +538,22 @@ From kit 0.19 a cycle's line also has `tokens` (input, output, cache read, cache
 whole run, sub-agents included), `models` (the same per model, with Claude Code's own cost figure) and
 `est_min` (the estimate of a job that had one, else null).
 
+### Cost rules from the kit (kit 0.20)
+
+`agent-kit-rules` holds a few working rules that cut waste without touching quality. Every agent the
+lead starts gets them at its start (the `SubagentStart` hook), and the lead gets its own in the cycle
+prompt; a planning cycle gets none. They are: never wait idle for more than 4 minutes in one command;
+helpers run only the tests for what they touched, the tech lead runs the full check once per branch and
+the gate runs everything; a small step is done by the tech lead itself; a goal that fails on the smaller
+model is started again on the larger one with `Redo on Opus:` at the start of the agent's description,
+which the Usage tab counts. A team's own instructions stay as they are.
+
+An agent's prompt cache lives 5 minutes, the lead's one hour. A tech lead waits on its helpers for
+longer than 5 minutes and then pays for its whole context again, so the templates give tech leads the
+one-hour cache (`experimental: cacheTtl: 1h` in the agent's header). Claude Code reads that only from
+the team's own agent files, so a team that lacks it is asked, in a normal cycle's prompt, to add the two
+lines and submit them through the gate; the notice stops once they are on main.
+
 ### History of runs
 
 The console keeps one line per finished run in `<data>/metrics/<project>.jsonl`, written after a pull once
