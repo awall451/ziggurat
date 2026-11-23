@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { listSessions, sessionTree, leadReport, _test } from '../src/lib/server/transcripts.js';
+import { listSessions, sessionTree, leadReport, leadLast, _test } from '../src/lib/server/transcripts.js';
 
 // Synthetic transcripts in the shape Claude Code writes them. No real data.
 const SID = '11111111-2222-4333-8444-555555555555';
@@ -136,6 +136,23 @@ describe('leadReport', () => {
     expect(leadReport(project, SID)).toBeNull(); // only tool calls, no words
     expect(leadReport(project, '../etc')).toBeNull();
     fs.rmSync(path.join(project.paths.transcripts, project.slug, `${R}.jsonl`));
+  });
+});
+
+describe('leadLast', () => {
+  it('gives the last text of a session with the time it was written', () => {
+    const dir = path.join(project.paths.transcripts, project.slug);
+    const id = '77777777-2222-4333-8444-555555555555';
+    fs.writeFileSync(
+      path.join(dir, `${id}.jsonl`),
+      line(user('lead', '2026-01-02T10:00:00Z')) +
+        line(asst('m1', 'claude-lead-1', usage(1, 1), [{ type: 'text', text: 'First.' }], '2026-01-02T10:01:00Z')) +
+        line(asst('m2', 'claude-lead-1', usage(1, 1), [{ type: 'text', text: 'Second.' }], '2026-01-02T10:05:00Z')) +
+        line(asst('m3', 'claude-lead-1', usage(1, 1), [{ type: 'tool_use', id: 'x1', name: 'Bash', input: {} }], '2026-01-02T10:09:00Z'))
+    );
+    expect(leadLast(project, id)).toEqual({ text: 'Second.', at: '2026-01-02T10:05:00Z' });
+    expect(leadLast(project, OLD)).toBe(null);
+    expect(leadLast(project, '../etc')).toBe(null);
   });
 });
 

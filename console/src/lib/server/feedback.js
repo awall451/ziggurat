@@ -127,6 +127,16 @@ function keepFlags(project, id, flags) {
   fs.writeFileSync(file, JSON.stringify(meta, null, 2));
 }
 
+/** The text of a message or one-shot job the owner sent from this console, or null. */
+export function sentText(project, id) {
+  if (!OWNER_ID.test(id || '')) return null;
+  try {
+    return fs.readFileSync(path.join(sentDir(project), id, 'body.md'), 'utf8').slice(0, MAX_TEXT);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A new one-shot job on a halted team: the text becomes an owner message and
  * the VM runs one cycle for it, then halts again.
