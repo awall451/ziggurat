@@ -252,6 +252,27 @@ a.btn.quiet {
 .linkbtn:hover {
   text-decoration: underline;
 }
+/* A line of a menu in a pop-over (the phone menus of the top bar and the project tabs). */
+.menuitem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.menuitem:hover {
+  background: rgba(var(--glow), 0.08);
+  color: var(--ink);
+}
+.menuitem.on {
+  color: var(--ink-strong);
+  background: rgba(var(--glow), 0.12);
+}
+
 /* A labelled field on its own line, above its action row. */
 .fieldrow {
   display: flex;

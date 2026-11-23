@@ -10,6 +10,7 @@
   import { invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
   import Icon from '$lib/components/Icon.svelte';
+  import Popover from '$lib/components/Popover.svelte';
 
   let { children } = $props();
   // Which tab of the header is the current one. Settings is neither.
@@ -26,6 +27,14 @@
   });
 
   const project = $derived(page.data.project || null);
+
+  // Phone width: the sections and Settings are in a menu. It closes when the page changes.
+  let menu = $state(false);
+  $effect(() => {
+    page.url.pathname;
+    menu = false;
+  });
+  const crumb = $derived(project || /^\/(new|settings)/.test(page.url.pathname));
 </script>
 
 <svelte:head>
@@ -34,7 +43,7 @@
 
 <div class="app" style="--accent: {project?.accent || '#4fd8ff'}">
   <header class="bar">
-    <a class="brand" href="/">
+    <a class="brand" class:short={crumb} href="/">
       <span class="logo"><Icon name="ziggurat" size={26} /></span>
       <span class="word">Ziggurat</span>
     </a>
@@ -46,16 +55,26 @@
     </nav>
     <span class="crumbs">
       {#if project}
-        <span class="dim">/</span><span class="here">{project.name}</span>
+        <span class="dim slash">/</span><span class="here">{project.name}</span>
         <span class="chip mono">{project.theme}</span>
       {:else if page.url.pathname.startsWith('/new')}
-        <span class="dim">/</span><span class="here">New project</span>
+        <span class="dim slash">/</span><span class="here">New project</span>
       {:else if page.url.pathname.startsWith('/settings')}
-        <span class="dim">/</span><span class="here">Settings</span>
+        <span class="dim slash">/</span><span class="here">Settings</span>
       {/if}
     </span>
     <span class="grow"></span>
-    <a class="small" href="/settings">Settings</a>
+    <a class="small settings" href="/settings">Settings</a>
+    <span class="narrow">
+      <Popover open={menu} onclose={() => (menu = false)}>
+        {#snippet trigger()}
+          <button class="btn quiet icon" aria-label="Menu" aria-haspopup="true" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="menu" size={18} /></button>
+        {/snippet}
+        <a class="menuitem" class:on={section === 'projects'} aria-current={section === 'projects' ? 'page' : undefined} href="/">Projects</a>
+        <a class="menuitem" class:on={section === 'schedule'} aria-current={section === 'schedule' ? 'page' : undefined} href="/schedule">Schedule</a>
+        <a class="menuitem" class:on={page.url.pathname.startsWith('/settings')} href="/settings">Settings</a>
+      </Popover>
+    </span>
   </header>
   <main>
     {@render children()}
@@ -144,6 +163,32 @@
     border: 1px solid var(--accent);
     color: var(--accent);
     font-size: 12px;
+  }
+  .narrow {
+    display: none;
+  }
+  /* Phone width: the logo, where you are, and a menu. */
+  @media (max-width: 700px) {
+    .bar {
+      padding: 0 12px;
+      gap: 10px;
+    }
+    .tabs,
+    .sep,
+    .chip,
+    .slash,
+    .settings,
+    .brand.short .word {
+      display: none;
+    }
+    .narrow {
+      display: inline-flex;
+    }
+    .here {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
   main {
     flex: 1;
