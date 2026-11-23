@@ -503,6 +503,37 @@ function proposal(project, pid) {
 }
 
 /** Ids of jobs set for a time that the VM dropped (`job:<id> <date> missed…` in schedule.log). */
+/**
+ * The backlog item a one-shot job does, from this console's own run record:
+ * {pid, order, title, minutes, cost, issueId}, or null. Title and estimate are
+ * the proposal's (agent-written, checked by parseProposal).
+ */
+export function itemForJob(project, jobId) {
+  if (!/^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$/.test(jobId || '')) return null;
+  for (const pid of names(runsDir(project), PID_RE)) {
+    const run = readJson(path.join(runsDir(project), `${pid}.json`));
+    if (run?.jobId !== jobId) continue;
+    const prop = proposal(project, pid);
+    const d = readJson(path.join(decisionsDir(project), `${pid}.json`));
+    return {
+      pid,
+      order: prop?.order ?? null,
+      title: prop?.title || 'Backlog item',
+      minutes: prop?.minutes || (Number.isInteger(run.minutes) && run.minutes > 0 && run.minutes <= 90 ? run.minutes : null),
+      cost: prop?.cost ?? null,
+      issueId: typeof d?.issueId === 'string' ? d.issueId : null
+    };
+  }
+  return null;
+}
+
+/** What the owner asked a planning cycle to look at: {id, focus}, or null. */
+export function planRequest(project, id) {
+  if (!PLAN_RE.test(id || '')) return null;
+  const p = readJson(path.join(plansDir(project), `${id}.json`));
+  return p ? { id, focus: typeof p.focus === 'string' ? p.focus : '' } : null;
+}
+
 function missedJobs(project) {
   const out = new Set();
   let text = '';

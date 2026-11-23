@@ -3,11 +3,15 @@
   import { num, usd, dur, between, when } from '$lib/format.js';
   import Graph from '$lib/components/Graph.svelte';
   import NodeDrawer from '$lib/components/NodeDrawer.svelte';
+  import TaskStrip from '$lib/components/TaskStrip.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
   const tree = $derived(data.tree);
   const session = $derived(data.sessions.find((s) => s.id === data.picked) || null);
+
+  // The strip above the map takes its height from the map, so the page does not scroll.
+  let stripH = $state(0);
 
   let selectedId = $state('lead');
   const selected = $derived(tree?.nodes.find((n) => n.id === selectedId) || null);
@@ -80,13 +84,17 @@
   ];
 </script>
 
+{#if data.task}
+  <div bind:clientHeight={stripH}><TaskStrip task={data.task} base="/p/{p.id}" /></div>
+{/if}
+
 {#if !tree}
   <div class="panel empty">
     <h2>No cycles recorded yet</h2>
     <p class="dim">The agent tree appears here once the {p.tiers[0]} has run a cycle and its transcripts have been pulled.</p>
   </div>
 {:else}
-  <div class="split" class:open={!!selected} class:dragging bind:this={splitEl} style:--side-w="{sideW}px">
+  <div class="split" class:open={!!selected} class:dragging bind:this={splitEl} style:--side-w="{sideW}px" style:--strip-h="{data.task ? stripH : 0}px">
     <section class="canvas panel">
       <div class="over top">
         <label class="picker">
@@ -163,7 +171,7 @@
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     gap: 2px;
-    height: calc(100vh - 56px - 196px);
+    height: calc(100vh - 56px - 196px - var(--strip-h, 0px));
     min-height: 480px;
   }
   .split.open {
