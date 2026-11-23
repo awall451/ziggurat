@@ -270,7 +270,7 @@ drafts; `GET` and `DELETE /api/drafts/<id>` read or delete one.
    halted. A build that is broken in a way only your project knows is still yours to try once by hand.
 9. **Planning cycle** (when the form asked for one). After the gate proof passes, the console starts one
    planning cycle with your focus and cap. The lead reads the goal and `docs/`, writes no code, and proposes
-   jobs on the Backlog tab, where you can talk them over. The team halts again when it ends.
+   jobs on the Planning tab, where you can talk them over. The team halts again when it ends.
 
 A project from a template starts with a placeholder `tools/check` (it runs `tests/*.sh`). The lead's first
 job is choosing the stack and writing the real checks. A change to `tools/check` is held by the gate until

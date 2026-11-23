@@ -413,7 +413,7 @@
                 transform="translate({mv ? x(mv.t) - x(job.start) : 0} 0)"
                 role={onjob ? 'button' : 'img'}
                 tabindex={onjob ? 0 : -1}
-                aria-label="{job.kind === 'plan' ? 'Planning cycle' : `Backlog job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}{movable(job) ? '. Arrow keys move it, Enter confirms' : ''}"
+                aria-label="{job.kind === 'plan' ? 'Planning cycle' : `Planned job ${job.order ?? ''} ${job.title}`}, {JOB_STATE[job.state]} {clockText(job.start)}{movable(job) ? '. Arrow keys move it, Enter confirms' : ''}"
                 onpointerdown={(e) => grabJob(e, row, job)}
                 onpointerenter={(e) => showTip(e, row, job)}
                 onpointermove={(e) => pullJob(e, row, job)}

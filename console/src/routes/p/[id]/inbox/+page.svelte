@@ -216,7 +216,7 @@
 
   function stateOf(m) {
     if (m.closed && !m.delivered) return ['idle', 'Closed by you'];
-    if (m.scheduledFor && !m.closed) return ['queued', `Set for ${new Date(m.scheduledFor * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (from the Backlog)`];
+    if (m.scheduledFor && !m.closed) return ['queued', `Set for ${new Date(m.scheduledFor * 1000).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} (from Planning)`];
     if (m.error) return ['failed', m.tier === 'oneshot' ? 'Not started' : 'Not delivered'];
     if (m.tier === 'oneshot' && !m.reply && !m.closed && (p.status.oneshot?.id === m.id || justStarted(m))) return ['running', `${lead} is working on it`];
     if (!m.delivered) return ['queued', 'Sending'];

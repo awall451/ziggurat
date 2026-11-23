@@ -417,11 +417,11 @@
         proposals
       </label>
       <p class="small dim">
-        One planning cycle after the gate is proven: the lead reads your goal and documents, writes no code, and proposes jobs on the Backlog tab, where you can
+        One planning cycle after the gate is proven: the lead reads your goal and documents, writes no code, and proposes jobs on the Planning tab, where you can
         talk them over. The team stays halted; nothing runs until you approve.
       </p>
     {:else}
-      <p class="small dim">The project is registered and halted. Start it from its Backlog or Controls tab when you like.</p>
+      <p class="small dim">The project is registered and halted. Start it from its Planning or Controls tab when you like.</p>
     {/if}
   </section>
 
