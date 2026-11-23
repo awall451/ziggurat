@@ -225,3 +225,60 @@ describe('sessionTree', () => {
     expect(aaa.toolCalls).toBe(2);
   });
 });
+
+describe('sessionUsage', () => {
+  const U = '77777777-2222-4333-8444-555555555555';
+  const kindLabeler = (agentType, depth) => ({
+    label: agentType,
+    kind: depth === 0 ? 'lead' : agentType.startsWith('area-lead') ? 'area_lead' : 'worker',
+    rawType: agentType,
+    tier: depth
+  });
+  const full = (i, o, cr, cw, extra = {}) => ({ ...usage(i, o, cr, cw), ...extra });
+
+  it('splits the estimate by token class and counts context written again after a wait', async () => {
+    const { sessionUsage } = await import('../src/lib/server/transcripts.js');
+    const dir = path.join(project.paths.transcripts, project.slug);
+    const sub = path.join(dir, U, 'subagents');
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `${U}.jsonl`),
+      line(user('You are the lead.', '2026-01-05T10:00:00Z')) +
+        line({ ...asst('u1', 'claude-lead-1', full(0, 1000, 0, 10_000, { output_tokens_details: { thinking_tokens: 400 } }), [{ type: 'tool_use', id: 'k1', name: 'Agent', input: { subagent_type: 'area-lead-core', description: 'Redo on Opus: the parser' } }], '2026-01-05T10:00:05Z'), effort: 'medium' })
+    );
+    fs.writeFileSync(path.join(sub, 'agent-ccc.meta.json'), JSON.stringify({ agentType: 'area-lead-core', description: 'Redo on Opus: the parser', toolUseId: 'k1', spawnDepth: 1 }));
+    fs.writeFileSync(
+      path.join(sub, 'agent-ccc.jsonl'),
+      line(user('Fix the parser.', '2026-01-05T10:01:00Z')) +
+        line({ type: 'assistant', timestamp: '2026-01-05T10:01:10Z', gitBranch: 'work/parser', effort: 'low', message: { id: 'q1', model: 'claude-big-1', usage: full(0, 0, 0, 20_000), content: [] } }) +
+        // The cache held: nearly all of the context is read back.
+        line({ ...asst('q2', 'claude-big-1', full(0, 0, 20_000, 1000), [], '2026-01-05T10:02:00Z'), gitBranch: 'work/parser' }) +
+        // After a long wait nothing is read back: 21,000 tokens are written again, 500 are new.
+        line({ ...asst('q3', 'claude-big-1', full(0, 0, 0, 21_500), [], '2026-01-05T10:20:00Z'), gitBranch: 'work/parser' })
+    );
+    fs.appendFileSync(path.join(project.paths.fleet, 'cycles.jsonl'), JSON.stringify({ session: U, kind: 'oneshot', oneshot: 'x', rc: 0, start: '2026-01-05T10:00:00Z' }) + '\n');
+
+    const u = sessionUsage(project, U, { pricing, labeler: kindLabeler });
+    expect(u.kind).toBe('oneshot');
+    // Lead: 1000 output at $20 and 10,000 written at $4 x 1.25, per million.
+    expect(u.byRole.lead.parts.output).toBeCloseTo(0.02, 4);
+    expect(u.byRole.lead.parts.thinking).toBeCloseTo(0.008, 4);
+    expect(u.byRole.lead.parts.cacheWrite).toBeCloseTo(0.05, 4);
+    expect(u.byRole.lead).toMatchObject({ thinking: 400, agents: 1, requests: 1, startTokens: 10_000, efforts: { medium: 1 } });
+    const al = u.byRole.area_lead;
+    expect(al.rewrite.count).toBe(1);
+    expect(al.rewrite.tokens).toBe(21_000);
+    expect(al.rewrite.costUsd).toBeCloseTo((21_000 * 4 * 1.25) / 1e6, 4);
+    expect(al).toMatchObject({ requests: 3, startTokens: 20_000, efforts: { low: 1 }, models: { 'claude-big-1': 1 } });
+    expect(u.rewrite.count).toBe(1);
+    expect(u.parts.cacheWrite).toBeCloseTo(al.parts.cacheWrite + 0.05, 4);
+    expect(u.areaLeads).toEqual([expect.objectContaining({ id: 'ccc', model: 'claude-big-1', branch: 'work/parser', redo: true })]);
+    fs.rmSync(path.join(dir, `${U}.jsonl`));
+    fs.rmSync(path.join(dir, U), { recursive: true });
+  });
+
+  it('prices a 1-hour cache write at its own factor', () => {
+    const c = _test.costParts({ cache_creation_input_tokens: 1_000_000, cache_creation: { ephemeral_1h_input_tokens: 1_000_000, ephemeral_5m_input_tokens: 0 } }, 'x', pricing);
+    expect(c.cacheWrite).toBeCloseTo(8, 4);
+  });
+});

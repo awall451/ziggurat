@@ -18,17 +18,47 @@
     other: 'Other'
   });
 
+  const CLASSES = [
+    ['cacheWrite', 'Cache write'],
+    ['cacheRead', 'Cache read'],
+    ['output', 'Output'],
+    ['input', 'Fresh input']
+  ];
+  const KIND_NAME = { normal: 'Normal cycle', oneshot: 'One-shot job', plan: 'Planning cycle' };
+  const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : 0);
+  const mostOf = (counts) => Object.entries(counts || {}).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+
   function totals(key) {
     const out = {};
     for (const c of cycles) {
       for (const [k, v] of Object.entries(c[key])) {
-        const t = (out[k] ||= { costUsd: 0, output: 0, input: 0, cacheRead: 0, cacheWrite: 0, agents: 0 });
+        const t = (out[k] ||= {
+          costUsd: 0,
+          output: 0,
+          input: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          agents: 0,
+          requests: 0,
+          startTokens: 0,
+          parts: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 },
+          rewrite: { count: 0, costUsd: 0 },
+          efforts: {},
+          models: {}
+        });
         t.costUsd += v.costUsd;
         t.output += v.output;
         t.input += v.input || 0;
         t.cacheRead += v.cacheRead || 0;
         t.cacheWrite += v.cacheWrite || 0;
         t.agents += v.agents;
+        t.requests += v.requests || 0;
+        t.startTokens += v.startTokens || 0;
+        for (const k2 of Object.keys(t.parts)) t.parts[k2] += v.parts?.[k2] || 0;
+        t.rewrite.count += v.rewrite?.count || 0;
+        t.rewrite.costUsd += v.rewrite?.costUsd || 0;
+        for (const [e, n] of Object.entries(v.efforts || {})) t.efforts[e] = (t.efforts[e] || 0) + n;
+        for (const [m, n] of Object.entries(v.models || {})) t.models[m] = (t.models[m] || 0) + n;
       }
     }
     return Object.entries(out)
@@ -39,6 +69,60 @@
   const byRole = $derived(totals('byRole').sort((a, b) => KIND_ORDER.indexOf(a.name) - KIND_ORDER.indexOf(b.name)));
   const total = $derived(cycles.reduce((t, c) => t + c.costUsd, 0));
   const models = $derived(byModel.map((m) => m.name));
+
+  // Where the estimate goes, by token class, over all cycles shown.
+  const parts = $derived(
+    cycles.reduce(
+      (t, c) => {
+        for (const k of Object.keys(t)) t[k] += c.parts?.[k] || 0;
+        return t;
+      },
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 }
+    )
+  );
+  const rewrite = $derived(
+    cycles.reduce(
+      (t, c) => {
+        t.count += c.rewrite?.count || 0;
+        t.costUsd += c.rewrite?.costUsd || 0;
+        return t;
+      },
+      { count: 0, costUsd: 0 }
+    )
+  );
+  const byKind = $derived(
+    ['normal', 'oneshot', 'plan']
+      .map((k) => {
+        const rows = cycles.filter((c) => c.kind === k);
+        const costs = rows.map((c) => c.costUsd).sort((a, b) => a - b);
+        return {
+          kind: k,
+          runs: rows.length,
+          costUsd: costs.reduce((t, v) => t + v, 0),
+          median: costs.length ? costs[Math.floor((costs.length - 1) / 2)] : 0,
+          chatUsd: rows.reduce((t, c) => t + (c.chat?.costUsd || 0), 0),
+          chatTurns: rows.reduce((t, c) => t + (c.chat?.turns || 0), 0)
+        };
+      })
+      .filter((r) => r.runs)
+  );
+  const chat = $derived(byKind.reduce((t, r) => ({ turns: t.turns + r.chatTurns, costUsd: t.costUsd + r.chatUsd }), { turns: 0, costUsd: 0 }));
+
+  // Each area lead with the model it ran on and what the gate said about its branch.
+  const areaLeads = $derived(cycles.flatMap((c) => (c.areaLeads || []).map((a) => ({ ...a, cycle: c.number, sid: c.id }))));
+  const leadPicks = $derived.by(() => {
+    const out = {};
+    for (const a of areaLeads) {
+      const t = (out[a.model || 'unknown'] ||= { model: a.model || 'unknown', agents: 0, costUsd: 0, merged: 0, refused: 0, none: 0 });
+      t.agents++;
+      t.costUsd += a.costUsd;
+      if (a.gate === 'merged') t.merged++;
+      else if (a.gate === 'failed' || a.gate === 'rejected') t.refused++;
+      else t.none++;
+    }
+    return Object.values(out).sort((a, b) => b.costUsd - a.costUsd);
+  });
+  const redos = $derived(areaLeads.filter((a) => a.redo));
   const PALETTE = ['#4fd8ff', '#a78bfa', '#fbbf24', '#4ade80', '#f472b6', '#8fb3d9'];
 
   const stacked = $derived((t) => ({
@@ -100,21 +184,129 @@
           {/each}
         </tbody>
       </table>
-      <h2 class="gap">By role</h2>
+    </section>
+  </div>
+
+  <section class="panel block">
+    <h2>Where it goes</h2>
+    <dl class="facts">
+      {#each CLASSES as [k, name] (k)}
+        <div><dt>{name}</dt><dd class="mono">{pct(parts[k], total)}%</dd></div>
+      {/each}
+      <div><dt>Thinking (part of output)</dt><dd class="mono">{pct(parts.thinking, total)}%</dd></div>
+      <div>
+        <dt>Written again after a wait</dt>
+        <dd class="mono">{pct(rewrite.costUsd, total)}% <span class="dim small">{num(rewrite.count)} times</span></dd>
+      </div>
+    </dl>
+    <p class="dim small">
+      An agent that waits longer than its cache lives (5 minutes for most agents, 1 hour for the lead) pays to have its whole context written
+      again. That share is waste: the same work with shorter waits would not cost it.
+    </p>
+    <h2 class="gap">By role</h2>
+    <div class="scroll-x">
       <table class="grid">
-        <thead><tr><th>Role</th><th class="num">Agents</th><th class="num">Output</th><th class="num">Estimate</th><th class="num">Share</th></tr></thead>
+        <thead>
+          <tr>
+            <th>Role</th><th>Model</th><th>Effort</th><th class="num">Agents</th><th class="num">Requests each</th><th class="num">Starts with</th>
+            <th class="num">Cache write</th><th class="num">Cache read</th><th class="num">Output</th><th class="num">Thinking</th><th class="num">Written again</th>
+            <th class="num">Estimate</th><th class="num">Share</th>
+          </tr>
+        </thead>
         <tbody>
           {#each byRole as r (r.name)}
             <tr>
               <td>{kindName[r.name] || r.name}</td>
+              <td class="mono">{modelShort(mostOf(r.models) || '') || '–'}{Object.keys(r.models).length > 1 ? ' +' : ''}</td>
+              <td class="mono">{mostOf(r.efforts) || '–'}</td>
               <td class="num">{num(r.agents)}</td>
-              <td class="num">{num(r.output)}</td>
+              <td class="num">{num(r.agents ? r.requests / r.agents : 0)}</td>
+              <td class="num">{num(r.agents ? r.startTokens / r.agents : 0)}</td>
+              <td class="num">{pct(r.parts.cacheWrite, r.costUsd)}%</td>
+              <td class="num">{pct(r.parts.cacheRead, r.costUsd)}%</td>
+              <td class="num">{pct(r.parts.output, r.costUsd)}%</td>
+              <td class="num">{pct(r.parts.thinking, r.costUsd)}%</td>
+              <td class="num">{pct(r.rewrite.costUsd, r.costUsd)}%</td>
               <td class="num">{usd(r.costUsd)}</td>
-              <td class="num">{total ? Math.round((r.costUsd / total) * 100) : 0}%</td>
+              <td class="num">{pct(r.costUsd, total)}%</td>
             </tr>
           {/each}
         </tbody>
       </table>
+    </div>
+    <p class="dim small">"Starts with" is the context, in tokens, of an agent's first request: its instructions and tools before any work. The percentages are shares of that role's own estimate.</p>
+  </section>
+
+  <div class="cols">
+    <section class="panel block">
+      <h2>By kind of run</h2>
+      <table class="grid">
+        <thead><tr><th>Kind</th><th class="num">Runs</th><th class="num">Median</th><th class="num">Estimate</th><th class="num">Share</th></tr></thead>
+        <tbody>
+          {#each byKind as k (k.kind)}
+            <tr>
+              <td>{KIND_NAME[k.kind]}</td>
+              <td class="num">{num(k.runs)}</td>
+              <td class="num">{usd(k.median)}</td>
+              <td class="num">{usd(k.costUsd)}</td>
+              <td class="num">{pct(k.costUsd, total)}%</td>
+            </tr>
+          {/each}
+          {#if chat.turns}
+            <tr>
+              <td>Chat with the lead</td>
+              <td class="num">{num(chat.turns)}</td>
+              <td class="num">–</td>
+              <td class="num">{usd(chat.costUsd)}</td>
+              <td class="num dim">apart</td>
+            </tr>
+          {/if}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel block">
+      <h2>{p.tiers[1]}: model and gate result</h2>
+      {#if leadPicks.length}
+        <table class="grid">
+          <thead><tr><th>Model</th><th class="num">Started</th><th class="num">Merged</th><th class="num">Refused</th><th class="num">Not submitted</th><th class="num">Estimate</th></tr></thead>
+          <tbody>
+            {#each leadPicks as m (m.model)}
+              <tr>
+                <td class="mono">{modelShort(m.model)}</td>
+                <td class="num">{num(m.agents)}</td>
+                <td class="num">{num(m.merged)}</td>
+                <td class="num">{num(m.refused)}</td>
+                <td class="num">{num(m.none)}</td>
+                <td class="num">{usd(m.costUsd)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <p class="dim small">
+          The lead picks the model for each goal. "Refused" is a branch the gate failed or rejected; "Not submitted" has no gate line under the
+          branch's name (parked, renamed, or submitted as part of another branch).
+        </p>
+        <h2 class="gap">Done again on the larger model</h2>
+        {#if redos.length}
+          <table class="grid">
+            <thead><tr><th class="num">Cycle</th><th>Goal</th><th class="num">Estimate</th></tr></thead>
+            <tbody>
+              {#each redos as a (a.sid + a.id)}
+                <tr>
+                  <td class="num"><a href="/p/{p.id}/topology?s={a.sid}">{a.cycle}</a></td>
+                  <td>{a.description}</td>
+                  <td class="num">{usd(a.costUsd)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <p class="dim small">None in these cycles.</p>
+        {/if}
+      {:else}
+        <p class="dim small">No {p.tiers[1].toLowerCase()} in these cycles.</p>
+      {/if}
     </section>
   </div>
 

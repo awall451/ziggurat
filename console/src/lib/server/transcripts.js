@@ -24,7 +24,7 @@ function newFold() {
     version: null,
     gitBranch: null,
     cwd: null,
-    msgs: new Map(), // message id -> {usage, model}; later lines of one message replace earlier ones
+    msgs: new Map(), // message id -> {usage, model, effort}; later lines of one message replace earlier ones
     tools: new Map(), // tool_use id -> tool name
     agentCalls: new Map(), // tool_use id -> {subagentType, description, model}
     results: new Set(), // tool_use ids that have a result
@@ -101,7 +101,7 @@ function feed(f, o) {
   if (o.type === 'assistant') {
     if (m.model && m.model !== '<synthetic>') f.model = m.model;
     const id = m.id || o.uuid;
-    if (id && m.usage) f.msgs.set(id, { usage: m.usage, model: m.model || null });
+    if (id && m.usage) f.msgs.set(id, { usage: m.usage, model: m.model || null, effort: typeof o.effort === 'string' ? o.effort : null });
     if (Array.isArray(m.content)) {
       for (const b of m.content) {
         if (!b) continue;
@@ -164,21 +164,28 @@ function priceFor(model, pricing) {
   return pricing.default;
 }
 
-function costOf(usage, model, pricing) {
+/** Cost of one request in USD, by token class. Thinking is part of output. */
+function costParts(usage, model, pricing) {
   const p = priceFor(model, pricing);
   const cc = usage.cache_creation || {};
   const w5 = cc.ephemeral_5m_input_tokens ?? (cc.ephemeral_1h_input_tokens ? 0 : usage.cache_creation_input_tokens || 0);
   const w1 = cc.ephemeral_1h_input_tokens || 0;
-  return (
-    ((usage.input_tokens || 0) * p.input +
-      (usage.output_tokens || 0) * p.output +
-      (usage.cache_read_input_tokens || 0) * p.cacheRead +
-      w5 * p.input * (pricing.cacheWrite5mFactor ?? 1.25) +
-      w1 * p.input * (pricing.cacheWrite1hFactor ?? 2)) /
-    1e6
-  );
+  return {
+    input: ((usage.input_tokens || 0) * p.input) / 1e6,
+    output: ((usage.output_tokens || 0) * p.output) / 1e6,
+    cacheRead: ((usage.cache_read_input_tokens || 0) * p.cacheRead) / 1e6,
+    cacheWrite: (w5 * p.input * (pricing.cacheWrite5mFactor ?? 1.25) + w1 * p.input * (pricing.cacheWrite1hFactor ?? 2)) / 1e6,
+    thinking: ((usage.output_tokens_details?.thinking_tokens || 0) * p.output) / 1e6
+  };
 }
 
+function costOf(usage, model, pricing) {
+  const c = costParts(usage, model, pricing);
+  return c.input + c.output + c.cacheRead + c.cacheWrite;
+}
+
+// Below this a context is too small for a missed cache to matter.
+const REWRITE_MIN = 5000;
 const contextOf = (u) => (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
 
 function summarize(f, pricing) {
@@ -186,17 +193,39 @@ function summarize(f, pricing) {
   let peak = 0;
   let output = 0;
   let cost = 0;
-  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  for (const { usage, model } of f.msgs.values()) {
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
+  const parts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
+  // Context written to the cache a second time: the cache had expired while
+  // the agent waited (on another agent, a long command, a pause).
+  const rewrite = { count: 0, tokens: 0, costUsd: 0 };
+  let effort = null;
+  let start = null;
+  for (const { usage, model, effort: e } of f.msgs.values()) {
+    const prev = context;
+    const read = usage.cache_read_input_tokens || 0;
+    const written = usage.cache_creation_input_tokens || 0;
+    if (prev > REWRITE_MIN && read < prev / 2 && written) {
+      const again = Math.min(prev - read, written);
+      rewrite.count++;
+      rewrite.tokens += again;
+      rewrite.costUsd += (costParts(usage, model, pricing).cacheWrite * again) / written;
+    }
     context = contextOf(usage); // the last message wins
+    start ??= context;
+    if (e) effort = e;
+    tokens.thinking += usage.output_tokens_details?.thinking_tokens || 0;
+    const c = costParts(usage, model, pricing);
+    for (const k of Object.keys(parts)) parts[k] += c[k];
     if (context > peak) peak = context;
     output += usage.output_tokens || 0;
     tokens.input += usage.input_tokens || 0;
     tokens.output += usage.output_tokens || 0;
     tokens.cacheRead += usage.cache_read_input_tokens || 0;
     tokens.cacheWrite += usage.cache_creation_input_tokens || 0;
-    cost += costOf(usage, model, pricing);
+    cost += c.input + c.output + c.cacheRead + c.cacheWrite;
   }
+  rewrite.costUsd = Math.round(rewrite.costUsd * 10000) / 10000;
+  for (const k of Object.keys(parts)) parts[k] = Math.round(parts[k] * 10000) / 10000;
   const tally = {};
   for (const name of f.tools.values()) tally[name] = (tally[name] || 0) + 1;
   let waitingOn = 0;
@@ -205,10 +234,14 @@ function summarize(f, pricing) {
     model: f.model,
     started: f.first,
     ended: f.last,
+    effort,
     contextTokens: context,
+    startTokens: start ?? 0,
     peakTokens: peak,
     outputTokens: output,
     tokens,
+    costParts: parts,
+    rewrite,
     turns: f.msgs.size,
     toolCalls: f.tools.size,
     tools: Object.entries(tally)
@@ -553,15 +586,43 @@ export function sessionTree(project, sid, { status = null, pricing, labeler, led
   };
 }
 
-/** Per-model and per-role token and cost totals of one session (for the Usage tab). */
+// How a lead marks an area lead it starts again on the larger model (kit rule).
+const REDO_RE = /^\s*redo on opus\b/i;
+
+const CLASSES = ['input', 'output', 'cacheRead', 'cacheWrite', 'thinking'];
+
+/**
+ * Per-model and per-role token and cost totals of one session (for the Usage
+ * tab): tokens and cost by class, context written again after a wait, the
+ * context an agent starts with, and each area lead with its model and branch.
+ */
 export function sessionUsage(project, sid, { pricing, labeler }) {
   const tree = sessionTree(project, sid, { pricing, labeler });
   if (!tree) return null;
+  const led = readLedger(project).find((c) => c.session === sid && c.kind !== 'chat') || null;
+  const kind = ['normal', 'oneshot', 'plan'].includes(led?.kind) ? led.kind : led?.oneshot ? 'oneshot' : 'normal';
   const byModel = {};
   const byRole = {};
+  const areaLeads = [];
+  const rewrite = { count: 0, tokens: 0, costUsd: 0 };
+  const parts = Object.fromEntries(CLASSES.map((k) => [k, 0]));
   for (const n of tree.nodes) {
     const m = (byModel[n.model || 'unknown'] ||= { costUsd: 0, output: 0, input: 0, cacheRead: 0, cacheWrite: 0, agents: 0 });
-    const r = (byRole[n.kind] ||= { costUsd: 0, output: 0, agents: 0 });
+    const r = (byRole[n.kind] ||= {
+      costUsd: 0,
+      output: 0,
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      thinking: 0,
+      agents: 0,
+      requests: 0,
+      startTokens: 0,
+      parts: Object.fromEntries(CLASSES.map((k) => [k, 0])),
+      rewrite: { count: 0, tokens: 0, costUsd: 0 },
+      efforts: {},
+      models: {}
+    });
     m.costUsd += n.costUsd;
     m.output += n.tokens.output;
     m.input += n.tokens.input;
@@ -569,10 +630,45 @@ export function sessionUsage(project, sid, { pricing, labeler }) {
     m.cacheWrite += n.tokens.cacheWrite;
     m.agents++;
     r.costUsd += n.costUsd;
-    r.output += n.tokens.output;
+    for (const k of CLASSES) {
+      r[k] += n.tokens[k];
+      r.parts[k] += n.costParts[k];
+      parts[k] += n.costParts[k];
+    }
     r.agents++;
+    r.requests += n.turns;
+    r.startTokens += n.startTokens;
+    for (const k of ['count', 'tokens', 'costUsd']) {
+      r.rewrite[k] += n.rewrite[k];
+      rewrite[k] += n.rewrite[k];
+    }
+    if (n.effort) r.efforts[n.effort] = (r.efforts[n.effort] || 0) + 1;
+    if (n.model) r.models[n.model] = (r.models[n.model] || 0) + 1;
+    if (n.kind === 'area_lead') {
+      areaLeads.push({
+        id: n.id,
+        label: n.label,
+        description: n.description ? String(n.description).slice(0, 200) : null,
+        model: n.model,
+        branch: n.branch,
+        status: n.status,
+        costUsd: n.costUsd,
+        redo: REDO_RE.test(n.description || '')
+      });
+    }
   }
-  return { id: sid, started: tree.session.started, costUsd: tree.session.total.costUsd, byModel, byRole };
+  return {
+    id: sid,
+    kind,
+    started: tree.session.started,
+    costUsd: tree.session.total.costUsd,
+    parts,
+    rewrite,
+    byModel,
+    byRole,
+    areaLeads,
+    chat: tree.session.chat
+  };
 }
 
-export const _test = { feedLine, newFold, summarize, costOf, folds };
+export const _test = { feedLine, newFold, summarize, costOf, costParts, folds };
