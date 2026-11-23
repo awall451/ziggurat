@@ -237,6 +237,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    /* A long cycle name must not push the page wider than a phone. */
+    min-width: 0;
+    max-width: 100%;
+  }
+  .bar select {
+    min-width: 0;
+    max-width: 100%;
   }
   .size {
     margin-left: auto;

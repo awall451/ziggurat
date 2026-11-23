@@ -3,6 +3,7 @@
   import { invalidateAll } from '$app/navigation';
   import { num, usd, dur, between, ago, idleText, waitingParts } from '$lib/format.js';
   import Icon from '$lib/components/Icon.svelte';
+  import Popover from '$lib/components/Popover.svelte';
 
   let { data, children } = $props();
   const p = $derived(data.project);
@@ -26,6 +27,18 @@
   const waiting = $derived(wait.total);
   const waitingText = $derived(wait.text);
   const current = $derived(page.url.pathname.split('/')[3] || 'topology');
+  // The number on a tab: what waits there.
+  const countOf = (slug) => (slug === 'inbox' ? wait.inbox : slug === 'issues' ? p.issues : slug === 'backlog' ? wait.backlog : 0) || 0;
+  const currentLabel = $derived(TABS.find(([slug]) => slug === current)?.[1] || 'Menu');
+  // Tabs that are not open and have something waiting: shown on the phone menu's button.
+  const elsewhere = $derived(TABS.reduce((t, [slug]) => t + (slug === current ? 0 : countOf(slug)), 0));
+
+  // Phone width: the tabs are in a menu. It closes when the page changes.
+  let tabMenu = $state(false);
+  $effect(() => {
+    page.url.pathname;
+    tabMenu = false;
+  });
 
   const STATE_WORD = { running: 'Running', idle: 'Idle', halted: 'Halted', unreachable: 'Unreachable', checking: 'Checking' };
 
@@ -98,9 +111,23 @@
   {/if}
 
   <div class="tabs">
+    <span class="tabmenu">
+      <Popover open={tabMenu} onclose={() => (tabMenu = false)} align="start">
+        {#snippet trigger()}
+          <button class="btn quiet" aria-label="Tabs: {currentLabel}" aria-haspopup="true" aria-expanded={tabMenu} onclick={() => (tabMenu = !tabMenu)}>
+            {currentLabel}{#if elsewhere}<span class="count">{elsewhere}</span>{/if} ▾
+          </button>
+        {/snippet}
+        {#each TABS as [slug, label] (slug)}
+          <a class="menuitem" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
+            {label}{#if countOf(slug)}<span class="count">{countOf(slug)}</span>{/if}
+          </a>
+        {/each}
+      </Popover>
+    </span>
     {#each TABS as [slug, label] (slug)}
       <a class="tab" class:on={current === slug} href="{base}/{slug}" aria-current={current === slug ? 'page' : null}>
-        {label}{#if slug === 'inbox' && wait.inbox}<span class="count">{wait.inbox}</span>{:else if slug === 'issues' && p.issues}<span class="count">{p.issues}</span>{:else if slug === 'backlog' && wait.backlog}<span class="count">{wait.backlog}</span>{/if}
+        {label}{#if countOf(slug)}<span class="count">{countOf(slug)}</span>{/if}
       </a>
     {/each}
     <span class="grow"></span>
@@ -209,5 +236,39 @@
     padding: 16px 24px 24px;
     display: flex;
     flex-direction: column;
+  }
+  .tabmenu {
+    display: none;
+  }
+  /* Phone width: one button names the open tab and opens the list of tabs. */
+  @media (max-width: 700px) {
+    .head {
+      padding: 12px 12px 0;
+    }
+    .body {
+      padding: 12px 12px 16px;
+    }
+    .strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .tab {
+      display: none;
+    }
+    .tabmenu {
+      display: inline-flex;
+    }
+    .tabs {
+      flex-wrap: nowrap;
+      gap: 8px;
+      padding-bottom: 8px;
+    }
+    .sync {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding-right: 0;
+    }
   }
 </style>

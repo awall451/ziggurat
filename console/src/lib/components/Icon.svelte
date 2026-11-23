@@ -16,7 +16,9 @@
   aria-label={label}
   aria-hidden={label ? null : 'true'}
 >
-  {#if name === 'ziggurat'}
+  {#if name === 'menu'}
+    <path d="M4 7 H20 M4 12 H20 M4 17 H20" />
+  {:else if name === 'ziggurat'}
     <rect x="8.5" y="4" width="7" height="4.5" fill="currentColor" stroke="none" />
     <rect x="5" y="9.75" width="14" height="4.5" fill="currentColor" stroke="none" />
     <rect x="1.5" y="15.5" width="21" height="4.5" fill="currentColor" stroke="none" />
