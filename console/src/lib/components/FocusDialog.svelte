@@ -88,8 +88,9 @@
 <Modal title="Focus on {name}" {onclose}>
   <div class="grid">
     <p class="small">
-      {name} runs normal cycles back to back: each ends, merges and reports as usual, then the next starts. Its start times are set aside meanwhile. Its planned jobs run first, right away and in order, without waiting for their set times;
-      then cycles of the lead's own choosing. Jobs set after the focus ends keep their times. Afterwards everything is as it was.
+      {name} runs normal cycles back to back: each ends, merges and reports as usual, then the next starts. Its start times are set aside meanwhile. The order of work:
+      first its planned jobs set for a time before the focus ends, right away and in order; then its open issues, in progress before new (approved proposals included);
+      then work of the lead's own choosing. Afterwards everything is as it was.
     </p>
 
     <div class="stack">

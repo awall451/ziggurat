@@ -17,6 +17,9 @@ ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 source "$ETC/project.env"
 # shellcheck source=/dev/null
 [ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
+# In focus (kit 0.31) the team works through the owner's issues, approved items
+# included, before its own roadmap: approved items count as allowed.
+[ -f "$STATE/focus" ] && FREE_TAKE_APPROVED=1
 IS=$STATE/issues
 OUT=$STATE/issues-out
 ID_RE='^[0-9]{8}T[0-9]{6}Z-i-[a-f0-9]{6}$'
@@ -51,9 +54,14 @@ open_ids() {
 # item the owner approved: it runs as its own one-shot job, which names it.
 # Normal cycles leave it alone, unless the owner lets them take approved items.
 prompt_ids() {
-  local id
+  local id pid
   for id in $(open_ids); do
-    if [ "$(header "$IS/$id/issue.md" Kind)" = planned ] && [ "${FREE_TAKE_APPROVED:-0}" != 1 ]; then continue; fi
+    if [ "$(header "$IS/$id/issue.md" Kind)" = planned ]; then
+      [ "${FREE_TAKE_APPROVED:-0}" = 1 ] || continue
+      # In focus, not one whose backlog item is set for a time: its own job does it (kit 0.31).
+      pid=$(grep -oE 'Backlog item:? [0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}' "$IS/$id/issue.md" 2> /dev/null | head -1 | grep -oE '[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}')
+      if [ -n "$pid" ] && [ -f "$STATE/focus" ] && grep -qx "$pid" "$STATE/focus.scheduled" 2> /dev/null; then continue; fi
+    fi
     echo "$id"
   done
 }

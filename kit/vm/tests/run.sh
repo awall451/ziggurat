@@ -187,6 +187,14 @@ check "normal cycles are not given planned issues" '! grep -q JASPER <<< "$("$BI
 echo "FREE_TAKE_APPROVED=1" > "$T/etc/caps.env"
 check "unless the owner lets them take approved items" 'grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
 rm -f "$T/etc/caps.env"
+# In focus (kit 0.31) planned issues are worked before the lead's own roadmap...
+echo "since=1 until=- cycles=- perday=10" > "$S/focus"
+check "in focus planned issues are given to normal cycles" 'grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
+# ...but not one whose backlog item is set for a time: its own job does it.
+echo "20260101T000000Z-b-abcdef" > "$S/focus.scheduled"
+check "not one whose item is set for a time" '! grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
+rm -f "$S/focus" "$S/focus.scheduled"
+check "outside focus nothing changes" '! grep -q JASPER <<< "$("$BIN/owner-issues" prompt)"'
 echo "Started." | "$BIN/owner-issues" update $IP in_progress > /dev/null
 check "the job that names it can update it" 'grep -q "$IP  normal  *planned .*in_progress" <<< "$("$BIN/owner-issues" list)"'
 "$BIN/agent-kit-issues" set $IP done > /dev/null
@@ -1219,6 +1227,14 @@ check "an approval of an older revision does not count" 'grep -q "revised after 
 akb set "$B1" approved 2 > /dev/null
 check "approved" 'grep -q "$B1  approved" <<< "$(ob list)"'
 refuse "taking an approved item when the owner has not allowed it" ob taken "$B1"
+# In focus (kit 0.31) approved items may be taken, unless set for a time.
+echo "since=1 until=- cycles=- perday=10" > "$S/focus"
+echo "$B1" > "$S/focus.scheduled"
+refuse "in focus, not an item set for a time" ob taken "$B1"
+check "in focus the approved items are listed to take, but not one set for a time" '! grep -q "$B1" <<< "$(ob prompt | sed -n "/allows normal cycles to take/,\$p")"'
+: > "$S/focus.scheduled"
+check "in focus an approved item is listed to take" 'grep -q "allows normal cycles to take approved items" <<< "$(ob prompt)" && grep -q "$B1" <<< "$(ob prompt | sed -n "/allows normal cycles to take/,\$p")"'
+rm -f "$S/focus" "$S/focus.scheduled"
 check "no approved items in the prompt by default" '! grep -q "$B1" <<< "$(ob prompt)"'
 "$BIN/agent-kit-caps" set FREE_TAKE_APPROVED 1 > /dev/null
 check "allowed: approved items are offered to normal cycles" 'grep -q "$B1" <<< "$(ob prompt)" && ! grep -q "$B2" <<< "$(ob prompt)"'
@@ -1563,6 +1579,7 @@ for i in 1 2 3 4 5 6 7; do jq -nc --arg d "$(date +%F)" '{date:$d, counted:true,
 out=$(cycle 2>&1)
 check "in focus a cycle runs without a slot and past the usual cap" '[ -s "$FAKE_PROMPT" ] && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .focus_since)" = "$(foc show | jq -r .focus.since)" ]'
 check "the lead is told about focus and how to say it is blocked" 'grep -q "^## Focus" "$FAKE_PROMPT" && grep -q "owner-focus blocked" "$FAKE_PROMPT"'
+check "and the order of work: issues in progress, then new ones, then its own roadmap" 'grep -q "1. Owner issues that are .in_progress." "$FAKE_PROMPT" && grep -q "2. Then owner issues that are .new." "$FAKE_PROMPT" && grep -q "3. Only when no open issue is left" "$FAKE_PROMPT"'
 check "a focus cycle says whether it changed only notes" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .notes_only)" = true ]'
 : > "$FAKE_LOG"; tick_at "$(TZ=UTC date -d "$(TZ=UTC date +%F) 03:00" +%s)" 2> /dev/null
 check "the schedule's slot is skipped while in focus" 'grep -q "skipped: in focus" "$S/schedule.log"'
@@ -1601,6 +1618,12 @@ JB=20260108T090000Z-o-second JA=20260108T100000Z-o-first
 tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 5 * 3600)) $JB owner > /dev/null
 tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 3 * 3600)) $JA owner > /dev/null
 foc check
+check "the items of jobs set for a time are listed for the lead" '[ -f "$S/focus.scheduled" ]'
+mkdir -p "$T/work/jb"; printf 'Backlog item 20260108T000000Z-b-0abcde (revision 1), approved by the owner: Save slots\n' > "$T/work/jb/body.md"
+JI=20260108T080000Z-o-item
+tar -c -C "$T/work/jb" . | shot at $(($(date +%s) + 6 * 3600)) $JI owner > /dev/null; foc check
+check "a backlog item set for a time is found in its job" 'grep -qx "20260108T000000Z-b-0abcde" "$S/focus.scheduled"'
+shot unat $JI > /dev/null; foc check
 check "a job set hours ahead is next in focus" '[ "$(cut -d" " -f1 "$S/focus.hold")" = "$JA" ] && [ "$(foc show | jq -r .hold.id)" = "$JA" ] && grep -q "next: planned job $JA" "$S/schedule.log"'
 out=$(cycle 2>&1)
 check "no focus cycle starts before it, and nothing is counted" 'grep -q "holding for planned job $JA" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'

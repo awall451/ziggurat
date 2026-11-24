@@ -81,8 +81,16 @@ hold_for() {
     return 0
   done
 }
+# Backlog items whose job is set for a time (kit 0.31): their own job does them,
+# so a focus cycle must not take them too. One item id per line, readable by the
+# agent (the folder of timed jobs is root's only).
+SCHEDULED=$STATE/focus.scheduled
+scheduled_items() {
+  local f
+  for f in "$AT"/2*.job; do [ -f "$f" ] && head -c 4096 "$f"; done 2> /dev/null | grep -aoE '[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}' | sort -u
+}
 end_focus() { # reason
-  rm -f "$FOCUS" "$OUT/blocked" "$HOLD"
+  rm -f "$FOCUS" "$OUT/blocked" "$HOLD" "$SCHEDULED"
   write "$ENDED" "$now $1"
   log "ended: $1"
   echo "focus ended: $1"
@@ -190,6 +198,7 @@ case "${1:-show}" in
     # Two cycles in a row in focus that changed nothing but the team's notes.
     last=$(jq -s --argjson t "$since" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | .[-2:] | map(.notes_only == true) | if length == 2 and all then "yes" else "no" end' "$LEDGER" 2> /dev/null)
     if [ "$last" = '"yes"' ]; then end_focus "blocked on the owner: two cycles in a row changed only the team's notes" > /dev/null; exit 0; fi
+    write "$SCHEDULED" "$(scheduled_items)"
     # Planned jobs go first (kit 0.29): no focus cycle while one is next.
     h=$(hold_for)
     if [ -n "$h" ]; then
