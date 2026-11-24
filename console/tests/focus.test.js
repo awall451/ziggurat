@@ -52,13 +52,16 @@ beforeEach(() => {
 
 describe('what the VM says about focus', () => {
   it('reads focus, pause and how the last one ended; keeps only what it knows', () => {
-    expect(focusOf('{"focus":{"since":1795400000,"until":null,"cycles":4,"perDay":12,"done":1},"paused":null,"ended":null}').on).toEqual({ since: 1795400000, until: null, cycles: 4, perDay: 12, done: 1 });
+    expect(focusOf('{"focus":{"since":1795400000,"until":null,"cycles":4,"perDay":12,"done":1},"paused":null,"ended":null}').on).toEqual({ since: 1795400000, until: null, cycles: 4, perDay: 12, done: 1, hold: null });
     expect(focusOf('{"focus":null,"paused":{"since":1,"until":1795400000,"for":"alpha"},"ended":{"at":1795300000,"reason":"its time has come<script>"}}')).toMatchObject({
       on: null,
       paused: { until: 1795400000, for: 'alpha' },
       ended: { at: 1795300000, reason: 'its time has comescript' }
     });
     expect(focusOf('{"paused":{"until":1795400000,"for":"../x"}}').paused).toBeNull();
+    // A planned job goes first (kit 0.28).
+    expect(focusOf('{"focus":{"since":1,"perDay":6},"hold":{"id":"20261123T223454Z-o-4fabf3","at":1795489200}}').on.hold).toEqual({ id: '20261123T223454Z-o-4fabf3', at: 1795489200, kind: 'job' });
+    expect(focusOf('{"focus":{"since":1,"perDay":6},"hold":{"id":"x; rm","at":1795489200}}').on.hold).toBeNull();
     expect(focusOf('')).toBeNull();
   });
 });

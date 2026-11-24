@@ -98,7 +98,7 @@
   </header>
   {#if focus}
     <div class="focusbar" role="status">
-      <span><b>Focus:</b> <a href="/p/{focus.id}/topology">{focus.name}</a> runs cycles back to back{focus.until ? ` until ${fwhen(focus.until)}` : focus.cycles ? ` · ${focus.done} of ${focus.cycles} cycles` : ' until you switch it off'} · at most {focus.perDay} a day</span>
+      <span><b>Focus:</b> <a href="/p/{focus.id}/topology">{focus.name}</a> runs cycles back to back{focus.until ? ` until ${fwhen(focus.until)}` : focus.cycles ? ` · ${focus.done} of ${focus.cycles} cycles` : ' until you switch it off'} · at most {focus.perDay} a day{focus.hold ? ` · next: the planned ${focus.hold.kind === 'once' ? 'one-time cycle' : focus.hold.kind === 'plan' ? 'planning cycle' : 'job'} at ${fwhen(focus.hold.at)}` : ''}</span>
       {#if focusProblem}<span class="s-failed small">{focusProblem}</span>{/if}
       <button class="btn quiet sm" onclick={stopFocus} disabled={stopping}>{stopping ? 'Stopping…' : 'Stop'}</button>
     </div>

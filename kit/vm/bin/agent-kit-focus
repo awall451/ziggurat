@@ -20,6 +20,10 @@
 # $STATE/focus   "since=<unix> until=<unix|-> cycles=<N|-> perday=<N>"
 # $STATE/paused  "since=<unix> until=<unix> for=<team>"
 # $STATE/focus.ended "<unix> <reason>": the last focus and why it ended.
+# $STATE/focus.hold "<job id> <unix>": a planned job is due before a new focus
+# cycle would likely end (kit 0.28). `check` keeps it; lead-cycle starts no focus
+# cycle while it is fresh, so the job starts at its time. A job held back by
+# the jobs it builds on does not hold the focus.
 # A focus ends early when the team is blocked on the owner: the lead says so
 # (owner-focus blocked "<why>", a file in $STATE/focus-out) or two cycles in a
 # row in focus changed nothing but the team's notes (lead-cycle writes
@@ -41,6 +45,9 @@ LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
 MAX_PAUSE=$((7 * 86400))
 MAX_FOCUS=$((31 * 86400))
 NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+AT=$STATE/oneshot-at
+HOLD=$STATE/focus.hold
+ANY_RE='^[0-9]{8}T[0-9]{6}Z-[opf]-[a-z0-9-]{1,40}$'
 
 die() { echo "agent-kit-focus: $*" >&2; exit 2; }
 now=${AGENT_KIT_NOW:-$(date +%s)}
@@ -53,8 +60,46 @@ log() { printf '%s focus %s %s\n' "$(date -u -d "@$now" +%FT%TZ)" "$(date -d "@$
 since_count() {
   jq -s --argjson t "$1" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | length' "$LEDGER" 2> /dev/null || echo 0
 }
+# How long a cycle of this team typically takes, in seconds: the median of its
+# last ten real cycles, at least 15 minutes, at most 3 hours, 1 hour without any.
+typical_secs() {
+  local t
+  t=$(jq -s '[.[] | select(.counted != false and (.halted | not) and (.kind // "normal") != "chat" and (.kind // "normal") != "plan" and ((.secs // 0) > 60)) | .secs] | .[-10:] | sort | if length == 0 then 3600 else .[(length / 2 | floor)] end' "$LEDGER" 2> /dev/null)
+  [[ ${t:-} =~ ^[0-9]+$ ]] || t=3600
+  [ "$t" -ge 900 ] || t=900
+  [ "$t" -le 10800 ] || t=10800
+  echo "$t"
+}
+# The first planned job a new focus cycle would be in the way of: "<id> <unix>", or nothing.
+hold_for() {
+  local win f id when wreason after dep ok best="" bestw=""
+  win=$(typical_secs)
+  for f in "$AT"/2*; do
+    [ -f "$f" ] || continue
+    id=$(basename "$f")
+    [[ $id =~ $ANY_RE ]] || continue
+    read -r when _ < "$f"
+    [[ ${when:-} =~ ^[0-9]{9,11}$ ]] && [ "$when" -le $((now + win)) ] || continue
+    # Held back by the jobs it builds on: it cannot start anyway.
+    wreason=""
+    read -r wreason _ < "$f.wait" 2> /dev/null || true
+    case "$wreason" in pending | running | failed | held | merge) continue ;; esac
+    after=$(sed -n 's/^after=//p' "$f.meta" 2> /dev/null | head -1)
+    if [ -n "$after" ]; then
+      ok=1
+      for dep in ${after//,/ }; do
+        [[ $dep =~ $ANY_RE ]] || continue
+        # Still set for a time, or not ended yet: this job will wait for it.
+        { [ ! -e "$AT/$dep" ] && grep -q "\"oneshot\":\"$dep\"" "$LEDGER" 2> /dev/null; } || ok=0
+      done
+      [ "$ok" = 1 ] || continue
+    fi
+    if [ -z "$bestw" ] || [ "$when" -lt "$bestw" ]; then best=$id bestw=$when; fi
+  done
+  [ -z "$best" ] || echo "$best $bestw"
+}
 end_focus() { # reason
-  rm -f "$FOCUS" "$OUT/blocked"
+  rm -f "$FOCUS" "$OUT/blocked" "$HOLD"
   write "$ENDED" "$now $1"
   log "ended: $1"
   echo "focus ended: $1"
@@ -161,7 +206,17 @@ case "${1:-show}" in
     fi
     # Two cycles in a row in focus that changed nothing but the team's notes.
     last=$(jq -s --argjson t "$since" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | .[-2:] | map(.notes_only == true) | if length == 2 and all then "yes" else "no" end' "$LEDGER" 2> /dev/null)
-    [ "$last" = '"yes"' ] && end_focus "blocked on the owner: two cycles in a row changed only the team's notes" > /dev/null
+    if [ "$last" = '"yes"' ]; then end_focus "blocked on the owner: two cycles in a row changed only the team's notes" > /dev/null; exit 0; fi
+    # Planned jobs go first (kit 0.28): no new focus cycle in the way of one that is due.
+    h=$(hold_for)
+    if [ -n "$h" ]; then
+      read -r hid hat <<< "$h"
+      read -r was _ < "$HOLD" 2> /dev/null || was=""
+      [ "$was" = "$hid" ] || log "waiting for planned job $hid at $(date -d "@$hat" -Is)"
+      write "$HOLD" "$h"
+    else
+      rm -f "$HOLD"
+    fi
     exit 0
     ;;
 
@@ -174,11 +229,16 @@ case "${1:-show}" in
     fi
     [ -f "$PAUSED" ] && p=$(jq -nc --arg s "$(field "$PAUSED" since)" --arg u "$(field "$PAUSED" until)" --arg f "$(field "$PAUSED" for)" \
       '{since: ($s | tonumber? // null), until: ($u | tonumber? // null), for: $f}')
+    h=null
+    if [ -f "$FOCUS" ] && [ -f "$HOLD" ] && [ $((now - $(stat -c %Y "$HOLD"))) -le 180 ]; then
+      read -r hid hat _ < "$HOLD"
+      [[ ${hid:-} =~ $ANY_RE ]] && [[ ${hat:-} =~ ^[0-9]+$ ]] && h=$(jq -nc --arg i "$hid" --argjson a "$hat" '{id: $i, at: $a}')
+    fi
     if [ -f "$ENDED" ]; then
       read -r at reason < "$ENDED"
       e=$(jq -nc --arg a "$at" --arg r "${reason:-}" '{at: ($a | tonumber? // null), reason: $r}')
     fi
-    jq -nc --argjson f "$f" --argjson p "$p" --argjson e "$e" '{focus: $f, paused: $p, ended: $e}'
+    jq -nc --argjson f "$f" --argjson p "$p" --argjson e "$e" --argjson h "$h" '{focus: $f, paused: $p, ended: $e, hold: $h}'
     ;;
 
   *) die "usage: agent-kit-focus set | clear | pause | unpause | check | show" ;;
