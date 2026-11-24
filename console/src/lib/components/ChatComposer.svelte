@@ -2,7 +2,9 @@
   // The message box of a chat with the lead: the text, and, where the chat
   // takes them, files and the model and effort of the answer. Used by the
   // plan chat on Planning and by the Chat tab. Enter sends only with
-  // Ctrl/Cmd; a plain Enter is a new line.
+  // Ctrl/Cmd; a plain Enter is a new line. The microphone (issue 47) adds
+  // spoken words to the text; it never sends.
+  import MicButton from '$lib/components/MicButton.svelte';
 
   let {
     text = $bindable(''),
@@ -26,6 +28,8 @@
   let box = $state(null);
   let picker = $state(null);
   let dragging = $state(false);
+  let interim = $state(''); // words being spoken, not final yet
+  let problem = $state(''); // why the microphone stopped
   const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
   const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
   const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
@@ -59,6 +63,8 @@
 
 <div class="composer" class:dragging role="group" aria-label="Message" ondragover={(e) => { if (onupload) { e.preventDefault(); dragging = true; } }} ondragleave={() => (dragging = false)} ondrop={drop}>
   <textarea class="field" {rows} bind:this={box} bind:value={text} {placeholder} onkeydown={keydown} onpaste={paste}></textarea>
+  {#if interim}<div class="small dim interim">{interim}…</div>{/if}
+  {#if problem}<div class="small s-failed">{problem}</div>{/if}
   {#if files.length}
     <div class="chips">
       {#each files as f, i (f.token)}
@@ -82,6 +88,7 @@
         {#each EFFORTS as e (e)}<option value={e}>{e}</option>{/each}
       </select>
     {/if}
+    <MicButton bind:text bind:interim bind:problem disabled={sending} />
     <span class="small dim grow">{hint}</span>
     <button class="btn primary" disabled={!can} onclick={() => onsend?.()}>{sending ? 'Sending…' : 'Send'}</button>
   </div>
@@ -118,6 +125,9 @@
     width: auto;
     padding: 4px 6px;
     font-size: 12px;
+  }
+  .interim {
+    font-style: italic;
   }
   .chips {
     display: flex;
