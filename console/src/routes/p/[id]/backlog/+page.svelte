@@ -12,6 +12,7 @@
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import PlaceModal from '$lib/components/PlaceModal.svelte';
   import PlanChat from '$lib/components/PlanChat.svelte';
+  import Icon from '$lib/components/Icon.svelte';
 
   let { data } = $props();
   const p = $derived(data.project);
@@ -34,6 +35,38 @@
   let flash = $state(null); // {ok, text}
   let focus = $state('');
   let maxProposals = $state('');
+  // Files attached to the planning request (kit 0.30): uploaded as drafts, sent with the request.
+  let files = $state([]);
+  let picker = $state();
+  let dragging = $state(false);
+  const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+  async function upload(list) {
+    for (const f of list) {
+      if (files.length >= 8) {
+        flash = { ok: false, text: 'At most 8 files with a planning request.' };
+        break;
+      }
+      if (f.size > 20 * 1024 * 1024) {
+        flash = { ok: false, text: `${f.name} is over 20 MB.` };
+        continue;
+      }
+      const res = await fetch(`${base}/inbox/attach?name=${encodeURIComponent(f.name || 'pasted.png')}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+      if (res.ok) files = [...files, await res.json()];
+      else flash = { ok: false, text: `Could not upload ${f.name}.` };
+    }
+  }
+  function paste(e) {
+    const got = [...(e.clipboardData?.files || [])];
+    if (got.length) {
+      e.preventDefault();
+      upload(got);
+    }
+  }
+  function drop(e) {
+    e.preventDefault();
+    dragging = false;
+    upload([...(e.dataTransfer?.files || [])]);
+  }
   let planAt = $state('');
   let planLater = $state(false); // the "Later…" pop-over of the planning form
   let chatText = $state('');
@@ -125,9 +158,10 @@
       at = epochOf(planAt);
       if (!at) return (flash = { ok: false, text: 'Pick a date and time that exists in your time zone' });
     }
-    post({ action: 'plan', focus, at, maxProposals }, 'plan').then((out) => {
+    post({ action: 'plan', focus, at, maxProposals, attachments: files.map((f) => f.token) }, 'plan').then((out) => {
       if (out) {
         focus = '';
+        files = [];
         planAt = '';
         planLater = false;
       }
@@ -155,9 +189,10 @@
   }
   function placed(epoch, skip = null, opts = {}) {
     if (placing?.pid) return runAt(placing.pid, epoch, skip, !!opts.noBrake || !!noLimit[placing.pid]);
-    post({ action: 'plan', focus, at: epoch, skip, maxProposals }, 'plan').then((out) => {
+    post({ action: 'plan', focus, at: epoch, skip, maxProposals, attachments: files.map((f) => f.token) }, 'plan').then((out) => {
       if (out) {
         focus = '';
+        files = [];
         placing = null;
         planLater = false;
       }
@@ -198,13 +233,29 @@
 
   <div class="cols">
   <div class="top">
-  <section class="panel block ask">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <section class="panel block ask" class:dragging ondragover={(e) => (e.preventDefault(), (dragging = true))} ondragleave={() => (dragging = false)} ondrop={drop}>
     <h2>Find what to do next</h2>
     <p class="small dim">
       One planning cycle: {lead} reads its notes and the code, writes <b>no code</b>, and proposes jobs of at most 90 minutes each, with an estimate of time
       and cost. The team's normal cycles carry on as before. Not while a cycle runs.
     </p>
-    <textarea class="field" rows="3" placeholder="Optional: what to focus on (a feature, a part of the game, a problem)" bind:value={focus}></textarea>
+    <textarea class="field" rows="3" placeholder="Optional: what to focus on (a feature, a part of the game, a problem). Or attach a review or handoff to plan from." bind:value={focus} onpaste={paste}></textarea>
+    {#if files.length}
+      <ul class="files">
+        {#each files as f, i (f.token)}
+          <li class="well">
+            <span class="mono small">{f.name}</span><span class="dim small">{kb(f.size)}</span>
+            <button class="btn quiet icon sm" onclick={() => (files = files.filter((_, j) => j !== i))} aria-label="Remove {f.name}"><Icon name="x" size={12} /></button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    <div class="actions">
+      <input bind:this={picker} type="file" multiple hidden onchange={(e) => { upload([...e.currentTarget.files]); e.currentTarget.value = ''; }} />
+      <button class="btn quiet sm" onclick={() => picker.click()}>Attach files</button>
+      <span class="dim small">Or drop them here. The lead reads them first and plans from them. Up to 8, 20 MB each.</span>
+    </div>
     <div class="actions">
       <label class="small dim cap">
         At most
@@ -284,6 +335,7 @@
         {#if !plan.newest}<button class="btn quiet sm" onclick={() => (openPlan = openPlan === plan.id ? null : plan.id)}>{openPlan === plan.id ? 'Hide' : 'Show'}</button>{/if}
       </header>
       {#if plan.focus}<p class="small"><span class="dim">Focus:</span> {plan.focus}</p>{/if}
+      {#if plan.files?.length}<p class="small"><span class="dim">Files:</span> <span class="mono">{plan.files.map((f) => f.name).join(', ')}</span></p>{/if}
       {#if plan.touchedCode}
         <div class="flash bad small">The kit saw a change in the workspace during this planning session. Planning should not touch code: check the team's branches.</div>
       {/if}
@@ -472,5 +524,22 @@
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 10px;
     margin-top: 10px;
+  }
+  .files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .files li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px 4px 10px;
+  }
+  .ask.dragging {
+    outline: 1px dashed var(--cyan);
   }
 </style>

@@ -232,8 +232,16 @@ now stays with you.
 EOF
     if [ -n "${focus//[[:space:]]/}" ]; then
       printf '\n%s\n' "$focus"
-    else
+    elif ! compgen -G "$BL/plans/$id/att/*" > /dev/null; then
       printf '\nNo focus given: look at the whole project.\n'
+    fi
+    # Files the owner attached to the request (kit 0.30).
+    if compgen -G "$BL/plans/$id/att/*" > /dev/null; then
+      printf '\n### Files the owner attached\n\nRead every one of these in full before anything else: they are what the owner wants this\nplan made from (a review, a handoff, notes). Where they and the text above differ, the files say\nwhat to work on. Name the file and the part a proposal comes from.\n\n'
+      for f in "$BL/plans/$id/att/"*; do
+        [ -f "$f" ] && [ ! -L "$f" ] || continue
+        printf -- '- `%s` (%s bytes)\n' "$f" "$(stat -c %s "$f")"
+      done
     fi
     cat <<EOF
 

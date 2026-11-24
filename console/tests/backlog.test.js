@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 // DATA_DIR is read when the modules load, so point it at a temp folder first.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-bl-'));
@@ -434,4 +435,35 @@ describe('what the VM is told about a job (kit 0.18)', () => {
     expect(p.run.stopped).toBe(91);
     expect(bl.jobsFor(project, {}).find((j) => j.id === '20260102T140000Z-o-runnow')).toMatchObject({ state: 'done', stopped: true });
   });
+});
+
+// Last: these add plans, and the tests above look at the first one.
+describe('files with a planning request (kit 0.30)', () => {
+  it('sends attached files with the request as a tar, with --files (kit 0.30)', async () => {
+    vm(0);
+    const fb = await import('../src/lib/server/feedback.js');
+    const d = fb.saveDraftAttachment(project, 'review handoff.md', Buffer.from('# Review\n- fix the save bug\n'));
+    const res = await bl.startPlan(user, project, { focus: 'Plan from the review.', attachments: [d.token], kitVersion: '0.30.0' });
+    expect(res.started).toBe(true);
+    expect(calls().at(-1)).toBe(`sudo -n /opt/agent-kit/bin/agent-kit-oneshot start ${res.id} owner --plan --files`);
+    const tarFile = path.join(fake, 'stdin');
+    const list = execFileSync('tar', ['-tf', tarFile], { encoding: 'utf8' }).trim().split('\n').sort();
+    expect(list).toEqual(['att/', 'att/review_handoff.md', 'body.md']);
+    expect(execFileSync('tar', ['-xOf', tarFile, 'body.md'], { encoding: 'utf8' })).toBe('Plan from the review.');
+    const plan = JSON.parse(fs.readFileSync(path.join(base, 'plans', `${res.id}.json`), 'utf8'));
+    expect(plan.files).toEqual([{ name: 'review_handoff.md', size: Buffer.byteLength('# Review\n- fix the save bug\n') }]);
+    // The draft is gone once the VM has it.
+    expect(() => fb.draftFiles(project, [d.token])).toThrow('not uploaded');
+  });
+
+  it('refuses files on an older kit, and sends nothing', async () => {
+    vm(0);
+    const fb = await import('../src/lib/server/feedback.js');
+    const d = fb.saveDraftAttachment(project, 'h.md', Buffer.from('x'));
+    const before = calls().length;
+    await expect(bl.startPlan(user, project, { attachments: [d.token], kitVersion: '0.29.0' })).rejects.toThrow('needs kit 0.30.0');
+    expect(calls().length).toBe(before);
+    await expect(bl.startPlan(user, project, { attachments: ['../x'], kitVersion: '0.30.0' })).rejects.toThrow('Bad attachment');
+  });
+
 });

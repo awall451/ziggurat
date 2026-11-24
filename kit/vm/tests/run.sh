@@ -1687,6 +1687,42 @@ check "a cap out of range stays in the focus text and caps nothing" '! grep -q "
 printf 'Max-proposals: 3' | akb plan 20260104T120000Z-p-only owner > /dev/null
 check "a cap with no focus leaves the focus empty" 'grep -qx "Max-proposals: 3" "$S/backlog/plans/20260104T120000Z-p-only/request.md" && [ -z "$(sed "1,/^---$/d" "$S/backlog/plans/20260104T120000Z-p-only/request.md")" ]'
 
+echo "== files attached to a planning request (kit 0.30)"
+mkdir -p "$T/work/pf/att"; printf 'Plan from the review.\n' > "$T/work/pf/body.md"; printf '# Review handoff\n- fix the save bug\n' > "$T/work/pf/att/review-handoff.md"
+PF=20260109T100000Z-p-withfiles
+tar -c -C "$T/work/pf" . | akb plan $PF owner --files > /dev/null
+check "the files are kept with the request, readable" '[ -f "$S/backlog/plans/$PF/att/review-handoff.md" ] && [ "$(stat -c %a "$S/backlog/plans/$PF/att/review-handoff.md")" = 644 ] && [ "$(sed "1,/^---$/d" "$S/backlog/plans/$PF/request.md")" = "Plan from the review." ]'
+out=$(ob plan $PF)
+check "the planning prompt names each file with its path, to read first" 'grep -q "### Files the owner attached" <<< "$out" && grep -q "$S/backlog/plans/$PF/att/review-handoff.md" <<< "$out" && grep -q "Read every one of these in full before anything else" <<< "$out" && grep -q "Plan from the review." <<< "$out"'
+mkdir -p "$T/work/pf2/att"; : > "$T/work/pf2/body.md"; echo x > "$T/work/pf2/att/notes.md"
+PF2=20260109T100100Z-p-onlyfiles
+tar -c -C "$T/work/pf2" . | akb plan $PF2 owner --files > /dev/null
+check "files without focus text: no 'look at the whole project'" '! grep -q "No focus given" <<< "$(ob plan $PF2)" && grep -q "notes.md" <<< "$(ob plan $PF2)"'
+check "a plan without files has no files section" '! grep -q "Files the owner attached" <<< "$(ob plan $PL)"'
+mkdir -p "$T/work/pfl/att"; echo hi > "$T/work/pfl/body.md"; ln -s /etc/passwd "$T/work/pfl/att/passwd"
+refuse "a link among the files" bash -c "tar -c -C '$T/work/pfl' . | '$BIN/agent-kit-backlog' plan 20260109T100200Z-p-link owner --files"
+mkdir -p "$T/work/pfn/att/sub"; echo hi > "$T/work/pfn/body.md"; echo x > "$T/work/pfn/att/sub/f"
+refuse "a folder among the files" bash -c "tar -c -C '$T/work/pfn' . | '$BIN/agent-kit-backlog' plan 20260109T100300Z-p-nested owner --files"
+mkdir -p "$T/work/pfs"; echo hi > "$T/work/pfs/body.md"; echo x > "$T/work/pfs/evil.sh"
+refuse "a file outside att/" bash -c "tar -c -C '$T/work/pfs' . | '$BIN/agent-kit-backlog' plan 20260109T100400Z-p-stray owner --files"
+mkdir -p "$T/work/pfm/att"; echo hi > "$T/work/pfm/body.md"; for i in 1 2 3 4 5 6 7 8 9; do echo $i > "$T/work/pfm/att/f$i.md"; done
+refuse "more than eight files" bash -c "tar -c -C '$T/work/pfm' . | '$BIN/agent-kit-backlog' plan 20260109T100500Z-p-many owner --files"
+refuse "no body.md" bash -c "tar -c -C '$T/work/pfs' ./evil.sh | '$BIN/agent-kit-backlog' plan 20260109T100600Z-p-nobody owner --files"
+check "refused requests left nothing" '! ls -d "$S"/backlog/plans/20260109T1002* "$S"/backlog/plans/20260109T1003* "$S"/backlog/plans/20260109T1004* "$S"/backlog/plans/20260109T1005* "$S"/backlog/plans/.x-* "$S"/backlog/plans/.tmp-* > /dev/null 2>&1'
+refuse "--files is for planning requests only" bash -c "tar -c -C '$T/work/j' . | AGENT_KIT_PATH=$FB:$PATH '$BIN/agent-kit-oneshot' start 20260109T100700Z-o-x owner --files"
+# Through agent-kit-oneshot: now, and set for a time.
+rm -f "$S/oneshot" "$S/oneshot.meta"; echo "stop owner halt 2026-01-09T05:00:00+00:00" > "$S/control"
+PF3=20260109T100800Z-p-now
+tar -c -C "$T/work/pf" . | shot start $PF3 owner --plan --files > /dev/null
+check "a planning cycle with files starts" '[ -f "$S/backlog/plans/$PF3/att/review-handoff.md" ] && grep -q "^run oneshot $PF3 " "$S/control"'
+shot finish > /dev/null
+PF4=20260109T100900Z-p-later
+tar -c -C "$T/work/pf" . | shot at $(($(date +%s) + 60)) $PF4 owner --plan --files > /dev/null
+check "set for a time, it remembers the files" 'grep -qx "files=1" "$S/oneshot-at/$PF4.meta"'
+sed -i "s/^[0-9]* /$(($(date +%s) - 5)) /" "$S/oneshot-at/$PF4"; shot due
+check "and passes them on when its time comes" '[ -f "$S/backlog/plans/$PF4/att/review-handoff.md" ] && grep -q "^run oneshot $PF4 " "$S/control"'
+shot finish > /dev/null; rm -rf "$S/oneshot-at"
+
 echo "== package requests (kit 0.16)"
 mkdir -p "$T/opt/recipes"; cp "$HERE"/../recipes/*.sh "$T/opt/recipes/"
 cat > "$T/opt/recipes/hello.sh" <<'EOF'

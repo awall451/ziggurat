@@ -304,6 +304,30 @@ function store(project, user, { tier, text, attachments, inReplyTo }, { keepDraf
   return id;
 }
 
+/**
+ * Uploaded drafts by token, for a request that carries files (a planning
+ * request, kit 0.30): [{token, path, name, size}]. Throws on a bad or missing one.
+ */
+export function draftFiles(project, tokens = []) {
+  if (tokens.length > MAX_FILES) throw new Error(`At most ${MAX_FILES} files`);
+  const out = [];
+  for (const token of tokens) {
+    if (!TOKEN_RE.test(String(token))) throw new Error('Bad attachment');
+    const dir = path.join(draftDir(project), token);
+    const [f] = listFiles(dir);
+    if (!f) throw new Error('A file was not uploaded');
+    let name = f.name;
+    for (let i = 2; out.some((o) => o.name === name); i++) name = `${i}-${f.name}`.slice(0, 100);
+    out.push({ token, path: path.join(dir, f.name), name, size: f.size });
+  }
+  return out;
+}
+
+/** Drop drafts once what they belong to is on the VM. */
+export function dropDrafts(project, tokens = []) {
+  for (const token of tokens) if (TOKEN_RE.test(String(token))) fs.rmSync(path.join(draftDir(project), token), { recursive: true, force: true });
+}
+
 /** Push a stored message to the VM (also used to retry). */
 export async function deliver(project, id) {
   if (!OWNER_ID.test(id)) throw new Error('Bad message id');
