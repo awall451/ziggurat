@@ -347,13 +347,13 @@
             <span class="spacer"></span>
             <button class="btn" onclick={stopFocus} disabled={!!busy}>{busy === 'focus-stop' ? 'Stopping…' : 'Stop focus'}</button>
           </div>
-        {:else if st.focus?.paused}
-          <p class="small dim">Paused while {st.focus.paused.for} is in focus.</p>
         {:else if st.state !== 'halted'}
           <div class="actions">
-            <button class="btn" onclick={() => (focusOpen = true)} disabled={!!busy || !!data.focusNow}>Focus…</button>
-            <span class="small dim">{data.focusNow ? `${data.focusNow.name} is in focus now.` : 'Cycles back to back for a while; the others optionally paused.'}</span>
+            <button class="btn" onclick={() => (focusOpen = true)} disabled={!!busy}>Focus…</button>
+            <span class="small dim">{st.focus?.paused ? `Paused while ${st.focus.paused.for} is in focus; a focus of its own ends that pause.` : (data.focusAll || []).length ? `In focus now: ${data.focusAll.map((f) => f.name).join(', ')}. A focus here shares the usage with ${data.focusAll.length === 1 ? 'it' : 'them'}.` : 'Cycles back to back for a while; the others optionally paused.'}</span>
           </div>
+        {:else if st.focus?.paused}
+          <p class="small dim">Paused while {st.focus.paused.for} is in focus.</p>
         {/if}
       {/if}
       {#if focusOpen}

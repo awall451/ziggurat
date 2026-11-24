@@ -36,23 +36,23 @@
   });
   const crumb = $derived(project || /^\/(new|settings)/.test(page.url.pathname));
 
-  // Focus mode (#93): the team in focus, shown under the header on every page.
-  const focus = $derived(page.data.focusNow || null);
-  let stopping = $state(false);
-  let focusProblem = $state('');
+  // Focus mode (#93, several at once since #115): every team in focus, one line each under the header.
+  const focusing = $derived(page.data.focusAll || []);
+  let stopping = $state('');
+  let focusProblem = $state({ id: '', text: '' });
   const fwhen = (secs) => new Date(secs * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-  async function stopFocus() {
-    stopping = true;
-    focusProblem = '';
+  async function stopFocus(id) {
+    stopping = id;
+    focusProblem = { id: '', text: '' };
     try {
-      const r = await fetch('/api/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop', project: focus.id }) });
+      const r = await fetch('/api/focus', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'stop', project: id }) });
       const out = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(out.message || 'That did not work');
       await invalidateAll();
     } catch (e) {
-      focusProblem = e.message;
+      focusProblem = { id, text: e.message };
     } finally {
-      stopping = false;
+      stopping = '';
     }
   }
 </script>
@@ -96,13 +96,13 @@
       </Popover>
     </span>
   </header>
-  {#if focus}
+  {#each focusing as focus (focus.id)}
     <div class="focusbar" role="status">
       <span><b>Focus:</b> <a href="/p/{focus.id}/topology">{focus.name}</a> runs cycles back to back{focus.until ? ` until ${fwhen(focus.until)}` : focus.cycles ? ` · ${focus.done} of ${focus.cycles} cycles` : ' until you switch it off'} · at most {focus.perDay} a day{focus.hold ? ` · planned jobs first: next the ${focus.hold.kind === 'once' ? 'one-time cycle' : focus.hold.kind === 'plan' ? 'planning cycle' : 'job'} set for ${fwhen(focus.hold.at)}` : ''}</span>
-      {#if focusProblem}<span class="s-failed small">{focusProblem}</span>{/if}
-      <button class="btn quiet sm" onclick={stopFocus} disabled={stopping}>{stopping ? 'Stopping…' : 'Stop'}</button>
+      {#if focusProblem.id === focus.id}<span class="s-failed small">{focusProblem.text}</span>{/if}
+      <button class="btn quiet sm" onclick={() => stopFocus(focus.id)} disabled={!!stopping} aria-label="Stop the focus on {focus.name}">{stopping === focus.id ? 'Stopping…' : 'Stop'}</button>
     </div>
-  {/if}
+  {/each}
   <main>
     {@render children()}
   </main>

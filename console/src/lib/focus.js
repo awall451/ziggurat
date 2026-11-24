@@ -24,3 +24,16 @@ export function focusEstimate({ mode, until, cycles, perDay }, typical, now = Da
     limitedByLength: daily < perDay
   };
 }
+
+/**
+ * What a focus that is running still likely takes (#115), from the VM's
+ * `focus.on` ({until, cycles, done, perDay}): the same estimate as for a new
+ * focus, with its end time, its cycles left, or per day.
+ */
+export function focusLeft(on, typical, now = Date.now() / 1000) {
+  if (!on) return null;
+  const perDay = Number.isInteger(on.perDay) && on.perDay > 0 ? on.perDay : 6;
+  if (Number.isFinite(on.until)) return focusEstimate({ mode: 'until', until: on.until, perDay }, typical, now);
+  if (Number.isFinite(on.cycles)) return focusEstimate({ mode: 'cycles', cycles: Math.max(0, on.cycles - (on.done || 0)), perDay }, typical, now);
+  return focusEstimate({ mode: 'open', perDay }, typical, now);
+}
