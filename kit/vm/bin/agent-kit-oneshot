@@ -11,6 +11,8 @@
 #                                         picks its work as in any cycle. An id with -f-. Refused at the
 #                                         daily cap unless --past-cap; it counts toward the cap either way.
 #   agent-kit-oneshot at <unix> <id> <from> [--plan|--free]   the same, started by the tick at that time
+#   ... --plan --files                    a planning request with files the owner attached (kit 0.30): stdin
+#                                         is a tar of body.md and att/ (see agent-kit-backlog plan --files)
 #   agent-kit-oneshot unat <id>           cancel a job set for a time
 #   agent-kit-oneshot due                 start jobs whose time has come (run every minute by agent-kit-tick)
 #   agent-kit-oneshot brake               tell a job that runs far past its estimate to wrap up, then stop it
@@ -111,10 +113,11 @@ timer_on() { # the lead timer back, if it is meant to be on
 # What the console knows about a backlog job: --minutes N, --no-brake, --after id,id.
 # Sets minutes, brake, after; dies on anything else.
 job_flags() {
-  minutes="" brake=on after_ids="" pastcap=0
+  minutes="" brake=on after_ids="" pastcap=0 files=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --past-cap) pastcap=1 ;;
+      --files) files=1 ;;
       --minutes) [[ ${2:-} =~ ^[0-9]{1,4}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 1440 ] || die "bad estimate"; minutes=$2; shift ;;
       --no-brake) brake=off ;;
       --after)
@@ -130,7 +133,7 @@ job_flags() {
 }
 write_meta() { # file id
   { echo "id=$2"; [ -z "$minutes" ] || echo "minutes=$minutes"; [ "$brake" = on ] || echo "brake=off"; [ -z "$after_ids" ] || echo "after=$after_ids"
-    [[ $2 =~ $FREE_RE ]] && echo "kind=free"; [ "$pastcap" = 0 ] || echo "pastcap=1"; } > "$1.tmp"
+    [[ $2 =~ $FREE_RE ]] && echo "kind=free"; [ "$pastcap" = 0 ] || echo "pastcap=1"; [ "$files" = 0 ] || echo "files=1"; } > "$1.tmp"
   chmod 644 "$1.tmp"
   mv "$1.tmp" "$1"
 }
@@ -220,6 +223,7 @@ case "${1:-show}" in
     elif [ "$kind" = free ]; then [[ $id =~ $FREE_RE ]] || die "bad cycle id"
     else [[ $id =~ $ID_RE ]] || die "bad id"; fi
     [ "$kind" = free ] || [ "$pastcap" = 0 ] || die "--past-cap is for a cycle with no job (--free)"
+    [ "$kind" = plan ] || [ "$files" = 0 ] || die "--files is for a planning request (--plan)"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     exec 8> "$LOCK"
     flock 8
@@ -250,7 +254,7 @@ case "${1:-show}" in
       # see it in their inbox. It lives in the backlog folder.
       jobdir=$STATE/backlog/plans/$id
       if [ ! -d "$jobdir" ]; then
-        "$BIN/agent-kit-backlog" plan "$id" "$from" > /dev/null || die "the planning request was not accepted"
+        "$BIN/agent-kit-backlog" plan "$id" "$from" $([ "$files" = 1 ] && echo --files) > /dev/null || die "the planning request was not accepted"
         stored=1
       fi
       [ -f "$jobdir/request.md" ] || die "no such planning request: $id"
@@ -333,6 +337,7 @@ case "${1:-show}" in
     elif [ "$flag" = --free ]; then [[ $id =~ $FREE_RE ]] || die "bad cycle id"
     else [[ $id =~ $ID_RE ]] || die "bad id"; fi
     [ "$flag" = --free ] || [ "$pastcap" = 0 ] || die "--past-cap is for a cycle with no job (--free)"
+    [ "$flag" = --plan ] || [ "$files" = 0 ] || die "--files is for a planning request (--plan)"
     [[ ",$after_ids," != *",$id,"* ]] || die "a job cannot come after itself"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     now=$(date +%s)
@@ -425,6 +430,7 @@ case "${1:-show}" in
       m=$(meta_of "$f.meta" minutes); [ -z "$m" ] || args+=(--minutes "$m")
       [ "$(meta_of "$f.meta" brake)" != off ] || args+=(--no-brake)
       [ "$(meta_of "$f.meta" pastcap)" != 1 ] || args+=(--past-cap)
+      [ "$(meta_of "$f.meta" files)" != 1 ] || args+=(--files)
       if out=$("$0" start "$id" "$from" "${flag[@]}" "${args[@]}" < "$f.job" 2>&1); then
         rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"
         printf '%s job:%s %s started\n' "$(date -u +%FT%TZ)" "$id" "$(date +%F)" >> "$STATE/schedule.log"

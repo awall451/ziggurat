@@ -11,10 +11,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { DATA_DIR } from './config.js';
 import { kit, pull } from './ssh.js';
 import { parseHeaderFile } from './headerfile.js';
-import { vmSaidNo, sendOneshot, scheduleOneshot, rescheduleOneshot } from './feedback.js';
+import { vmSaidNo, sendOneshot, scheduleOneshot, rescheduleOneshot, draftFiles, dropDrafts } from './feedback.js';
 import { audit } from './audit.js';
 import { invalidateStatus, getStatus, peekStatus } from './live.js';
 import { createPlanned, noteJob, setStatus as setIssueStatus, get as getIssue, PLANNED_KIT, OPEN as OPEN_ISSUE } from './issues.js';
@@ -107,7 +109,20 @@ async function skipStart(user, project, skip) {
 
 export const CAP_KIT = '0.15.0'; // the owner's cap on proposals per plan
 
-export async function startPlan(user, project, { focus = '', at = null, skip = null, maxProposals = null, kitVersion = null } = {}) {
+/** The kit that takes files with a planning request. */
+export const PLAN_FILES_KIT = '0.30.0';
+
+/** A planning request with files, as the kit takes it: a tar of body.md and att/ (kit 0.30). */
+function planArchive(input, files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zc-plan-'));
+  fs.writeFileSync(path.join(dir, 'body.md'), input);
+  fs.mkdirSync(path.join(dir, 'att'));
+  for (const f of files) fs.copyFileSync(f.path, path.join(dir, 'att', f.name));
+  const stream = spawn('tar', ['-c', '-C', dir, '--owner=0', '--group=0', 'body.md', 'att'], { stdio: ['ignore', 'pipe', 'ignore'] }).stdout;
+  return { stream, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+export async function startPlan(user, project, { focus = '', at = null, skip = null, maxProposals = null, kitVersion = null, attachments = [] } = {}) {
   const text = String(focus || '').trim();
   if (text.length > MAX_FOCUS) throw new Error('The focus text is too long');
   let max = null;
@@ -121,12 +136,25 @@ export async function startPlan(user, project, { focus = '', at = null, skip = n
     const kv = kitVersion || peekStatus(project.id)?.kitVersion || (await getStatus(project).catch(() => null))?.kitVersion;
     if (atLeast(kv, CAP_KIT)) input = `Max-proposals: ${max}\n${text}`;
   }
+  // Files the owner attached (kit 0.30): checked here before anything goes to the VM.
+  const tokens = Array.isArray(attachments) ? attachments.map(String) : [];
+  const files = tokens.length ? draftFiles(project, tokens) : [];
+  if (files.length) {
+    const kv = kitVersion || peekStatus(project.id)?.kitVersion || (await getStatus(project).catch(() => null))?.kitVersion;
+    if (!atLeast(kv, PLAN_FILES_KIT)) throw new Error(`Attaching files to a planning request needs kit ${PLAN_FILES_KIT} on ${project.name}'s VM (it has ${kv || 'an older one'}).`);
+  }
   const id = `${stamp()}-p-${hex()}`;
   const from = senderName(user);
   let epoch = null;
   if (at != null) epoch = checkTime(at);
-  const argv = epoch ? ['at', String(epoch), id, from, '--plan'] : ['start', id, from, '--plan'];
-  const res = await kit(project, 'agent-kit-oneshot', argv, { input, timeout: 120000 });
+  const argv = [...(epoch ? ['at', String(epoch), id, from, '--plan'] : ['start', id, from, '--plan']), ...(files.length ? ['--files'] : [])];
+  const archive = files.length ? planArchive(input, files) : null;
+  let res;
+  try {
+    res = await kit(project, 'agent-kit-oneshot', argv, archive ? { inputStream: archive.stream, timeout: 300000 } : { input, timeout: 120000 });
+  } finally {
+    archive?.done();
+  }
   let started = res.code === 0;
   const error = started ? null : (res.stderr || res.stdout || `exit ${res.code}`).trim().slice(-300);
   if (!started && vmSaidNo(res.code)) {
@@ -138,9 +166,12 @@ export async function startPlan(user, project, { focus = '', at = null, skip = n
     if (status?.oneshot?.id === id) started = true;
   }
   if (started && epoch) await skipStart(user, project, skip);
+  // On the VM now (or kept for a retry with no clear answer): the drafts are done with.
+  if (files.length && (started || !vmSaidNo(res.code))) dropDrafts(project, tokens);
   const plan = {
     id,
     focus: text,
+    files: files.map((f) => ({ name: f.name, size: f.size })),
     maxProposals: max,
     by: from,
     askedAt: new Date().toISOString(),
@@ -666,6 +697,8 @@ export function list(project, status = null) {
     return {
       id,
       focus: typeof p.focus === 'string' ? p.focus : '',
+      // Files the owner attached to the request (kit 0.30).
+      files: Array.isArray(p.files) ? p.files.filter((f) => f && typeof f.name === 'string').map((f) => ({ name: f.name, size: Number(f.size) || 0 })) : [],
       by: p.by || null,
       askedAt: p.askedAt || null,
       scheduledFor: p.scheduledFor || null,

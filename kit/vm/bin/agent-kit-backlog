@@ -6,12 +6,17 @@
 #   agent-kit-backlog plan <plan-id> <from>      store a planning request (focus text on stdin, may be
 #                                                empty). Used by `agent-kit-oneshot start|at`. A first
 #                                                line `Max-proposals: N` (1-8, kit 0.15) caps the plan.
+#   agent-kit-backlog plan <plan-id> <from> --files
+#                                                the same, with files the owner attached (kit 0.30): stdin is
+#                                                a tar of body.md (the text above) and att/ (up to 8 plain
+#                                                files, 20 MB each), checked as agent-kit-inbox checks a message
 #   agent-kit-backlog set <pid> approved|rejected|new <rev>
 #                                                the owner decided on revision <rev> of a proposal
 #   agent-kit-backlog list                       plan ids, newest last
 #
 # Layout (see docs/architecture.md, "Planning cycle and backlog"):
 #   $STATE/backlog/plans/<plan-id>/request.md    root: what the owner asked the lead to plan
+#   $STATE/backlog/plans/<plan-id>/att/<file>    root, readable: files the owner attached (kit 0.30)
 #   $STATE/backlog/current                       root: the newest plan id (the one a chat resumes)
 #   $STATE/backlog/.owner/<pid>                  root: "<status> <rev> <utc>"
 #   $STATE/backlog/chat/<plan-id>/<msgid>.md     root: the owner's chat messages (agent-kit-chat)
@@ -25,13 +30,18 @@ OUT=$STATE/backlog-out
 PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
 PID_RE='^[0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}$'
 MAX_TEXT=8000
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
+MAX_ATT=$((20 * 1024 * 1024))
+MAX_FILES=8
 
 die() { echo "agent-kit-backlog: $*" >&2; exit 2; }
 umask 022
 
 case "${1:-}" in
   plan)
-    id=${2:-} from=${3:-}
+    id=${2:-} from=${3:-} files=0
+    [ "${4:-}" = --files ] && files=1
+    [ -z "${4:-}" ] || [ "$files" = 1 ] || die "usage: agent-kit-backlog plan <plan-id> <from> [--files]"
     [[ $id =~ $PLAN_RE ]] || die "bad plan id"
     [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
     [ ! -e "$BL/plans/$id" ] || die "that plan already exists"
@@ -39,7 +49,40 @@ case "${1:-}" in
     tmp=$BL/plans/.tmp-$id
     rm -rf -- "$tmp"
     install -d -m 755 "$tmp"
-    text=$(head -c $((MAX_TEXT + 101)))
+    if [ "$files" = 1 ]; then
+      # A tar of body.md and att/ (kit 0.30). Nothing in it decides owners, modes or where files land.
+      x=$BL/plans/.x-$id
+      rm -rf -- "$x"
+      mkdir -m 700 "$x" || { rm -rf -- "$tmp"; die "cannot create work folder"; }
+      trap 'rm -rf -- "$x" "$tmp"' EXIT
+      head -c $((MAX_ATT * MAX_FILES + 1048576)) | tar -x -C "$x" --no-same-owner --no-same-permissions \
+        --no-overwrite-dir --delay-directory-restore 2> /dev/null || die "could not read the request archive"
+      [ -f "$x/body.md" ] && [ ! -L "$x/body.md" ] || die "the archive has no body.md"
+      bad=$(find "$x" -mindepth 1 ! -path "$x/body.md" ! -path "$x/att" ! -path "$x/att/*" -print -quit)
+      [ -z "$bad" ] || die "unexpected entry in the archive"
+      bad=$(find "$x" -mindepth 1 ! -type f ! -path "$x/att" -print -quit)
+      [ -z "$bad" ] || die "the archive may hold plain files only"
+      n=0
+      if [ -d "$x/att" ]; then
+        [ ! -L "$x/att" ] || die "the archive may hold plain files only"
+        while IFS= read -r -d '' f; do
+          n=$((n + 1))
+          name=${f##*/}
+          [[ $name =~ $NAME_RE ]] || die "bad file name: $name"
+          [ "$(dirname "$f")" = "$x/att" ] || die "files must sit directly in att/"
+          [ "$(stat -c %s "$f")" -le "$MAX_ATT" ] || die "file over 20 MB: $name"
+        done < <(find "$x/att" -mindepth 1 -print0)
+        [ "$n" -le "$MAX_FILES" ] || die "more than $MAX_FILES files"
+        if [ "$n" -gt 0 ]; then
+          mv "$x/att" "$tmp/att"
+          chmod 755 "$tmp/att"
+          find "$tmp/att" -type f -exec chmod 644 {} +
+        fi
+      fi
+      text=$(head -c $((MAX_TEXT + 101)) "$x/body.md")
+    else
+      text=$(head -c $((MAX_TEXT + 101)))
+    fi
     # The owner's cap on the number of proposals (kit 0.15): an optional first line.
     max=""
     if [[ $text =~ ^Max-proposals:\ ([1-8])($'\n'|$) ]]; then
@@ -54,6 +97,7 @@ case "${1:-}" in
     } > "$tmp/request.md"
     chmod 644 "$tmp/request.md"
     mv "$tmp" "$BL/plans/$id"
+    [ "$files" = 1 ] && { rm -rf -- "$x"; trap - EXIT; }
     printf '%s\n' "$id" > "$BL/.current.tmp"
     chmod 644 "$BL/.current.tmp"
     mv "$BL/.current.tmp" "$BL/current"

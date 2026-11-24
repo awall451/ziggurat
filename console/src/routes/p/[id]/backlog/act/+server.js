@@ -13,7 +13,7 @@ export async function POST({ params, request, locals }) {
   try {
     switch (b.action) {
       case 'plan':
-        return json(await startPlan(locals.user, project, { focus: s(b.focus), at: b.at == null ? null : Number(b.at), skip: b.skip || null, maxProposals: b.maxProposals == null || b.maxProposals === '' ? null : Number(b.maxProposals) }));
+        return json(await startPlan(locals.user, project, { focus: s(b.focus), at: b.at == null ? null : Number(b.at), skip: b.skip || null, maxProposals: b.maxProposals == null || b.maxProposals === '' ? null : Number(b.maxProposals), attachments: Array.isArray(b.attachments) ? b.attachments.slice(0, 8) : [] }));
       case 'move-at':
         return json(await moveAt(locals.user, project, s(b.id), Number(b.at), b.skip || null));
       case 'cancel-at':
