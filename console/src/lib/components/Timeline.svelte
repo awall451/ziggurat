@@ -338,11 +338,13 @@
           <!-- focus mode (#93): the stretch it covers, behind everything else on the row -->
           {#if row.focusSpan && visible(row.focusSpan.from, row.focusSpan.to)}
             {@const f = row.focusSpan}
+            <!-- the label starts after the "now" line when it crosses the band, so the line does not cut the words -->
+            {@const lx = Math.max(x(f.from), LABEL, now > f.from && now < f.to ? x(now) : 0)}
             <g class="band {f.kind}" class:about={f.end === 'about'} mask={f.end === 'open' ? `url(#${uid}-fademask)` : null}>
-              <rect class="fill" x={x(f.from)} y={y + 3} width={Math.max(4, x(f.to) - x(f.from))} height={ROW - 6} rx="5" fill={f.kind === 'paused' ? `url(#${uid}-paused)` : null} />
-              <!-- too narrow for words: the tooltip says it -->
-              {#if x(f.to) - Math.max(x(f.from), LABEL) >= 140}<text class="bandlabel" x={Math.max(x(f.from), LABEL) + 6} y={y + ROW - 7}>
-                {f.kind === 'paused' ? `Paused for ${f.for}'s focus` : f.end === 'set' ? `Focus until ${clockText(f.to)}` : f.end === 'about' ? `Focus · ${f.done} of ${f.cycles} cycles, ends about ${clockText(f.to)}` : 'Focus · until switched off'}
+              <rect class="fill" x={x(f.from)} y={y + 2} width={Math.max(4, x(f.to) - x(f.from))} height={ROW - 2} rx="5" fill={f.kind === 'paused' ? `url(#${uid}-paused)` : null} />
+              <!-- the label sits in a strip under the bars, where nothing is drawn over it; too narrow for words: the tooltip says it -->
+              {#if x(f.to) - lx >= 110}<text class="bandlabel" x={lx + 6} y={y + ROW - 1.5}>
+                {f.kind === 'paused' ? `Paused for ${f.for}'s focus` : f.end === 'set' ? `Focus until ${clockText(f.to)}` : f.end === 'about' ? `Focus · ${f.done} of ${f.cycles} cycles · ends about ${clockText(f.to)}` : 'Focus · until switched off'}
               </text>{/if}
               <title>{f.kind === 'paused' ? `${row.name} is paused while ${f.for} is in focus, until ${clockText(f.to)} at the latest. Its start times are skipped; planned jobs and one-time cycles still run.` : `${row.name} in focus from ${clockText(f.from)}${f.end === 'set' ? ` to ${clockText(f.to)}` : f.end === 'about' ? `, about to ${clockText(f.to)}` : ', until switched off'}: cycles back to back, at most ${f.perDay} a day. Planned jobs run first, in order, right away.`}</title>
             </g>
@@ -775,8 +777,9 @@
   }
   .bandlabel {
     fill: var(--row);
-    font-size: 10px;
+    font-size: 8.5px;
     font-weight: 600;
+    letter-spacing: 0.02em;
   }
   .band.paused .bandlabel {
     fill: var(--ink-2);
