@@ -20,10 +20,10 @@
 # $STATE/focus   "since=<unix> until=<unix|-> cycles=<N|-> perday=<N>"
 # $STATE/paused  "since=<unix> until=<unix> for=<team>"
 # $STATE/focus.ended "<unix> <reason>": the last focus and why it ended.
-# $STATE/focus.hold "<job id> <unix>": a planned job is due before a new focus
-# cycle would likely end (kit 0.28). `check` keeps it; lead-cycle starts no focus
-# cycle while it is fresh, so the job starts at its time. A job held back by
-# the jobs it builds on does not hold the focus.
+# $STATE/focus.hold "<job id> <unix>": a planned job is next (kit 0.29). In focus
+# planned jobs run first, pulled forward from their set times; `check` keeps
+# this file and lead-cycle starts no focus cycle while it is fresh. A job blocked
+# on the owner does not hold the focus.
 # A focus ends early when the team is blocked on the owner: the lead says so
 # (owner-focus blocked "<why>", a file in $STATE/focus-out) or two cycles in a
 # row in focus changed nothing but the team's notes (lead-cycle writes
@@ -60,43 +60,26 @@ log() { printf '%s focus %s %s\n' "$(date -u -d "@$now" +%FT%TZ)" "$(date -d "@$
 since_count() {
   jq -s --argjson t "$1" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | length' "$LEDGER" 2> /dev/null || echo 0
 }
-# How long a cycle of this team typically takes, in seconds: the median of its
-# last ten real cycles, at least 15 minutes, at most 3 hours, 1 hour without any.
-typical_secs() {
-  local t
-  t=$(jq -s '[.[] | select(.counted != false and (.halted | not) and (.kind // "normal") != "chat" and (.kind // "normal") != "plan" and ((.secs // 0) > 60)) | .secs] | .[-10:] | sort | if length == 0 then 3600 else .[(length / 2 | floor)] end' "$LEDGER" 2> /dev/null)
-  [[ ${t:-} =~ ^[0-9]+$ ]] || t=3600
-  [ "$t" -ge 900 ] || t=900
-  [ "$t" -le 10800 ] || t=10800
-  echo "$t"
-}
-# The first planned job a new focus cycle would be in the way of: "<id> <unix>", or nothing.
+# The planned job that is next (kit 0.29): "<id> <unix>", or nothing. In focus
+# planned jobs are pulled forward (agent-kit-oneshot due starts them in order of
+# their set times as soon as the team is free); no focus cycle may start in
+# their way. A job blocked on the owner (the job it builds on failed, or a
+# change waits for approval) does not hold the focus.
 hold_for() {
-  local win f id when wreason after dep ok best="" bestw=""
-  win=$(typical_secs)
-  for f in "$AT"/2*; do
-    [ -f "$f" ] || continue
+  local f id when wreason until
+  until=$(field "$FOCUS" until)
+  for f in $(for x in "$AT"/2*; do [ -f "$x" ] && [[ $(basename "$x") =~ $ANY_RE ]] && read -r w _ < "$x" && [[ ${w:-} =~ ^[0-9]{9,11}$ ]] && echo "$w $x"; done | sort -n | cut -d' ' -f2); do
     id=$(basename "$f")
     [[ $id =~ $ANY_RE ]] || continue
     read -r when _ < "$f"
-    [[ ${when:-} =~ ^[0-9]{9,11}$ ]] && [ "$when" -le $((now + win)) ] || continue
-    # Held back by the jobs it builds on: it cannot start anyway.
+    # With an end time, a job set after it keeps its time.
+    if [ "$when" -gt "$now" ] && [[ ${until:-} =~ ^[0-9]+$ ]] && [ "$when" -gt "$until" ]; then continue; fi
     wreason=""
     read -r wreason _ < "$f.wait" 2> /dev/null || true
-    case "$wreason" in pending | running | failed | held | merge) continue ;; esac
-    after=$(sed -n 's/^after=//p' "$f.meta" 2> /dev/null | head -1)
-    if [ -n "$after" ]; then
-      ok=1
-      for dep in ${after//,/ }; do
-        [[ $dep =~ $ANY_RE ]] || continue
-        # Still set for a time, or not ended yet: this job will wait for it.
-        { [ ! -e "$AT/$dep" ] && grep -q "\"oneshot\":\"$dep\"" "$LEDGER" 2> /dev/null; } || ok=0
-      done
-      [ "$ok" = 1 ] || continue
-    fi
-    if [ -z "$bestw" ] || [ "$when" -lt "$bestw" ]; then best=$id bestw=$when; fi
+    case "$wreason" in failed | held) continue ;; esac
+    echo "$id $when"
+    return 0
   done
-  [ -z "$best" ] || echo "$best $bestw"
 }
 end_focus() { # reason
   rm -f "$FOCUS" "$OUT/blocked" "$HOLD"
@@ -207,12 +190,12 @@ case "${1:-show}" in
     # Two cycles in a row in focus that changed nothing but the team's notes.
     last=$(jq -s --argjson t "$since" '[.[] | select(.counted != false and (.focus_since // 0) == $t)] | .[-2:] | map(.notes_only == true) | if length == 2 and all then "yes" else "no" end' "$LEDGER" 2> /dev/null)
     if [ "$last" = '"yes"' ]; then end_focus "blocked on the owner: two cycles in a row changed only the team's notes" > /dev/null; exit 0; fi
-    # Planned jobs go first (kit 0.28): no new focus cycle in the way of one that is due.
+    # Planned jobs go first (kit 0.29): no focus cycle while one is next.
     h=$(hold_for)
     if [ -n "$h" ]; then
       read -r hid hat <<< "$h"
       read -r was _ < "$HOLD" 2> /dev/null || was=""
-      [ "$was" = "$hid" ] || log "waiting for planned job $hid at $(date -d "@$hat" -Is)"
+      [ "$was" = "$hid" ] || log "next: planned job $hid (set for $(date -d "@$hat" -Is))"
       write "$HOLD" "$h"
     else
       rm -f "$HOLD"

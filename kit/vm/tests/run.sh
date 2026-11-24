@@ -1589,44 +1589,58 @@ check "a focus ends at its time" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .
 foc set --open --per-day 50 > /dev/null
 foc clear owner > /dev/null
 check "switched off" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .ended.reason)" = "switched off: owner" ]'
-# Planned jobs go first (kit 0.28).
-rm -rf "$S/oneshot-at"; rm -f "$S/focus.hold"
-foc set --open --per-day 50 > /dev/null
+# Planned jobs go first (kit 0.29): in focus they are pulled forward and run right away, in order.
+rm -rf "$S/oneshot-at"; rm -f "$S/focus.hold" "$S/oneshot" "$S/oneshot.meta"
+echo "run 2026-01-08T06:00:00+00:00" > "$S/control"
+fresh_focus() { foc clear > /dev/null; foc set "$@" > /dev/null; }
+fresh_focus --open --per-day 50
 foc check
 check "no planned job: no hold" '[ ! -e "$S/focus.hold" ] && [ "$(foc show | jq -c .hold)" = null ]'
-JH=20260108T100000Z-o-soon
-tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 600)) $JH owner > /dev/null
+# Set in this order, for these times: the earlier time goes first, whatever the id.
+JB=20260108T090000Z-o-second JA=20260108T100000Z-o-first
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 5 * 3600)) $JB owner > /dev/null
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 3 * 3600)) $JA owner > /dev/null
 foc check
-check "a planned job due within a cycle's length holds the focus" '[ "$(cut -d" " -f1 "$S/focus.hold")" = "$JH" ] && [ "$(foc show | jq -r .hold.id)" = "$JH" ] && grep -q "waiting for planned job $JH" "$S/schedule.log"'
-foc check
-check "it is logged once" '[ "$(grep -c "waiting for planned job $JH" "$S/schedule.log")" = 1 ]'
+check "a job set hours ahead is next in focus" '[ "$(cut -d" " -f1 "$S/focus.hold")" = "$JA" ] && [ "$(foc show | jq -r .hold.id)" = "$JA" ] && grep -q "next: planned job $JA" "$S/schedule.log"'
 out=$(cycle 2>&1)
-check "no focus cycle starts in its way, and nothing is counted" 'grep -q "holding for planned job $JH" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
-FH=20260108T100100Z-f-owner
-shot start $FH owner --free --past-cap < /dev/null > /dev/null; out=$(cycle 2>&1)
-check "a cycle the owner starts is not held" '[ -s "$FAKE_PROMPT" ]'
-shot finish > /dev/null
-touch -d "10 minutes ago" "$S/focus.hold"; out=$(cycle 2>&1)
-check "a stale hold is ignored" '[ -s "$FAKE_PROMPT" ]'
-shot unat $JH > /dev/null
-# Those two cycles changed only notes, which ends a focus: a new one for the rest.
-foc clear > /dev/null; foc set --open --per-day 50 > /dev/null
-JL=20260108T110000Z-o-later JX=20260108T110100Z-o-builds
-tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 5 * 3600)) $JL owner > /dev/null
-tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 600)) $JX owner --after $JL > /dev/null
-foc check
-check "a job hours away, or one that builds on a job not done yet, does not hold" '[ -e "$S/focus" ] && [ ! -e "$S/focus.hold" ]'
-shot unat $JX > /dev/null
-JB=20260108T120000Z-o-late
-tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 60)) $JB owner > /dev/null
-sed -i "s/^[0-9]* /$(($(date +%s) - 120)) /" "$S/oneshot-at/$JB"; printf 'busy - %s 0\n' "$(date +%s)" > "$S/oneshot-at/$JB.wait"
-foc check
-check "a job whose time has come and that waits for the team holds" '[ "$(cut -d" " -f1 "$S/focus.hold")" = "$JB" ]'
-printf 'merge %s %s 0\n' "$JL" "$(date +%s)" > "$S/oneshot-at/$JB.wait"; foc check
-check "not one held back by the job it builds on" '[ ! -e "$S/focus.hold" ]'
-printf 'busy - %s 0\n' "$(date +%s)" > "$S/oneshot-at/$JB.wait"; foc check
-foc clear > /dev/null
-check "the end of the focus ends the hold" '[ ! -e "$S/focus.hold" ]'
+check "no focus cycle starts before it, and nothing is counted" 'grep -q "holding for planned job $JA" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+shot due
+check "it starts at once, hours before its set time" 'grep -q "^run oneshot $JA " "$S/control" && [ ! -e "$S/oneshot-at/$JA" ] && [ -e "$S/oneshot-at/$JB" ]'
+out=$(cycle 2>&1); shot finish > /dev/null
+check "and runs as its own job" 'grep -q "One-shot job: this cycle only" "$FAKE_PROMPT"'
+fresh_focus --open --per-day 50; shot due
+check "then the next one, in order" 'grep -q "^run oneshot $JB " "$S/control"'
+out=$(cycle 2>&1); shot finish > /dev/null
+check "an early job is not dropped as missed" '! grep -q "job:$JA .*missed\|job:$JB .*missed" "$S/schedule.log"'
+# A job that builds on another waits for it; the other goes first.
+fresh_focus --open --per-day 50
+JC=20260108T110000Z-o-base JD=20260108T110100Z-o-builds
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 7200)) $JC owner > /dev/null
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 3600)) $JD owner --after $JC > /dev/null
+shot due
+check "the job it builds on goes first, though set later" 'grep -q "^run oneshot $JC " "$S/control" && grep -q "^pending $JC " "$S/oneshot-at/$JD.wait"'
+out=$(cycle 2>&1); shot finish > /dev/null
+fresh_focus --open --per-day 50; shot due; foc check
+check "after it, the job that builds on it starts, or holds the focus while it waits for the merge" 'grep -q "^run oneshot $JD " "$S/control" || [ "$(cut -d" " -f1 "$S/focus.hold")" = "$JD" ]'
+[ -e "$S/oneshot" ] && { out=$(cycle 2>&1); shot finish > /dev/null; }
+[ -e "$S/oneshot-at/$JD" ] && shot unat $JD > /dev/null
+# A job blocked on the owner lets focus cycles run.
+fresh_focus --open --per-day 50
+JF=20260108T120000Z-o-blocked
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 3600)) $JF owner > /dev/null
+printf 'failed %s %s 0\n' "$JC" "$(date +%s)" > "$S/oneshot-at/$JF.wait"; foc check
+check "a job blocked on the owner does not hold the focus" '[ ! -e "$S/focus.hold" ]'
+out=$(cycle 2>&1)
+check "and focus cycles run meanwhile" '[ -s "$FAKE_PROMPT" ] && ! grep -q "One-shot job" "$FAKE_PROMPT"'
+shot unat $JF > /dev/null
+# A focus with an end time pulls forward only the jobs set before it.
+fresh_focus --until $(($(date +%s) + 3600)) --per-day 50
+JE=20260108T130000Z-o-after-end
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 7200)) $JE owner > /dev/null
+shot due; foc check
+check "a job set after the focus ends keeps its time" '[ -e "$S/oneshot-at/$JE" ] && [ ! -e "$S/oneshot" ] && [ ! -e "$S/focus.hold" ]'
+foc clear > /dev/null; shot due
+check "without focus, jobs keep their times" '[ -e "$S/oneshot-at/$JE" ] && [ ! -e "$S/oneshot" ]'
 foc check
 check "without focus there is no hold" '[ ! -e "$S/focus.hold" ]'
 rm -rf "$S/oneshot-at"

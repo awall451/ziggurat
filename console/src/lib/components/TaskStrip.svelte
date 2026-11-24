@@ -84,13 +84,18 @@
           <span class="grow"></span>
           <a class="small" href="{base}/controls">Controls</a>
         {:else}
-          <span class="kind">{idleWords[0] || 'No cycle is running'}</span>
-          {#each idleWords.slice(1).filter(Boolean) as w (w)}<span class="dim small">{w}</span>{/each}
+          {#if team.focusNext}
+            <span class="kind">Focus: planned jobs first</span>
+            <span class="dim small">the next one starts within a minute</span>
+          {:else}
+            <span class="kind">{idleWords[0] || 'No cycle is running'}</span>
+            {#each idleWords.slice(1).filter(Boolean) as w (w)}<span class="dim small">{w}</span>{/each}
+          {/if}
         {/if}
       </div>
       {#if team.next}
         <div class="r2">
-          <span class="dim small">Next job, set for {clock(team.next.at / 1000, now)}</span>
+          <span class="dim small">{team.focusNext ? `Next job, now (was set for ${clock(team.next.at / 1000, now)})` : `Next job, set for ${clock(team.next.at / 1000, now)}`}</span>
           {@render what(team.next, true)}
           {#if estimate(team.next.item)}<span class="dim small">{estimate(team.next.item)}</span>{/if}
         </div>
