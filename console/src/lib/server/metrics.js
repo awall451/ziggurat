@@ -48,7 +48,7 @@ const outcomeOf = (c) => (c.limited ? 'limited' : c.overrun ? 'overrun' : c.halt
 function lineFor(project, c, { usage, item, gate, now }) {
   const base = {
     v: 1,
-    key: c.kind === 'chat' ? `chat:${c.chat}` : c.session,
+    key: c.kind === 'chat' ? `chat:${c.chat}` : c.kind === 'talk' ? `talk:${c.chat}` : c.session,
     kind: c.kind,
     start: c.start,
     end: c.end,
@@ -60,7 +60,7 @@ function lineFor(project, c, { usage, item, gate, now }) {
     estUsd: item?.cost ?? null,
     tokens: c.tokens
   };
-  if (c.kind === 'chat') return base;
+  if (c.kind === 'chat' || c.kind === 'talk') return base;
   if (!usage) {
     // No transcript here. Keep what the ledger says once it is clear none will come.
     const age = now - Date.parse(c.end || c.start || '');
@@ -109,11 +109,11 @@ export function recordMetrics(project, { itemForJob = () => null, now = Date.now
   const gate = gateRows(project);
   const added = [];
   for (const c of readCycles(project.paths.fleet)) {
-    const key = c.kind === 'chat' ? (c.chat ? `chat:${c.chat}` : null) : c.session;
+    const key = c.kind === 'chat' || c.kind === 'talk' ? (c.chat ? `${c.kind}:${c.chat}` : null) : c.session;
     if (!key || have.has(key) || !c.start) continue;
     let usage = null;
     let item = null;
-    if (c.kind !== 'chat') {
+    if (c.kind !== 'chat' && c.kind !== 'talk') {
       try {
         usage = sessionUsage(project, c.session, opts);
       } catch {
@@ -156,7 +156,7 @@ export function weekly(lines) {
     if (!groups.has(k)) groups.set(k, { week, kind: m.kind, rows: [] });
     groups.get(k).rows.push(m);
   }
-  const ORDER = ['normal', 'oneshot', 'plan', 'chat'];
+  const ORDER = ['normal', 'oneshot', 'plan', 'chat', 'talk'];
   return [...groups.values()]
     .map(({ week, kind, rows }) => {
       const cost = (m) => m.costUsd ?? m.ledgerUsd;

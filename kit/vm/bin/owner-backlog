@@ -16,6 +16,9 @@
 #   owner-backlog chat <plan-id> <msgid> [--fresh]    the notice of a chat turn, with the message;
 #                                                     --fresh: for a new session after a long pause, with
 #                                                     the proposals and the chat so far (kit 0.21)
+#   owner-backlog talk <talk-id> <msgid> [--fresh]    the notice of a turn in a conversation of the Chat
+#                                                     tab (kit 0.33); --fresh: a new session, with the
+#                                                     conversation so far
 #
 # Layout: see agent-kit-backlog. Everything this script writes is data the
 # console checks; nothing here can change what the owner decided.
@@ -106,6 +109,27 @@ parse_flags() {
     IFS=, read -ra deps <<< "$depends"
     [ ${#deps[@]} -le 10 ] || die "--depends: at most 10"
     for d in "${deps[@]}"; do [[ $d =~ $PID_RE ]] && [ -f "$OUT/$d.md" ] || die "--depends: unknown proposal $d"; done
+  fi
+  return 0
+}
+
+# What the team is doing right now, so the lead can keep it in mind in a chat.
+running_notice() {
+  local job="" jsince="" item
+  [ -r "$STATE/oneshot" ] && read -r job jsince _ < "$STATE/oneshot"
+  if [[ ${job:-} =~ ^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$ ]] && [ -r "$STATE/inbox/$job/message.md" ]; then
+    item=$(body "$STATE/inbox/$job/message.md" | grep -m1 -oE '^Backlog item [0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}' | awk '{print $3}')
+    echo
+    if [ -n "$item" ] && [ -f "$OUT/$item.md" ]; then
+      echo "Right now a one-shot job is running in its own cycle (since ${jsince:-?}): backlog item \`$item\`,"
+      echo "\"$(header "$OUT/$item.md" Title)\". The owner started it from this backlog. Keep it in mind: that work is in"
+      echo "progress, so do not propose it again, and say so if a change you discuss would touch it."
+    else
+      echo "Right now a one-shot job is running in its own cycle (since ${jsince:-?}): owner message \`$job\`."
+    fi
+  elif [ -s "$STATE/ledger/current" ]; then
+    echo
+    echo "Right now a normal cycle of the team is running. Keep in mind that the code may change while you talk."
   fi
   return 0
 }
@@ -358,30 +382,73 @@ code: no edits, no branches, no agents. The owner decides on the backlog page.
 
 EOF
     fi
-    # What the team is doing right now, so the lead can keep it in mind.
-    job=""
-    [ -r "$STATE/oneshot" ] && read -r job jsince _ < "$STATE/oneshot"
-    if [[ ${job:-} =~ ^[0-9]{8}T[0-9]{6}Z-o-[a-z0-9-]{1,40}$ ]] && [ -r "$STATE/inbox/$job/message.md" ]; then
-      item=$(body "$STATE/inbox/$job/message.md" | grep -m1 -oE '^Backlog item [0-9]{8}T[0-9]{6}Z-b-[a-f0-9]{6}' | awk '{print $3}')
-      echo
-      if [ -n "$item" ] && [ -f "$OUT/$item.md" ]; then
-        echo "Right now a one-shot job is running in its own cycle (since ${jsince:-?}): backlog item \`$item\`,"
-        echo "\"$(header "$OUT/$item.md" Title)\". The owner started it from this backlog. Keep it in mind: that work is in"
-        echo "progress, so do not propose it again, and say so if a change you discuss would touch it."
-      else
-        echo "Right now a one-shot job is running in its own cycle (since ${jsince:-?}): owner message \`$job\`."
-      fi
-    elif [ -s "$STATE/ledger/current" ]; then
-      echo
-      echo "Right now a normal cycle of the team is running. Keep in mind that the code may change while you talk."
-    fi
+    running_notice
     echo
     echo "The owner's message:"
     echo
     body "$BL/chat/$id/$msg.md"
     ;;
 
+  talk)
+    id=${2:-} msg=${3:-}
+    TL=$STATE/talk TO=$STATE/talk-out
+    [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-t-[a-f0-9]{6}$ ]] && [[ $msg =~ $MSG_RE ]] && [ -f "$TL/$id/$msg.md" ] || die "usage: owner-backlog talk <talk-id> <msgid> [--fresh]"
+    fresh=0
+    if [ "${4:-}" = "--fresh" ]; then fresh=1; elif [ -n "${4:-}" ]; then die "usage: owner-backlog talk <talk-id> <msgid> [--fresh]"; fi
+    if [ "$fresh" = 1 ]; then
+      cat <<EOF
+[agent-kit owner talk] This is the owner, through the kit, in the Chat tab of the console: a direct
+conversation with you, the lead of this project's team. It is not about a planning session. If this
+conversation has earlier messages, they are below: you do not remember them (a new session).
+Your charter is \`/opt/agent-kit/CHARTER.md\` and your notes are in \`docs/agents/STATE.md\`: read them,
+or code, only when the owner's message needs it.
+
+Answer in plain lines, as short as the question allows. Talk only: no edits, no branches, no agents,
+no changes to issues or the backlog. If the owner wants work done, say how to start it (an issue, a
+planning cycle, a one-shot job).
+
+## Open owner issues
+
+EOF
+      "$(dirname "$0")/owner-issues" list 2> /dev/null | head -40
+      printf '\n## The conversation so far (oldest first)\n\n'
+      n=0
+      for f in "$TL/$id"/*.md; do
+        m=$(basename "$f" .md)
+        [[ $m =~ $MSG_RE ]] && [ "$m" != "$msg" ] || continue
+        n=$((n + 1))
+      done
+      skip=$((n > 12 ? n - 12 : 0)) i=0
+      [ "$skip" -gt 0 ] && printf '(%s earlier messages left out.)\n\n' "$skip"
+      for f in "$TL/$id"/*.md; do
+        m=$(basename "$f" .md)
+        [[ $m =~ $MSG_RE ]] && [ "$m" != "$msg" ] || continue
+        i=$((i + 1)); [ "$i" -gt "$skip" ] || continue
+        printf '**Owner:**\n'; body "$f" | head -c 2000; printf '\n\n'
+        if [ -f "$TO/$id/$m.md" ] && [ "$(header "$TO/$id/$m.md" Status)" = ok ]; then
+          printf '**You:**\n'; body "$TO/$id/$m.md" | head -c 2000; printf '\n\n'
+        fi
+      done
+      [ "$n" -gt 0 ] || printf 'Nothing yet: this is the first message.\n\n'
+    else
+      cat <<EOF
+[agent-kit owner talk] This is the owner again, in the same conversation of the Chat tab. Answer in plain
+lines. Still talk only: no edits, no branches, no agents, no changes to issues or the backlog.
+EOF
+    fi
+    running_notice
+    if [ -d "$TL/$id/att/$msg" ]; then
+      echo
+      echo "The owner attached files to this message (read them with your file tools):"
+      for f in "$TL/$id/att/$msg"/*; do echo "  $f"; done
+    fi
+    echo
+    echo "The owner's message:"
+    echo
+    body "$TL/$id/$msg.md"
+    ;;
+
   *)
-    die "unknown command: $1 (propose, revise, taken, list, show, prompt, plan, chat)"
+    die "unknown command: $1 (propose, revise, taken, list, show, prompt, plan, chat, talk)"
     ;;
 esac

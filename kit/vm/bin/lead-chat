@@ -5,6 +5,12 @@
 # after a pause of more than an hour, a new one that starts from the
 # proposals and the chat so far (kit 0.21). The prompt cache lives one hour:
 # after that a resumed session is paid for again in full.
+#
+# A conversation of the Chat tab ("talk", kit 0.33) has its own session in
+# $STATE/ledger/talks/<talk-id>, started with its first message. A message may
+# ask for a model and an effort. The turn streams its events (stream-json) to
+# $STATE/talk-out/<talk-id>/<msgid>.jsonl, so the console can show the lead's
+# steps while it works; the answer itself is written as for a plan chat.
 set -uo pipefail
 ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 KIT=${AGENT_KIT_HOME:-/opt/agent-kit}
@@ -14,19 +20,37 @@ source "$ETC/project.env"
 [ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
 LEDGER=$STATE/ledger/cycles.jsonl
 PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
+TALK_RE='^[0-9]{8}T[0-9]{6}Z-t-[a-f0-9]{6}$'
 MSG_RE='^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$'
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 # The same limits as a planning cycle: talk and proposals, no code. Tool
 # limits are not kept by a resumed session, so they are passed every turn.
 CHAT_TOOLS="Read,Grep,Glob,Bash"
 
+header() { sed -n "1,/^---\$/s/^$2: //p" "$1" 2>/dev/null | head -1; }
+
 [ -f "$STATE/chat" ] || { echo "no chat marker: nothing to do"; exit 0; }
-read -r plan msg _ < "$STATE/chat"
-[[ ${plan:-} =~ $PLAN_RE ]] && [[ ${msg:-} =~ $MSG_RE ]] || { echo "bad chat marker"; exit 1; }
-[ -f "$STATE/backlog/chat/$plan/$msg.md" ] || { echo "no such chat message"; exit 1; }
-read -r sid _ < "$STATE/ledger/plans/$plan" 2>/dev/null
-[[ ${sid:-} =~ $UUID_RE ]] || { echo "no session id for $plan"; exit 1; }
-out=$STATE/backlog-out/chat/$plan
+read -r id msg _ < "$STATE/chat"
+[[ ${msg:-} =~ $MSG_RE ]] || { echo "bad chat marker"; exit 1; }
+plan="" talk=""
+if [[ ${id:-} =~ $PLAN_RE ]]; then
+  plan=$id kind=chat
+  msgfile=$STATE/backlog/chat/$plan/$msg.md
+  sidfile=$STATE/ledger/plans/$plan
+  out=$STATE/backlog-out/chat/$plan
+elif [[ ${id:-} =~ $TALK_RE ]]; then
+  talk=$id kind=talk
+  msgfile=$STATE/talk/$talk/$msg.md
+  sidfile=$STATE/ledger/talks/$talk
+  out=$STATE/talk-out/$talk
+else
+  echo "bad chat marker"; exit 1
+fi
+[ -f "$msgfile" ] || { echo "no such chat message"; exit 1; }
+sid=""
+read -r sid _ < "$sidfile" 2>/dev/null
+[[ ${sid:-} =~ $UUID_RE ]] || sid=""
+[ -n "$sid" ] || [ "$kind" = talk ] || { echo "no session id for $plan"; exit 1; }
 mkdir -p "$out" "$STATE/ledger/runs"
 
 reply() { # $1 status ok|error; body on stdin
@@ -34,13 +58,22 @@ reply() { # $1 status ok|error; body on stdin
   mv "$out/.$msg.tmp" "$out/$msg.md"
 }
 
-# How long since this session last ran? Over an hour: start a new one.
+# How long since this session last ran? Over an hour: start a new one. A
+# conversation of the Chat tab with no session yet starts one too.
 fresh=()
-last=$(jq -rs --arg s "$sid" '[.[] | select(.session == $s) | .end // empty] | last // empty' "$LEDGER" 2>/dev/null)
-if [ -n "$last" ] && t=$(date -d "$last" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -gt "${AGENT_KIT_CHAT_FRESH_SECS:-3600}" ]; then
+if [ -z "$sid" ]; then
   fresh=(--fresh)
+else
+  last=$(jq -rs --arg s "$sid" '[.[] | select(.session == $s) | .end // empty] | last // empty' "$LEDGER" 2>/dev/null)
+  if [ -n "$last" ] && t=$(date -d "$last" +%s 2>/dev/null) && [ $(($(date +%s) - t)) -gt "${AGENT_KIT_CHAT_FRESH_SECS:-3600}" ]; then
+    fresh=(--fresh)
+  fi
 fi
-prompt=$("$KIT/bin/owner-backlog" chat "$plan" "$msg" "${fresh[@]}" 2>/dev/null)
+if [ "$kind" = talk ]; then
+  prompt=$("$KIT/bin/owner-backlog" talk "$talk" "$msg" "${fresh[@]}" 2>/dev/null)
+else
+  prompt=$("$KIT/bin/owner-backlog" chat "$plan" "$msg" "${fresh[@]}" 2>/dev/null)
+fi
 [ -n "$prompt" ] || { echo "could not build the chat prompt" | reply error; exit 1; }
 settings=()
 [ -f "$KIT/lead-settings.json" ] && settings=(--settings "$KIT/lead-settings.json")
@@ -51,36 +84,52 @@ workspace_print() { { git rev-parse HEAD 2>/dev/null; git status --porcelain 2>/
 busy() { [ -s "$STATE/ledger/current" ]; }
 before=$(workspace_print); busy && before=
 # The session's total so far: a resumed run reports the total of all its runs.
-prev=$(jq -s --arg s "$sid" '[.[] | select(.session == $s) | .cost_usd // 0] | add // 0' "$LEDGER" 2>/dev/null || echo 0)
+prev=0
+[ -n "$sid" ] && prev=$(jq -s --arg s "$sid" '[.[] | select(.session == $s) | .cost_usd // 0] | add // 0' "$LEDGER" 2>/dev/null || echo 0)
 session=(--resume "$sid")
+old=$sid
 if [ ${#fresh[@]} -gt 0 ]; then
-  old=$sid
   sid=$(cat /proc/sys/kernel/random/uuid)
   session=(--session-id "$sid")
   prev=0
 fi
-# Thinking effort of a chat answer (agent-kit-caps CHAT_EFFORT): medium is Claude Code's own default.
+# Model and thinking effort: what the message asks for (Chat tab, kit 0.33),
+# else the team's lead model and agent-kit-caps CHAT_EFFORT (medium is Claude Code's own default).
+model=$LEAD_MODEL
+want=$(header "$msgfile" Model)
+[[ $want =~ ^(fable|opus|sonnet|haiku)$ ]] && model=$want
+eff=${CHAT_EFFORT:-medium}
+want=$(header "$msgfile" Effort)
+[[ $want =~ ^(low|medium|high|xhigh|max)$ ]] && eff=$want
 effort=()
-[[ ${CHAT_EFFORT:-medium} =~ ^(low|medium|high|xhigh|max)$ ]] && effort=(--effort "${CHAT_EFFORT:-medium}")
+[[ $eff =~ ^(low|medium|high|xhigh|max)$ ]] && effort=(--effort "$eff")
 start=$(date -Is); t0=$SECONDS
-run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)-chat
+run=$STATE/ledger/runs/$(date +%Y%m%dT%H%M%S)-$kind
 # Not the cycle's lead session: the inbox hook must not deliver owner
 # messages into a chat turn (a cycle may be running next to it).
 unset ZIGGURAT_LEAD_SESSION
 export CLAUDE_CODE_RETRY_WATCHDOG=1
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 budget=${CHAT_BUDGET_USD:-3}
-claude -p "$prompt" "${session[@]}" "${settings[@]}" --tools "$CHAT_TOOLS" \
-  --model "$LEAD_MODEL" --fallback-model "$FALLBACK_MODEL" "${effort[@]}" \
-  --dangerously-skip-permissions \
-  --max-budget-usd "$budget" \
-  --output-format json > "$run.json" 2> "$run.err"
-rc=$?
+args=(-p "$prompt" "${session[@]}" "${settings[@]}" --tools "$CHAT_TOOLS"
+  --model "$model" --fallback-model "$FALLBACK_MODEL" "${effort[@]}"
+  --dangerously-skip-permissions
+  --max-budget-usd "$budget")
+if [ "$kind" = talk ]; then
+  # Every event as it happens, for the console; the last line is the result.
+  claude "${args[@]}" --output-format stream-json --verbose > "$out/$msg.jsonl" 2> "$run.err"
+  rc=$?
+  jq -c 'select(.type == "result")' "$out/$msg.jsonl" 2>/dev/null | tail -1 > "$run.json"
+else
+  claude "${args[@]}" --output-format json > "$run.json" 2> "$run.err"
+  rc=$?
+fi
 # The new session is the chat's session from now on, once it has answered or at least exists.
 if [ ${#fresh[@]} -gt 0 ]; then
   if [ -s "$run.json" ] && jq -e '.session_id // .total_cost_usd // .result' "$run.json" > /dev/null 2>&1; then
-    printf '%s\n' "$sid" > "$STATE/ledger/plans/$plan"
-  else
+    mkdir -p "$(dirname "$sidfile")"
+    printf '%s\n' "$sid" > "$sidfile"
+  elif [ -n "$old" ]; then
     sid=$old
   fi
 fi
@@ -104,14 +153,25 @@ if [ -s "$run.json" ] && jq -e . "$run.json" > /dev/null 2>&1; then
 else
   { echo "The lead did not answer (rc=$rc)."; tail -c 600 "$run.err"; } | reply error
 fi
-jq -nc --arg date "$(date +%F)" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg plan "$plan" --arg msg "$msg" \
+asked_model=null asked_effort=null
+[ "$kind" = talk ] && { asked_model="\"$model\"" asked_effort="\"$eff\""; }
+jq -nc --arg date "$(date +%F)" --arg start "$start" --arg end "$(date -Is)" --arg sid "$sid" --arg plan "$plan" --arg talk "$talk" --arg kind "$kind" --arg msg "$msg" \
   --argjson secs $((SECONDS - t0)) --argjson rc $rc --argjson prev "${prev:-0}" --argjson touched $touched \
+  --argjson model "$asked_model" --argjson effort "$asked_effort" \
   --slurpfile r <( [ -s "$run.json" ] && jq -c . "$run.json" 2>/dev/null || echo '{}') \
   '($r[0] // {}) as $o |
+   ((($o.modelUsage // {}) | if type == "object" then . else {} end)
+     | map_values({in:(.inputTokens // 0), out:(.outputTokens // 0), cr:(.cacheReadInputTokens // 0),
+                   cw:(.cacheCreationInputTokens // 0), think:(.thinkingTokens // 0), usd:(.costUSD // 0)})) as $models |
    {date:$date, start:$start, end:$end, secs:$secs, rc:$rc, limited:false, counted:false, halted:false,
-    oneshot:null, slot:null, kind:"chat", plan:$plan, chat:$msg, touched_code:$touched,
+    oneshot:null, slot:null, kind:$kind, plan:(if $plan == "" then null else $plan end), chat:$msg, touched_code:$touched,
     cost_usd:(if $o.total_cost_usd then ([$o.total_cost_usd - $prev, 0] | max) else null end),
     turns:($o.num_turns // null), session:$sid, is_error:($o.is_error // null),
-    summary:(($o.result // "") | tostring | .[-600:])}' >> "$LEDGER"
+    summary:(($o.result // "") | tostring | .[-600:])}
+   + (if $kind == "talk" then
+       {talk:$talk, model:$model, effort:$effort,
+        tokens:(if ($models | length) == 0 then null else ([$models[]] | {in:(map(.in) | add), out:(map(.out) | add), cr:(map(.cr) | add), cw:(map(.cw) | add), think:(map(.think) | add)}) end),
+        models:(if ($models | length) == 0 then null else $models end)}
+     else {} end)' >> "$LEDGER"
 echo "chat turn $msg done rc=$rc in $((SECONDS - t0))s"
 exit 0

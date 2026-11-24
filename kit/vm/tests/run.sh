@@ -1171,6 +1171,13 @@ while [ $# -gt 0 ]; do [ "$1" = -p ] && { printf '%s' "$2" > "$FAKE_PROMPT"; bre
 [ -n "${FAKE_TOUCH:-}" ] && echo x > "$FAKE_TOUCH"
 sid=$(grep -A1 -x -e --session-id -e --resume "$FAKE_ARGS" | tail -1)
 [ -n "${FAKE_JSON:-}" ] && { echo "$FAKE_JSON"; exit 1; }
+# stream-json (the Chat tab, kit 0.33): events first, the result last.
+if grep -qx stream-json "$FAKE_ARGS"; then
+  echo '{"type":"system","subtype":"init","session_id":"'"$sid"'"}'
+  echo '{"type":"assistant","message":{"model":"claude-fable-5-2","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"docs/agents/STATE.md"}}],"usage":{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":200,"output_tokens":30}}}'
+  echo "{\"type\":\"result\",\"subtype\":\"success\",\"total_cost_usd\":${FAKE_COST:-0.5},\"num_turns\":2,\"result\":\"${FAKE_RESULT:-plan summary}\",\"is_error\":false,\"session_id\":\"$sid\",\"modelUsage\":{\"claude-fable-5-2\":{\"inputTokens\":5,\"outputTokens\":30,\"cacheReadInputTokens\":1000,\"cacheCreationInputTokens\":200,\"costUSD\":${FAKE_COST:-0.5}}}}"
+  exit 0
+fi
 echo "{\"total_cost_usd\":${FAKE_COST:-0.5},\"num_turns\":3,\"result\":\"${FAKE_RESULT:-plan summary}\",\"is_error\":false,\"session_id\":\"$sid\"}"
 EOF
 chmod 755 "$FB/claude"
@@ -1333,6 +1340,53 @@ refuse "no chat after the owner ended it" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$
 echo "$PL2 $M3 2026-01-01T00:00:00+00:00" > "$S/chat"; touch -d '-10 min' "$S/chat"
 chat reap
 check "a chat turn that is gone is reaped" '[ ! -e "$S/chat" ]'
+
+# The Chat tab (kit 0.33): conversations of their own, not tied to a plan.
+TK=20260102T150000Z-t-abc123 TM1=20260102T150000Z-c-111111 TM2=20260102T150100Z-c-222222 TM3=20260102T150200Z-c-333333
+refuse "a conversation with a bad id" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say 20260102T150000Z-t-zz $TM1 owner"
+refuse "a model that is not on the list" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $TK $TM1 owner --model 'gpt;id'"
+refuse "an effort that is not on the list" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $TK $TM1 owner --effort tiny"
+: > "$FAKE_LOG"
+echo "What is the team doing? Code word TOPAZ." | chat say $TK $TM1 owner --model sonnet --effort high > /dev/null
+check "a Chat tab message is stored root-side with its model and effort, and starts one turn" 'grep -q TOPAZ "$S/talk/$TK/$TM1.md" && grep -qx "Model: sonnet" "$S/talk/$TK/$TM1.md" && grep -qx "Effort: high" "$S/talk/$TK/$TM1.md" && grep -q "^$TK $TM1 " "$S/chat" && grep -qx "start --no-block agent-kit-chat.service" "$FAKE_LOG"'
+refuse "a second message while the lead answers (one answer at a time per team)" sh -c "echo again | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $TK $TM2 owner"
+rm -f "$FAKE_PROMPT"
+FAKE_COST=0.2 FAKE_RESULT="The team is on the save system" AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+TSID=$(cat "$S/ledger/talks/$TK" 2> /dev/null)
+check "the first turn starts a session of its own" '[[ $TSID =~ ^[0-9a-f-]{36}$ ]] && [ "$(grep -A1 -x -- --session-id "$FAKE_ARGS" | tail -1)" = "$TSID" ] && ! grep -qx -- --resume "$FAKE_ARGS"'
+check "with the model and effort of the message, and the chat limits" '[ "$(grep -A1 -x -- --model "$FAKE_ARGS" | tail -1)" = sonnet ] && [ "$(grep -A1 -x -- --effort "$FAKE_ARGS" | tail -1)" = high ] && grep -qx "Read,Grep,Glob,Bash" "$FAKE_ARGS" && [ "$(grep -A1 -x -- --max-budget-usd "$FAKE_ARGS" | tail -1)" = 0.5 ]'
+check "the talk notice, open issues and the message" '[ "$(head -c 22 "$FAKE_PROMPT")" = "[agent-kit owner talk]" ] && grep -q "^## Open owner issues" "$FAKE_PROMPT" && grep -q "first message" "$FAKE_PROMPT" && grep -q TOPAZ "$FAKE_PROMPT"'
+check "the turn streams its steps for the console" 'grep -q "\"name\":\"Read\"" "$S/talk-out/$TK/$TM1.jsonl" && grep -q "\"type\":\"result\"" "$S/talk-out/$TK/$TM1.jsonl"'
+check "the answer is written from the result line" 'grep -qx "Status: ok" "$S/talk-out/$TK/$TM1.md" && grep -q "on the save system" "$S/talk-out/$TK/$TM1.md"'
+L=$(tail -1 "$S/ledger/cycles.jsonl")
+check "ledger: a talk line, not counted, with no plan, its tokens, model and effort" '[ "$(jq -r .kind <<< "$L")" = talk ] && [ "$(jq -r .talk <<< "$L")" = "$TK" ] && [ "$(jq -r .chat <<< "$L")" = "$TM1" ] && [ "$(jq -r .plan <<< "$L")" = null ] && [ "$(jq -r .counted <<< "$L")" = false ] && [ "$(jq -r .tokens.cr <<< "$L")" = 1000 ] && [ "$(jq -r .model <<< "$L")" = sonnet ] && [ "$(jq -r .effort <<< "$L")" = high ] && [ "$(jq -r ".cost_usd * 100 | round" <<< "$L")" = 20 ]'
+chat finish
+mkdir -p "$T/work/tk/att"; echo "Is this log bad? Code word GARNET." > "$T/work/tk/body.md"; echo "line" > "$T/work/tk/att/trace.log"
+tar -c -C "$T/work/tk" . | chat say $TK $TM2 owner --files > /dev/null
+check "files go with a message" '[ -f "$S/talk/$TK/att/$TM2/trace.log" ] && grep -q GARNET "$S/talk/$TK/$TM2.md"'
+rm -f "$FAKE_PROMPT"
+FAKE_COST=0.35 FAKE_RESULT="It is fine" AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+check "the next turn resumes the conversation's session, with the team's model and effort" '[ "$(grep -A1 -x -- --resume "$FAKE_ARGS" | tail -1)" = "$TSID" ] && [ "$(grep -A1 -x -- --model "$FAKE_ARGS" | tail -1)" = opus ] && [ "$(grep -A1 -x -- --effort "$FAKE_ARGS" | tail -1)" = low ]'
+check "a resumed turn gets the short notice and the file paths" 'grep -q "owner again" "$FAKE_PROMPT" && grep -q "talk/$TK/att/$TM2/trace.log" "$FAKE_PROMPT"'
+check "ledger: only this turn's cost" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r ".cost_usd * 100 | round")" = 15 ]'
+chat finish
+mkdir -p "$T/work/tb/att"; echo x > "$T/work/tb/body.md"; echo x > "$T/work/tb/att/a b.txt"
+refuse "a file with a bad name" sh -c "tar -c -C $T/work/tb . | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $TK $TM3 owner --files"
+echo "After a break. Code word BASALT." | chat say $TK $TM3 owner > /dev/null
+rm -f "$FAKE_PROMPT"
+AGENT_KIT_CHAT_FRESH_SECS=-1 AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-chat" > /dev/null 2>&1
+check "after a long pause a new session, told the conversation so far" '[ "$(cat "$S/ledger/talks/$TK")" != "$TSID" ] && grep -q TOPAZ "$FAKE_PROMPT" && grep -q "on the save system" "$FAKE_PROMPT" && grep -q GARNET "$FAKE_PROMPT" && [ "$(grep -c BASALT "$FAKE_PROMPT")" = 1 ]'
+check "the plan chat is left as it was: no stream" '[ -f "$S/backlog-out/chat/$PL2/$M6.md" ] && [ -z "$(ls "$S/backlog-out/chat/$PL2/" | grep jsonl)" ]'
+chat finish
+# The stall check knows a Chat tab turn: its session, or the first turn with none yet.
+check "a Chat tab turn is not mistaken for no turn" 'echo "$TK $TM3 $(date -Is)" > "$S/chat"; out=$(AGENT_KIT_PROJECTS=$T/none "$BIN/agent-kit-stall" 2> /dev/null); rm -f "$S/chat"; jq -e . <<< "$out" > /dev/null'
+# Issue 114: the owner's status view counts cycles as the cap does, not chat turns.
+mkdir -p "$T/fb114"; printf '#!/bin/sh\n"$@"\n' > "$T/fb114/sudo"; printf '#!/bin/sh\nexit 0\n' > "$T/fb114/gate-status"; chmod 755 "$T/fb114/"*
+d=$(date +%F)
+printf '{"date":"%s","kind":"normal","counted":true,"start":"x","rc":0}\n{"date":"%s","kind":"plan","counted":true,"start":"x","rc":0}\n{"date":"%s","kind":"chat","counted":false,"start":"x","rc":0}\n{"date":"%s","kind":"talk","counted":false,"start":"x","rc":0,"summary":"TALKLINE"}\n' "$d" "$d" "$d" "$d" > "$S/ledger/cycles.jsonl"
+out=$(PATH=$T/fb114:$FB:$PATH "$BIN/agent-kit-status" 2> /dev/null)
+check "status: today counts the counted cycles only, from caps.env" 'grep -q "== today: 2/4 cycles" <<< "$out"'
+check "status: chat turns are not listed as cycles" '! grep -q TALKLINE <<< "$out"'
 
 # A one-shot job set for a time.
 JA=20260103T100000Z-o-atjob JB=20260103T100100Z-o-missed

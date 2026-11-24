@@ -4,7 +4,7 @@ import path from 'node:path';
 import { getProject, getPricing } from '$lib/server/config.js';
 import { listSessions, sessionUsage } from '$lib/server/transcripts.js';
 import { makeLabeler } from '$lib/server/theme.js';
-import { trials, parseGateLog } from '$lib/server/aggregate.js';
+import { trials, parseGateLog, readCycles } from '$lib/server/aggregate.js';
 import { readMetrics, recordMetrics, weekly } from '$lib/server/metrics.js';
 import { itemForJob } from '$lib/server/backlog.js';
 
@@ -52,5 +52,10 @@ export function load({ params }) {
   } catch {
     /* the page still shows what is recorded */
   }
-  return { cycles, trials: trials(project), maxCycles: MAX_CYCLES, overTime: weekly(readMetrics(project)).slice(0, 40) };
+  // Turns in the Chat tab (kit 0.33) over the same span as the cycles above: from the ledger,
+  // since they belong to no cycle's session.
+  const since = Math.min(...cycles.map((c) => Date.parse(c.started) || Infinity));
+  const talkLines = readCycles(project.paths.fleet).filter((c) => c.kind === 'talk' && (!Number.isFinite(since) || Date.parse(c.start) >= since));
+  const talk = { turns: talkLines.length, costUsd: talkLines.reduce((t, c) => t + (Number(c.costUsd) || 0), 0) };
+  return { cycles, talk, trials: trials(project), maxCycles: MAX_CYCLES, overTime: weekly(readMetrics(project)).slice(0, 40) };
 }

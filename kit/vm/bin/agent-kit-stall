@@ -41,9 +41,12 @@ if [ -f "$STATE/ledger/current" ]; then
 elif [ -f "$STATE/chat" ]; then
   read -r plan _ started _ < "$STATE/chat"
   kind=chat
-  [[ ${plan:-} =~ ^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$ ]] && read -r sid _ < "$STATE/ledger/plans/$plan" 2> /dev/null
+  if [[ ${plan:-} =~ ^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$ ]]; then read -r sid _ < "$STATE/ledger/plans/$plan" 2> /dev/null
+  # A conversation of the Chat tab (kit 0.33): its first turn has no session id yet.
+  elif [[ ${plan:-} =~ ^[0-9]{8}T[0-9]{6}Z-t-[a-f0-9]{6}$ ]]; then read -r sid _ < "$STATE/ledger/talks/$plan" 2> /dev/null; fi
 fi
-[[ ${sid:-} =~ $UUID_RE ]] || none
+[[ ${sid:-} =~ $UUID_RE ]] || sid=""
+[ -n "$sid" ] || [ "$kind" = chat ] || none
 began=$(date -d "${started:-}" +%s 2> /dev/null) || began=$now
 
 # The session's transcripts: its own file and everything in its folder (sub-agents).
@@ -51,6 +54,7 @@ began=$(date -d "${started:-}" +%s 2> /dev/null) || began=$now
 # kit learns only at the end: then the newest transcript written since the turn began.
 files=()
 for d in "$PROJECTS"/*/; do
+  [ -n "$sid" ] || break
   [ -f "$d$sid.jsonl" ] && files+=("$d$sid.jsonl")
   [ -d "$d$sid" ] && while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$d$sid" -name '*.jsonl' -type f -print0 2> /dev/null)
 done

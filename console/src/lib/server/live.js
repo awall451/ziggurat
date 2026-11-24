@@ -90,10 +90,16 @@ jq -nc --arg control "$control" --arg lead "$lead" --arg timer "$timer" --arg si
 `;
 }
 
-/** A chat turn in progress: "<plan-id> <msgid> <since>". */
-function chatOf(text) {
-  const [plan, msg, since] = String(text || '').trim().split(/\s+/);
-  return /^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$/.test(plan || '') && /^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$/.test(msg || '') ? { plan, msg, since: since || null } : null;
+/**
+ * A chat turn in progress: "<plan-id|talk-id> <msgid> <since>". A plan chat
+ * gives {plan}, a conversation of the Chat tab (kit 0.33) {talk}.
+ */
+export function chatOf(text) {
+  const [id, msg, since] = String(text || '').trim().split(/\s+/);
+  if (!/^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$/.test(msg || '')) return null;
+  if (/^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$/.test(id || '')) return { plan: id, talk: null, msg, since: since || null };
+  if (/^[0-9]{8}T[0-9]{6}Z-t-[a-f0-9]{6}$/.test(id || '')) return { plan: null, talk: id, msg, since: since || null };
+  return null;
 }
 
 const WAIT_RE = /^(busy|pending|running|failed|held|merge)$/;

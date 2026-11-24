@@ -51,7 +51,7 @@ export function saveSettings(user, input) {
 export function typicalSecs(cycles) {
   const secs = cycles
     // Normal cycles and one-shot jobs only: planning cycles and chat turns are short and say nothing about a cycle's length.
-    .filter((c) => c.counted && !c.halted && c.kind !== 'chat' && c.kind !== 'plan' && Number.isFinite(c.secs) && c.secs > 60)
+    .filter((c) => c.counted && !c.halted && c.kind !== 'chat' && c.kind !== 'talk' && c.kind !== 'plan' && Number.isFinite(c.secs) && c.secs > 60)
     .slice(-10)
     .map((c) => c.secs)
     .sort((a, b) => a - b);
@@ -120,7 +120,7 @@ export async function timeline({ view = 'day', date = null, from = null, to = nu
         const past = [];
         for (const c of cycles) {
           // Chat turns with the lead are not drawn: they are seconds long and not cycles.
-          if (c.kind === 'chat' || (c.oneshot && jobIds.has(c.oneshot))) continue;
+          if (c.kind === 'chat' || c.kind === 'talk' || (c.oneshot && jobIds.has(c.oneshot))) continue;
           const start = Date.parse(c.start);
           const end = Date.parse(c.end);
           if (!Number.isFinite(start) || !Number.isFinite(end) || end <= dataFrom || start >= dataTo) continue;

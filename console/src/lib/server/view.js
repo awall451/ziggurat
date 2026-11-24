@@ -8,6 +8,7 @@ import { openAskCount } from './feedback.js';
 import { openCount as openIssueCount } from './issues.js';
 import { publishView, PUBLISH_KIT } from './publish.js';
 import { chatUnread } from './backlog.js';
+import { unread as talkUnread, kitHasTalk } from './talk.js';
 import { parseScheduleText, nextStart } from '../schedule.js';
 
 const CHECKING = { reachable: null, state: 'checking', leadActive: false };
@@ -79,6 +80,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
       held: status.heldChanges || 0,
       // Answers of the lead in the Backlog chat that the owner has not opened.
       chat: chatUnread(project, status),
+      // Answers of the lead in the Chat tab's conversations that the owner has not opened (kit 0.33).
+      talk: talkUnread(project, status),
       // Publishing that the console could not get to work by itself.
       publishing: publishView(project).auto?.waiting ? 1 : 0
     },
@@ -92,6 +95,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canOneshotIdle: !!status.canOneshot && kitAtLeast(status.kitVersion, '0.6.0'),
     // Files attached to an issue (beyond its one picture) need kit 0.7.
     canIssueFiles: kitAtLeast(status.kitVersion, '0.7.0'),
+    // The Chat tab's conversations with the lead need kit 0.33.
+    canTalk: kitHasTalk(status.kitVersion),
     // Issues as tickets (numbers, priority, edits, notes, files later) need kit 0.12.
     canTickets: kitAtLeast(status.kitVersion, '0.12.0'),
     // Trying a failed package install again needs kit 0.17.

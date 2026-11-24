@@ -545,7 +545,7 @@ export function chatSeen(project, plan) {
  * Reads only what the console already pulled.
  */
 export function chatUnread(project, status = null) {
-  if (status?.chat) return 0;
+  if (status?.chat?.plan) return 0;
   const plan = openChatPlan(project);
   if (!plan) return 0;
   const done = answered(project, plan);
