@@ -63,6 +63,13 @@ if [ -f "$STATE/focus" ]; then
     if ! [[ ${fc:-} =~ ^[0-9]+$ ]] || [ "${fdone:-0}" -lt "$fc" ]; then focus_since=$fs focus_perday=$fp; fi
   fi
 fi
+# Planned jobs go first (kit 0.28): agent-kit-focus check keeps focus.hold while
+# a planned job is due before a new focus cycle would likely end. Only a fresh one counts.
+if [ -z "$oneshot" ] && [ -n "$focus_since" ] && [ -f "$STATE/focus.hold" ] \
+   && [ $(($(date +%s) - $(stat -c %Y "$STATE/focus.hold" 2>/dev/null || echo 0))) -le 180 ]; then
+  read -r hid hat _ < "$STATE/focus.hold"
+  echo "focus: holding for planned job ${hid:-?} at $(date -d "@${hat:-0}" -Is 2>/dev/null)"; exit 0
+fi
 if [ -z "$oneshot" ] && [ -z "$focus_since" ] && [ -f "$STATE/paused" ]; then
   pu=$(fkey "$STATE/paused" until)
   if [[ ${pu:-} =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$pu" ]; then echo "paused for focus on $(fkey "$STATE/paused" for): not running"; exit 0; fi

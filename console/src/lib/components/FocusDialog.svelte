@@ -87,7 +87,10 @@
 
 <Modal title="Focus on {name}" {onclose}>
   <div class="grid">
-    <p class="small">{name} runs normal cycles back to back: each ends, merges and reports as usual, then the next starts. Its start times are set aside meanwhile. Afterwards everything is as it was.</p>
+    <p class="small">
+      {name} runs normal cycles back to back: each ends, merges and reports as usual, then the next starts. Its start times are set aside meanwhile; its planned jobs go first: no
+      focus cycle starts when one is due before it would likely end. Afterwards everything is as it was.
+    </p>
 
     <div class="stack">
       <span class="small dim">Until</span>

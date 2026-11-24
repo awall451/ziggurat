@@ -1589,6 +1589,48 @@ check "a focus ends at its time" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .
 foc set --open --per-day 50 > /dev/null
 foc clear owner > /dev/null
 check "switched off" '[ ! -e "$S/focus" ] && [ "$(foc show | jq -r .ended.reason)" = "switched off: owner" ]'
+# Planned jobs go first (kit 0.28).
+rm -rf "$S/oneshot-at"; rm -f "$S/focus.hold"
+foc set --open --per-day 50 > /dev/null
+foc check
+check "no planned job: no hold" '[ ! -e "$S/focus.hold" ] && [ "$(foc show | jq -c .hold)" = null ]'
+JH=20260108T100000Z-o-soon
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 600)) $JH owner > /dev/null
+foc check
+check "a planned job due within a cycle's length holds the focus" '[ "$(cut -d" " -f1 "$S/focus.hold")" = "$JH" ] && [ "$(foc show | jq -r .hold.id)" = "$JH" ] && grep -q "waiting for planned job $JH" "$S/schedule.log"'
+foc check
+check "it is logged once" '[ "$(grep -c "waiting for planned job $JH" "$S/schedule.log")" = 1 ]'
+out=$(cycle 2>&1)
+check "no focus cycle starts in its way, and nothing is counted" 'grep -q "holding for planned job $JH" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
+FH=20260108T100100Z-f-owner
+shot start $FH owner --free --past-cap < /dev/null > /dev/null; out=$(cycle 2>&1)
+check "a cycle the owner starts is not held" '[ -s "$FAKE_PROMPT" ]'
+shot finish > /dev/null
+touch -d "10 minutes ago" "$S/focus.hold"; out=$(cycle 2>&1)
+check "a stale hold is ignored" '[ -s "$FAKE_PROMPT" ]'
+shot unat $JH > /dev/null
+# Those two cycles changed only notes, which ends a focus: a new one for the rest.
+foc clear > /dev/null; foc set --open --per-day 50 > /dev/null
+JL=20260108T110000Z-o-later JX=20260108T110100Z-o-builds
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 5 * 3600)) $JL owner > /dev/null
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 600)) $JX owner --after $JL > /dev/null
+foc check
+check "a job hours away, or one that builds on a job not done yet, does not hold" '[ -e "$S/focus" ] && [ ! -e "$S/focus.hold" ]'
+shot unat $JX > /dev/null
+JB=20260108T120000Z-o-late
+tar -c -C "$T/work/j" . | shot at $(($(date +%s) + 60)) $JB owner > /dev/null
+sed -i "s/^[0-9]* /$(($(date +%s) - 120)) /" "$S/oneshot-at/$JB"; printf 'busy - %s 0\n' "$(date +%s)" > "$S/oneshot-at/$JB.wait"
+foc check
+check "a job whose time has come and that waits for the team holds" '[ "$(cut -d" " -f1 "$S/focus.hold")" = "$JB" ]'
+printf 'merge %s %s 0\n' "$JL" "$(date +%s)" > "$S/oneshot-at/$JB.wait"; foc check
+check "not one held back by the job it builds on" '[ ! -e "$S/focus.hold" ]'
+printf 'busy - %s 0\n' "$(date +%s)" > "$S/oneshot-at/$JB.wait"; foc check
+foc clear > /dev/null
+check "the end of the focus ends the hold" '[ ! -e "$S/focus.hold" ]'
+foc check
+check "without focus there is no hold" '[ ! -e "$S/focus.hold" ]'
+rm -rf "$S/oneshot-at"
+
 # Paused for another team's focus.
 refuse "a pause needs whose focus" foc pause --open
 foc pause --open --for nocturne > /dev/null

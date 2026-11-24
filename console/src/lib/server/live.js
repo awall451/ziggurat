@@ -167,8 +167,10 @@ export function focusOf(text) {
   const f = o.focus && typeof o.focus === 'object' ? o.focus : null;
   const p = o.paused && typeof o.paused === 'object' ? o.paused : null;
   const e = o.ended && typeof o.ended === 'object' ? o.ended : null;
+  // A planned job due before a new focus cycle would end (kit 0.28): no focus cycle starts in its way.
+  const h = o.hold && typeof o.hold === 'object' && /^[0-9]{8}T[0-9]{6}Z-[opf]-[a-z0-9-]{1,40}$/.test(o.hold.id || '') && posInt(o.hold.at) ? { id: o.hold.id, at: o.hold.at, kind: /-f-/.test(o.hold.id) ? 'once' : /-p-/.test(o.hold.id) ? 'plan' : 'job' } : null;
   return {
-    on: f && posInt(f.since) ? { since: f.since, until: posInt(f.until), cycles: posInt(f.cycles), perDay: posInt(f.perDay), done: posInt(f.done) ?? 0 } : null,
+    on: f && posInt(f.since) ? { since: f.since, until: posInt(f.until), cycles: posInt(f.cycles), perDay: posInt(f.perDay), done: posInt(f.done) ?? 0, hold: h } : null,
     paused: p && posInt(p.until) && NAME_RE.test(p.for || '') ? { since: posInt(p.since), until: p.until, for: p.for } : null,
     ended: e && posInt(e.at) ? { at: e.at, reason: String(e.reason || '').replace(/[^A-Za-z0-9 .,:;()_@/-]/g, '').slice(0, 200) } : null
   };
