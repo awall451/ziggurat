@@ -237,6 +237,14 @@ mkdir -p "$T/work/n2q"; printf '# Title music too loud\n\nCode word BERYL.\n' > 
 echo "Seen." | "$BIN/owner-issues" update $IN2 in_progress > /dev/null; sleep 1
 tarball n2q | "$BIN/agent-kit-issues" amend $IN2 --number 8 --quiet > /dev/null
 check "a quiet amend (numbers for old issues) is not a change for the lead" '! grep -q "$IN2 (urgent, changed" <<< "$("$BIN/owner-issues" prompt)" && ! grep -q "^Amended: " "$S/issues/$IN2/issue.md"'
+# Kit 0.32: the stdin text is the lead's comment; required on a close, cut at 600, every update kept.
+check "every update is kept in its own file" '[ "$(ls "$S/issues-out/$IN1/" | wc -l)" -eq 1 ] && grep -qx "Fixed the flicker." "$S/issues-out/$IN1/"*.md && grep -qx "Fixed-in: abc1234" "$S/issues-out/$IN1/"*.md'
+refuse "done without a comment" bash -c "printf '  \n' | '$BIN/owner-issues' update $IN2 done"
+refuse "wontfix without a comment" bash -c "'$BIN/owner-issues' update $IN2 wontfix < /dev/null"
+check "in_progress needs no comment" '"$BIN/owner-issues" update $IN2 in_progress < /dev/null > /dev/null && [ "$(sed "1,/^---$/d" "$S/issues-out/$IN2.md")" = "" ]'
+head -c 900 /dev/zero | tr '\0' b | "$BIN/owner-issues" update $IN2 in_progress > /dev/null
+check "a long comment is cut at 600 characters" '[ "$(sed "1,/^---$/d" "$S/issues-out/$IN2.md" | LC_ALL=C.UTF-8 wc -m)" -eq 602 ] && sed "1,/^---$/d" "$S/issues-out/$IN2.md" | grep -q "b…$"'
+check "two updates in one second are both kept" '[ "$(ls "$S/issues-out/$IN2/" | wc -l)" -eq 3 ]'
 long=$(head -c 5000 /dev/zero | tr '\0' a)
 mkdir -p "$T/work/n3"; printf '# Long one\n\n%s\n' "$long" > "$T/work/n3/issue.md"; echo png > "$T/work/n3/markup.png"
 tarball n3 | "$BIN/agent-kit-issues" put 20260101T130003Z-i-b00004 idea --number 9 > /dev/null

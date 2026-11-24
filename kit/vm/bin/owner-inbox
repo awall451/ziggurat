@@ -273,7 +273,7 @@ EOF
   So do open owner issues: this cycle you do not triage or assign them, whatever the section on
   issues above says. The exception is an issue the job itself names (by its id or plainly by what it
   is about, or "all open issues"): work on it as part of the job and report on it with
-  \`owner-issues update\` as usual.
+  \`owner-issues update\` as usual (a short comment on stdin; required when you close it).
 - **Leave interrupted work alone.** Worktrees and branches left by an earlier cycle stay exactly as they
   are (do not resume, finish, rebase or remove them) unless the job is about them.
 - **Plan first.** The job may hold several separate tasks: list them, then hand each to your team the

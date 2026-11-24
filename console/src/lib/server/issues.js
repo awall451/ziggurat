@@ -446,37 +446,78 @@ export function image(project, id, name) {
 
 const FIXED_RE = /^shots\/(\d{4}-\d{2}-\d{2}|[0-9a-f]{40})\/[A-Za-z0-9._-]+\.png$/;
 
-/**
- * Apply the lead's updates from the pulled `issues-out/<id>.md` files. Each
- * update is applied once (keyed by its Date) and only moves an issue forward
- * in time: an owner change made after the lead's update wins.
- */
-export function applyUpdates(project) {
+/** The lead's update files for each issue: `<id>.md` (the latest) and, from kit 0.32, every one in `<id>/`. */
+function updateFiles(project) {
+  const dir = outDir(project);
+  const by = new Map();
   let names = [];
   try {
-    names = fs.readdirSync(outDir(project));
+    names = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return 0;
+    return by;
   }
+  const add = (id, file) => (by.get(id) || by.set(id, []).get(id)).push(file);
+  for (const e of names) {
+    if (e.isFile() && e.name.endsWith('.md') && ID_RE.test(e.name.slice(0, -3))) add(e.name.slice(0, -3), path.join(dir, e.name));
+    else if (e.isDirectory() && ID_RE.test(e.name)) {
+      let inner = [];
+      try {
+        inner = fs.readdirSync(path.join(dir, e.name)).filter((n) => /^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}\.md$/.test(n));
+      } catch {
+        /* skipped */
+      }
+      for (const n of inner) add(e.name, path.join(dir, e.name, n));
+    }
+  }
+  return by;
+}
+
+export const MAX_LEAD_COMMENT = 700; // the kit cuts at 600 characters; a little room for older kits
+
+/**
+ * Apply the lead's updates from the pulled `issues-out/` files. Every update
+ * becomes a comment of the lead (once: keyed by its date, status and text),
+ * even when the status did not change. Its status is applied once and only
+ * moves an issue forward in time: an owner change made after it wins.
+ */
+export function applyUpdates(project) {
   let n = 0;
-  for (const name of names) {
-    if (!name.endsWith('.md')) continue;
-    const id = name.slice(0, -3);
+  for (const [id, files] of updateFiles(project)) {
     const issue = get(project, id);
     if (!issue) continue;
-    const u = parseHeaderFile(path.join(outDir(project), name));
-    if (!u) continue;
-    const status = u.fields.status;
-    const at = u.fields.date;
-    if (!['in_progress', 'done', 'wontfix'].includes(status) || !at || isNaN(Date.parse(at))) continue;
-    if (issue.leadUpdateAt === at) continue;
-    issue.leadUpdateAt = at;
-    if (Date.parse(at) >= Date.parse(issue.updatedAt) && issue.status !== status) {
-      const fixedShot = FIXED_RE.test(u.fields['fixed-shot'] || '') ? u.fields['fixed-shot'] : null;
-      const fixedIn = SHA_RE.test(u.fields['fixed-in'] || '') ? u.fields['fixed-in'] : null;
-      applyStatus(issue, status, 'lead', u.body.slice(0, 4000), { at, fixedShot, fixedIn });
-      n++;
+    const updates = [];
+    for (const file of files) {
+      const u = parseHeaderFile(file);
+      if (!u) continue;
+      const status = u.fields.status;
+      const at = u.fields.date;
+      if (!['in_progress', 'done', 'wontfix'].includes(status) || !at || isNaN(Date.parse(at))) continue;
+      updates.push({ at, status, text: u.body.trim().slice(0, MAX_LEAD_COMMENT), fields: u.fields });
     }
+    updates.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    const comments = issue.comments || [];
+    const seen = new Set(comments.map((c) => `${c.at} ${c.status} ${c.text}`));
+    let changed = false;
+    for (const u of updates) {
+      const key = `${u.at} ${u.status} ${u.text}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        comments.push({ at: u.at, who: 'lead', status: u.status, text: u.text });
+        changed = true;
+      }
+      if (issue.leadUpdateAt && Date.parse(u.at) <= Date.parse(issue.leadUpdateAt)) continue;
+      issue.leadUpdateAt = u.at;
+      changed = true;
+      if (Date.parse(u.at) >= Date.parse(issue.updatedAt) && issue.status !== u.status) {
+        const fixedShot = FIXED_RE.test(u.fields['fixed-shot'] || '') ? u.fields['fixed-shot'] : null;
+        const fixedIn = SHA_RE.test(u.fields['fixed-in'] || '') ? u.fields['fixed-in'] : null;
+        applyStatus(issue, u.status, 'lead', u.text, { at: u.at, fixedShot, fixedIn });
+        n++;
+      }
+    }
+    if (!changed) continue;
+    comments.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    issue.comments = comments;
     writeJson(path.join(dirFor(project, id), 'issue.json'), issue);
   }
   return n;
@@ -617,13 +658,13 @@ export async function addFiles(project, user, id, files) {
   return amend(project, issue, { files: files.map((f) => f.name) });
 }
 
-/** A note from the owner on an issue (the notes thread). */
+/** A comment from the owner on an issue (kept as `notes`, the name kit 0.12 gave them). */
 export async function addNote(project, user, id, text) {
   const issue = get(project, id);
   needTickets(project, issue);
   const t = String(text || '').trim();
-  if (!t) throw new Error('Write a note first');
-  if (t.length > MAX_NOTE) throw new Error('The note is too long');
+  if (!t) throw new Error('Write a comment first');
+  if (t.length > MAX_NOTE) throw new Error('The comment is too long');
   const who = user?.name || 'owner';
   const note = { at: new Date().toISOString(), who, text: t, delivered: false, error: null };
   issue.notes = [...(issue.notes || []), note];
@@ -650,11 +691,11 @@ export function fixText(issue) {
     '',
     issue.body || '(no description)',
     notes.length ? '' : null,
-    notes.length ? 'Latest notes from the owner:' : null,
+    notes.length ? 'Latest comments from the owner:' : null,
     ...notes,
     '',
     `Read the whole issue with \`owner-issues show ${issue.id}\` (pictures and files are listed there).`,
-    `Set it in_progress when you start and done when the fix has merged: owner-issues update ${issue.id} done --commit <sha>.`
+    `Set it in_progress when you start and done when the fix has merged: owner-issues update ${issue.id} done --commit <sha>, with a short closing comment on stdin.`
   ]
     .filter((l) => l !== null)
     .join('\n');
