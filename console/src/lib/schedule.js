@@ -738,3 +738,29 @@ export function placeAfter(planned, jobs, start, minutes, ignore = null, now = D
   }
   return t;
 }
+
+// ---- focus mode on the timeline (#93) -------------------------------------------
+
+/**
+ * The stretch a team's focus (or its pause for another team's focus) covers on
+ * the timeline: {kind: 'focus' | 'paused', from, to, end, ...} in ms, or null.
+ * `end` is 'set' (an end time), 'about' (N cycles: estimated from the team's
+ * typical cycle and 15 minutes between cycles) or 'open' (until switched off:
+ * drawn to `rangeTo`).
+ */
+export function focusSpan(focus, typicalSecs, now = Date.now(), rangeTo = now) {
+  const on = focus?.on;
+  if (on && Number.isFinite(on.since)) {
+    const from = on.since * 1000;
+    if (Number.isFinite(on.until)) return { kind: 'focus', from, to: on.until * 1000, end: 'set', perDay: on.perDay ?? null };
+    if (Number.isFinite(on.cycles)) {
+      const left = Math.max(0, on.cycles - (on.done || 0));
+      const each = ((typicalSecs || 3600) + 900) * 1000;
+      return { kind: 'focus', from, to: Math.max(now, from) + left * each, end: 'about', cycles: on.cycles, done: on.done || 0, perDay: on.perDay ?? null };
+    }
+    return { kind: 'focus', from, to: Math.max(rangeTo, now), end: 'open', perDay: on.perDay ?? null };
+  }
+  const p = focus?.paused;
+  if (p && Number.isFinite(p.until)) return { kind: 'paused', from: Number.isFinite(p.since) ? p.since * 1000 : now, to: p.until * 1000, end: 'set', for: p.for };
+  return null;
+}
