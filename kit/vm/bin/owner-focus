@@ -31,7 +31,16 @@ case "${1:-}" in
 ## Focus
 
 The owner has put this team in focus: cycles follow each other back to back for a while, so that the
-team gets far. Work as in any cycle. One rule more: if the team can do nothing more that is worth a
+team gets far. The order of work while in focus:
+
+1. Owner issues that are `in_progress`: carry them on to the end.
+2. Then owner issues that are `new`, most urgent first. For a planned issue (an approved backlog
+   item), take its item with `owner-backlog taken <pid>` and work it as its proposal says, with its
+   estimate and after the items it builds on.
+3. Only when no open issue is left that the team can work on without the owner: your own roadmap.
+
+Planned jobs the owner set for a time run first, as their own one-shot cycles; the kit starts them.
+One rule more: if the team can do nothing more that is worth a
 cycle without the owner (everything left waits for the owner's answer, approval, test or decision),
 run `owner-focus blocked "<one line: what you wait for>"` and end the cycle. The focus then ends
 instead of spending the owner's usage on cycles that can only write notes. Do not say so while

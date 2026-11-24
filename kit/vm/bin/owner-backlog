@@ -25,6 +25,11 @@ ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
 source "$ETC/project.env"
 # shellcheck source=/dev/null
 [ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
+# In focus (kit 0.31) the team works through the owner's issues, approved items
+# included, before its own roadmap: approved items count as allowed.
+[ -f "$STATE/focus" ] && FREE_TAKE_APPROVED=1
+# Items whose job is set for a time (agent-kit-focus keeps the list in focus): not to be taken.
+scheduled() { [ -f "$STATE/focus" ] && grep -qx "$1" "$STATE/focus.scheduled" 2> /dev/null; }
 BL=$STATE/backlog
 OUT=$STATE/backlog-out
 LEDGER=$STATE/ledger/cycles.jsonl
@@ -153,6 +158,7 @@ case "${1:-list}" in
     [[ $pid =~ $PID_RE ]] && [ -f "$OUT/$pid.md" ] || die "usage: owner-backlog taken <pid>"
     [ "${FREE_TAKE_APPROVED:-0}" = 1 ] || die "the owner has not allowed normal cycles to take approved items"
     [ "$(status_of "$pid")" = approved ] || die "$pid is not approved"
+    scheduled "$pid" && die "$pid is set for a time: its own job does it"
     mkdir -p "$OUT/taken"
     date -u +%FT%TZ > "$OUT/taken/$pid"
     echo "taken $pid"
@@ -189,7 +195,7 @@ show <pid>` shows one. An approved item runs as a one-shot job the owner starts,
 EOF
     if [ "${FREE_TAKE_APPROVED:-0}" = 1 ]; then
       approved=()
-      for pid in $(ids); do [ "$(status_of "$pid")" = approved ] && approved+=("$pid"); done
+      for pid in $(ids); do [ "$(status_of "$pid")" = approved ] && ! scheduled "$pid" && approved+=("$pid"); done
       if [ ${#approved[@]} -gt 0 ]; then
         echo
         echo "The owner allows normal cycles to take approved items. When you choose this cycle's work, you may"
