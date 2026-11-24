@@ -102,6 +102,19 @@ describe('the Chat tab: conversations with the lead', () => {
     expect(g.context).toMatchObject({ cost: 0.25, turns: 1, model: 'opus', effort: 'high', warmMinutes: 50 });
   });
 
+  it('the panel works from the answer before the ledger line has come', async () => {
+    const res = await talk.say(user, project, { text: 'A new one', model: 'sonnet', effort: 'low' });
+    const c = res.conv;
+    fs.mkdirSync(path.join(out, c), { recursive: true });
+    const stream = [{ type: 'assistant', message: { model: 'claude-sonnet-5-5', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'README.md' } }], usage: { input_tokens: 5, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 5 } } }];
+    fs.writeFileSync(path.join(out, c, `${res.id}.jsonl`), stream.map((e) => JSON.stringify(e)).join('\n') + '\n');
+    fs.writeFileSync(path.join(out, c, `${res.id}.md`), `Re: ${res.id}\nStatus: ok\nDate: ${new Date(Date.now() - 5 * 60_000).toISOString()}\n---\nDone.\n`);
+    const g = talk.get(project, c);
+    expect(g.messages[0]).toMatchObject({ ranModel: 'sonnet', ranEffort: 'low', cost: null });
+    expect(g.context).toMatchObject({ turns: 1, costPending: 1, model: 'sonnet', effort: 'low', tokens: 9005, warmMinutes: 55, files: ['README.md'] });
+    talk.archiveConv(project, c, true);
+  });
+
   it('counts unread answers until the owner has seen them', () => {
     expect(talk.unread(project)).toBe(1);
     // Not while the lead is still answering in that conversation.
