@@ -138,6 +138,7 @@ in Done), with a filter by kind and a search.
 | `/var/lib/agent-kit/issues/<id>/att/<file>` | root | Files the owner attached on the Issues page (kit 0.7): plain files, at most 8, 20 MB each |
 | `/var/lib/agent-kit/issues/.owner/<id>` | root | `<status> <date>` when the owner moved the issue on the board |
 | `/var/lib/agent-kit/issues-out/<id>.md` | `agent` | The lead's latest update: `Status: in_progress`, `done` or `wontfix`, optional `Fixed-shot:` |
+| `/var/lib/agent-kit/issues-out/<id>/<time>-<rand>.md` | `agent` | Every update the lead made, with its comment (kit 0.32): none is lost between two pulls |
 
 - `agent-kit-issues put` (root, called by the console) accepts only `issue.md`, `shot.png`, `markup.png` and
   plain files directly in `att/` with plain names (the same rules as inbox attachments). `owner-issues show`
@@ -431,6 +432,16 @@ changed or noted after the lead's last update is marked "changed by the owner si
 long issue text is cut at 3000 characters in the prompt, but its status, picture and file paths, the
 latest notes and the last update always follow. `owner-issues update … done --commit <sha>` records
 `Fixed-in:`, shown on the issue as "Fixed in".
+
+### Comments on an issue
+
+From kit 0.32 an issue has a thread of comments. The owner's (shown as **Boss**) are the notes above;
+the lead's is the text it sends on stdin with `owner-issues update`, on the call it already makes, so a
+comment costs no extra model turn. It is required for `done` and `wontfix` (a line or two: what was done,
+or why not) and cut at 600 characters. Every update is also kept as its own file under
+`issues-out/<id>/`; the console reads those (and the single `<id>.md` of older kits), records each one
+as a comment even when the status did not change, and shows the thread with the status changes in time
+order. Updates from before kit 0.32 come in from the issue's history.
 
 On the console, **Fix now** on an open issue starts a one-shot job whose text names the issue (the
 same rules as any one-shot job: on a halted or idle team, not while a cycle runs).

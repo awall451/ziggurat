@@ -140,6 +140,44 @@ describe('status', () => {
     iss.applyUpdates(p3);
     expect(iss.get(p3, i.id).status).toBe('new');
   });
+
+  it('every update the lead kept (kit 0.32) becomes a comment, once, even with no status change', async () => {
+    const p4 = { ...project, id: 'demo4' };
+    const i = await iss.create(p4, owner, { title: 'd', kind: 'bug', origin: { type: 'gallery', date: '2026-11-17', file: 'vault.png' } }, { deliverNow: false });
+    const out = path.join(root, 'issues', 'demo4', '.out');
+    fs.mkdirSync(path.join(out, i.id), { recursive: true });
+    const at = (s) => new Date(Date.now() + s * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+    const t1 = at(60), t2 = at(120), t3 = at(180);
+    fs.writeFileSync(path.join(out, i.id, '20990101T000001Z-aaaaaa.md'), `Status: in_progress\nDate: ${t1}\n---\nGiven to the artist.\n`);
+    fs.writeFileSync(path.join(out, i.id, '20990101T000002Z-bbbbbb.md'), `Status: in_progress\nDate: ${t2}\n---\nPlanned for the next cycle.\n`);
+    fs.writeFileSync(path.join(out, i.id, '20990101T000003Z-cccccc.md'), `Status: done\nDate: ${t3}\nFixed-in: abc1234\n---\nFixed the flicker.\n`);
+    fs.writeFileSync(path.join(out, i.id, 'junk.md'), `Status: done\nDate: ${t3}\n---\nnot one of ours`);
+    // The latest is also the single file, as the kit writes it.
+    fs.writeFileSync(path.join(out, `${i.id}.md`), `Status: done\nDate: ${t3}\nFixed-in: abc1234\n---\nFixed the flicker.\n`);
+    expect(iss.applyUpdates(p4)).toBe(2); // new -> in_progress -> done
+    const got = iss.get(p4, i.id);
+    expect(got.status).toBe('done');
+    expect(got.resolution).toMatchObject({ who: 'lead', fixedIn: 'abc1234', note: 'Fixed the flicker.' });
+    expect(got.comments.map((c) => c.text)).toEqual(['Given to the artist.', 'Planned for the next cycle.', 'Fixed the flicker.']);
+    expect(iss.applyUpdates(p4)).toBe(0);
+    expect(iss.get(p4, i.id).comments).toHaveLength(3);
+
+    // An owner comment later does not hide a later same-status comment from the lead.
+    const t4 = at(240);
+    fs.writeFileSync(path.join(out, i.id, '20990101T000004Z-dddddd.md'), `Status: done\nDate: ${t4}\n---\nAlso checked on the phone.\n`);
+    iss.applyUpdates(p4);
+    expect(iss.get(p4, i.id).comments.at(-1)).toMatchObject({ who: 'lead', status: 'done', text: 'Also checked on the phone.' });
+  });
+
+  it('an older kit\'s single update file still becomes a comment', async () => {
+    const p5 = { ...project, id: 'demo5' };
+    const i = await iss.create(p5, owner, { title: 'e', kind: 'bug', origin: { type: 'gallery', date: '2026-11-17', file: 'vault.png' } }, { deliverNow: false });
+    const out = path.join(root, 'issues', 'demo5', '.out');
+    fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(path.join(out, `${i.id}.md`), `Status: in_progress\nDate: ${new Date(Date.now() + 60_000).toISOString()}\n---\nSeen.\n`);
+    iss.applyUpdates(p5);
+    expect(iss.get(p5, i.id)).toMatchObject({ status: 'in_progress', comments: [{ who: 'lead', text: 'Seen.' }] });
+  });
 });
 
 describe('tickets (kit 0.12)', () => {
@@ -228,7 +266,7 @@ describe('tickets (kit 0.12)', () => {
     expect(out.notes.at(-1)).toMatchObject({ who: 'owner', text: 'Still happens $(id)', delivered: true });
     expect(calls().at(-1)).toBe(`sudo -n /opt/agent-kit/bin/agent-kit-issues note ${A.id} owner`);
     expect(lastInput().toString()).toBe('Still happens $(id)');
-    await expect(iss.addNote(team, owner, A.id, '  ')).rejects.toThrow('Write a note');
+    await expect(iss.addNote(team, owner, A.id, '  ')).rejects.toThrow('Write a comment');
   });
 
   it('the commit of a fix is read from the lead, forged values are dropped', () => {

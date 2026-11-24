@@ -1,7 +1,7 @@
 <script>
   // One issue as a ticket (kit 0.12), in the manner of a tracker's detail
   // view: the work on the left (title, description, done when, pictures,
-  // files, notes, history), the details on the right (status, priority, kind,
+  // files, comments, history), the details on the right (status, priority, kind,
   // related issues, Fix now). Everything the lead wrote was checked on the
   // server; text is rendered through the sanitising markdown helper.
   import Modal from '$lib/components/Modal.svelte';
@@ -11,6 +11,7 @@
   import PrioritySelect from '$lib/components/PrioritySelect.svelte';
   import IssuePicker from '$lib/components/IssuePicker.svelte';
   import { KIND_WORD, STATUS_WORD } from '$lib/issues.js';
+  import { thread } from '$lib/thread.js';
 
   let { issue, issues = [], p, base, onclose = () => {}, onopen = () => {}, onchanged = async () => {} } = $props();
 
@@ -110,6 +111,9 @@
     if (out?.started) problem = '';
   }
 
+  // Comments from Boss (the owner) and the lead, with the status changes between them (issue 75).
+  const comments = $derived(thread(issue));
+  const lead = $derived(p.tiers?.[0] || 'Lead');
   const byNumber = $derived(new Map(issues.map((i) => [i.number, i])));
   const img = (i) => `${base}/issues/img/${i.id}/${i.hasMarkup ? 'markup.png' : 'shot.png'}`;
   const when = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '');
@@ -221,19 +225,23 @@
       </section>
 
       <section>
-        <h3>Notes</h3>
-        {#each issue.notes || [] as n, i (i)}
-          <div class="note">
-            <div class="small dim">{n.who}, {ago(n.at, p.now)}{#if n.delivered === false && issue.delivered} · <span class="s-failed">not on the VM{n.error ? `: ${n.error}` : ''}</span>{/if}</div>
-            <div class="md small">{@html md(n.text, { breaks: true })}</div>
-          </div>
+        <h3>Comments</h3>
+        {#each comments as c, i (i)}
+          {#if c.type === 'event'}
+            <div class="event small dim">{c.by === 'lead' ? lead : 'Boss'} moved it to <b>{STATUS_WORD[c.to] || c.to}</b>, {ago(c.at, p.now)}</div>
+          {:else}
+            <div class="note" class:lead={c.by === 'lead'}>
+              <div class="small dim"><b class="who">{c.by === 'lead' ? lead : 'Boss'}</b>, {ago(c.at, p.now)}{#if c.by === 'boss' && !c.delivered && issue.delivered} · <span class="s-failed">not on the VM{c.error ? `: ${c.error}` : ''}</span>{/if}</div>
+              <div class="md small">{@html md(c.text, { breaks: true })}</div>
+            </div>
+          {/if}
         {:else}
-          <p class="dim small">No notes yet.</p>
+          <p class="dim small">No comments yet.</p>
         {/each}
         {#if canEdit}
-          <textarea class="field" rows="3" bind:value={note} placeholder="Add a note: what you saw, what changed, a new detail"></textarea>
+          <textarea class="field" rows="3" bind:value={note} placeholder="Add a comment: what you saw, what changed, a new detail"></textarea>
           <div class="actions end">
-            <button class="btn primary sm" disabled={!!busy || !note.trim()} onclick={sendNote}>{busy === 'note' ? 'Adding…' : 'Add note'}</button>
+            <button class="btn primary sm" disabled={!!busy || !note.trim()} onclick={sendNote}>{busy === 'note' ? 'Sending…' : 'Comment'}</button>
           </div>
         {/if}
       </section>
@@ -476,6 +484,15 @@
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 8px 10px;
+  }
+  .note.lead {
+    border-left: 3px solid var(--accent);
+  }
+  .note .who {
+    color: var(--ink-strong);
+  }
+  .event {
+    padding: 0 10px;
   }
   .hist {
     margin: 0;

@@ -40,7 +40,8 @@ export async function POST({ params, request, locals }) {
         audit(locals.user, project.id, 'issue-files', { id, files: files.length }, { ok: !issue.pendingAmend, detail: issue.error });
         return json({ ok: true, pending: !!issue.pendingAmend, error: issue.error || null });
       }
-      case 'note': {
+      case 'note':
+      case 'comment': {
         const issue = await addNote(project, locals.user, id, b.text);
         const last = issue.notes.at(-1);
         audit(locals.user, project.id, 'issue-note', { id }, { ok: last.delivered || !issue.delivered, detail: last.error });
