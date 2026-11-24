@@ -33,6 +33,21 @@
   let flash = $state(null);
   let composer = $state(null);
   let cols = $state(null);
+  // Ctrl+O, as in Claude Code: open (or close again) every step of the lead in this conversation.
+  let expandAll = $state(null);
+  const toggleSteps = () => (expandAll = { open: !expandAll?.open, at: Date.now() });
+  function keydown(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o' && conv?.messages.some((m) => m.steps.length)) {
+      e.preventDefault();
+      toggleSteps();
+    }
+  }
+  // Another conversation starts folded (the id, not the data: that is new on every look).
+  const convId = $derived(conv?.id || '');
+  $effect(() => {
+    convId;
+    expandAll = null;
+  });
 
   // The model and effort of the open conversation, as chosen last.
   let modelFor = '';
@@ -156,7 +171,7 @@
   );
 </script>
 
-<svelte:window onscroll={fit} onresize={fit} />
+<svelte:window onscroll={fit} onresize={fit} onkeydown={keydown} />
 
 {#if !data.ready}
   <section class="panel block">
@@ -192,12 +207,15 @@
   <section class="panel main">
     <header class="hd">
       <h2 class="grow">{conv ? conv.title : want ? 'No such conversation' : 'New conversation'}</h2>
+      {#if conv?.messages.some((m) => m.steps.length)}
+        <button class="btn quiet sm" onclick={toggleSteps} title="Open or close every step (Ctrl+O)">{expandAll?.open ? 'Close steps' : 'Open steps'} <kbd>Ctrl+O</kbd></button>
+      {/if}
       {#if conv}
         <button class="btn quiet sm" onclick={renameConv} disabled={!!busy}>Rename</button>
         <button class="btn quiet sm" onclick={() => archive(!conv.archived)} disabled={!!busy}>{conv.archived ? 'Unarchive' : 'Archive'}</button>
       {/if}
     </header>
-    <ChatThread messages={conv?.messages || []} {lead} now={p.now} {running} canResend={!chatBusy} onresend={(m) => send(m)} stepUrl={conv ? (msg, i) => `${base}/chat/step?c=${conv.id}&m=${msg}&i=${i}` : null} />
+    <ChatThread messages={conv?.messages || []} {lead} now={p.now} {running} canResend={!chatBusy} onresend={(m) => send(m)} stepUrl={conv ? (msg, i) => `${base}/chat/step?c=${conv.id}&m=${msg}&i=${i}` : null} {expandAll} />
     {#if !conv?.archived}
       <ChatComposer
         bind:this={composer}
@@ -368,6 +386,15 @@
   }
   .side {
     overflow-y: auto;
+  }
+  kbd {
+    margin-left: 4px;
+    padding: 0 4px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 3px;
   }
   h3 {
     margin: 0 0 8px;

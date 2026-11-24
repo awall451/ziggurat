@@ -8,12 +8,12 @@
   import ChatStep from '$lib/components/ChatStep.svelte';
 
   // stepUrl(msgId, index): where one step's input and output are loaded from.
-  let { messages = [], lead = 'the lead', now, running = false, canResend = true, onresend, stepUrl = null } = $props();
+  // expandAll: {open, at} from Ctrl+O on the page: every step opens or closes.
+  let { messages = [], lead = 'the lead', now, running = false, canResend = true, onresend, stepUrl = null, expandAll = null } = $props();
 
   let list = $state(null);
   let inner = $state(null);
   let follow = true;
-  let open = $state({}); // message id -> steps shown
 
   function scrolled() {
     follow = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
@@ -44,16 +44,11 @@
         <div class="msg lead small" class:bad={m.reply?.status === 'error'}>
           <span class="dim">{lead}{#if m.ranModel}{` · ${m.ranModel}`}{/if}{#if m.cost != null}, {usd(m.cost)}{/if}{#if m.reply?.date}, {ago(m.reply.date, now)}{/if}</span>
           {#if m.steps.length}
-            <button class="steps-toggle" aria-expanded={open[m.id] ?? live} title="Show or hide what {lead} did" onclick={() => (open = { ...open, [m.id]: !(open[m.id] ?? live) })}>
-              {(open[m.id] ?? live) ? '▾' : '▸'} {m.steps.length} step{m.steps.length > 1 ? 's' : ''}{live ? '…' : ''}
-            </button>
-            {#if open[m.id] ?? live}
-              <div class="steps">
-                {#each m.steps as s, k (k)}
-                  <ChatStep step={s} pending={s.ok === null && live} url={stepUrl ? stepUrl(m.id, k) : ''} />
-                {/each}
-              </div>
-            {/if}
+            <div class="steps">
+              {#each m.steps as s, k (k)}
+                <ChatStep step={s} pending={s.ok === null && live} url={stepUrl ? stepUrl(m.id, k) : ''} {expandAll} />
+              {/each}
+            </div>
           {/if}
           {#if m.reply?.text}
             <div class="md">{@html md(m.reply.text)}</div>
@@ -119,19 +114,6 @@
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 4px;
-  }
-  /* The accent colour says it opens: what the lead did, folded once it has answered. */
-  .steps-toggle {
-    display: block;
-    background: none;
-    border: 0;
-    padding: 4px 0;
-    cursor: pointer;
-    font: inherit;
-    color: var(--accent);
-  }
-  .steps-toggle:hover {
-    text-decoration: underline;
   }
   .steps {
     display: flex;

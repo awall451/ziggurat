@@ -5,9 +5,11 @@
   // output is fetched when the step is opened. Everything here was written
   // by an agent: it is shown as text (shell commands through the escaping
   // highlighter), never as HTML.
+  import { untrack } from 'svelte';
   import { highlightShell } from '$lib/highlight.js';
 
-  let { step, url = '', pending = false } = $props();
+  // expandAll: a {open, at} the thread sets with Ctrl+O, to open or close every step at once.
+  let { step, url = '', pending = false, expandAll = null } = $props();
 
   let open = $state(false);
   let detail = $state(null);
@@ -16,7 +18,15 @@
   let copied = $state(false);
 
   async function toggle() {
-    open = !open;
+    setOpen(!open);
+  }
+  // Every step at once (Ctrl+O): follow the thread's latest wish; a click on one step still works after.
+  $effect(() => {
+    const want = expandAll;
+    if (want) untrack(() => setOpen(want.open));
+  });
+  async function setOpen(want) {
+    open = want;
     if (!open || detail || loading || !url) return;
     loading = true;
     problem = '';
