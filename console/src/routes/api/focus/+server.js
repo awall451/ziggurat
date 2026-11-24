@@ -10,7 +10,8 @@ export async function GET() {
 
 /**
  * Focus mode (kit 0.27):
- * {action: 'start', project, mode: 'until' | 'cycles' | 'open', until, cycles, perDay, pauseOthers}
+ * {action: 'start', project, mode: 'until' | 'cycles' | 'open', until, cycles, perDay, pauseOthers, endPause}
+ * (several teams may be in focus at once, #115; `endPause` ends the team's own pause for another focus first)
  * {action: 'stop', project}
  */
 export async function POST({ request, locals }) {
@@ -25,7 +26,8 @@ export async function POST({ request, locals }) {
         until: Number.isInteger(b.until) ? b.until : null,
         cycles: Number.isInteger(b.cycles) ? b.cycles : null,
         perDay: Number.isInteger(b.perDay) ? b.perDay : null,
-        pauseOthers: b.pauseOthers === true
+        pauseOthers: b.pauseOthers === true,
+        endPause: b.endPause === true
       });
     }
     if (b.action === 'stop') return focus.stopFocus(user, project);

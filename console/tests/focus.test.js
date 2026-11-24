@@ -41,7 +41,13 @@ const { getProject } = await import('../src/lib/server/config.js');
 const up = (o = {}) => ({ reachable: true, state: 'idle', kitVersion: '0.27.0', focus: { on: null, paused: null, ended: null }, ...o });
 const user = { name: 'owner' };
 
+const pausesFile = path.join(root, 'focus-pauses.json');
+const wants = () => (fs.existsSync(pausesFile) ? JSON.parse(fs.readFileSync(pausesFile, 'utf8')) : {});
+const on = (o = {}) => ({ focus: { on: { since: 1, perDay: 6, done: 0, ...o }, paused: null, ended: null } });
+const pausedFor = (id, until = 1) => ({ focus: { on: null, paused: { since: 1, until, for: id }, ended: null } });
+
 beforeEach(() => {
+  fs.rmSync(pausesFile, { force: true });
   calls.length = 0;
   refuse = new Set();
   statuses.alpha = up();
@@ -116,12 +122,11 @@ describe('starting and stopping a focus', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('one focus at a time, and only on kit 0.27', async () => {
-    statuses.beta = up({ focus: { on: { since: 1, perDay: 6, done: 0 }, paused: null, ended: null } });
-    await expect(focus.startFocus(user, getProject('alpha'), { mode: 'open', perDay: 6 })).rejects.toThrow(/Beta is in focus already/);
-    statuses.beta = up();
+  it('only on kit 0.27, and not twice on one team', async () => {
     statuses.alpha = up({ kitVersion: '0.26.0' });
     await expect(focus.startFocus(user, getProject('alpha'), { mode: 'open', perDay: 6 })).rejects.toThrow(/needs kit 0\.27\.0/);
+    statuses.alpha = up(on());
+    await expect(focus.startFocus(user, getProject('alpha'), { mode: 'open', perDay: 6 })).rejects.toThrow(/Alpha is in focus already/);
     expect(calls).toHaveLength(0);
   });
 
@@ -160,8 +165,104 @@ describe('pauses whose focus has ended', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('the team in focus, for the bar under the header', () => {
+  it('every team in focus, for the bar under the header', () => {
     statuses.gamma = up({ focus: { on: { since: 1, until: 1795400000, perDay: 6, done: 2 }, paused: null, ended: null } });
-    expect(focus.focusNow()).toMatchObject({ id: 'gamma', name: 'Gamma', until: 1795400000, done: 2 });
+    statuses.alpha = up(on());
+    expect(focus.focusAll()).toMatchObject([{ id: 'alpha', name: 'Alpha' }, { id: 'gamma', name: 'Gamma', until: 1795400000, done: 2 }]);
+    statuses.alpha = up();
+    statuses.gamma = up();
+    expect(focus.focusAll()).toEqual([]);
+  });
+});
+
+describe('more than one team in focus (#115)', () => {
+  const soon = () => Math.round(Date.now() / 1000) + 7200;
+
+  it('a second focus starts while one runs; its pauses leave the team in focus alone', async () => {
+    statuses.beta = up(on());
+    const until = soon();
+    const out = await focus.startFocus(user, getProject('alpha'), { mode: 'until', until, perDay: 6, pauseOthers: true });
+    expect(calls).toEqual([
+      ['alpha', 'agent-kit-focus', 'set', '--until', String(until), '--per-day', '6'],
+      ['gamma', 'agent-kit-focus', 'pause', '--until', String(until), '--for', 'alpha']
+    ]);
+    expect(out.paused).toEqual(['Gamma']);
+    expect(out.detail).toMatch(/In focus with Beta: they share the usage window/);
+    expect(wants()).toEqual({ alpha: { until } });
+  });
+
+  it('a team already paused for a focus that ends later stays paused for it; one that ends sooner passes it on', async () => {
+    const until = soon();
+    statuses.beta = up(on());
+    statuses.gamma = up(pausedFor('beta', until + 3600));
+    await focus.startFocus(user, getProject('alpha'), { mode: 'until', until, perDay: 6, pauseOthers: true });
+    expect(calls).toHaveLength(1); // gamma: still paused for beta
+    calls.length = 0;
+    statuses.alpha = up();
+    statuses.gamma = up(pausedFor('beta', until - 3600));
+    await focus.startFocus(user, getProject('alpha'), { mode: 'until', until, perDay: 6, pauseOthers: true });
+    expect(calls[1]).toEqual(['gamma', 'agent-kit-focus', 'pause', '--until', String(until), '--for', 'alpha']);
+  });
+
+  it('a team paused for another focus starts only when its pause is to end', async () => {
+    statuses.beta = up(on());
+    statuses.alpha = up(pausedFor('beta', soon()));
+    await expect(focus.startFocus(user, getProject('alpha'), { mode: 'open', perDay: 6 })).rejects.toThrow(/Alpha is paused for Beta's focus/);
+    expect(calls).toHaveLength(0);
+    await focus.startFocus(user, getProject('alpha'), { mode: 'open', perDay: 6, endPause: true });
+    expect(calls).toEqual([
+      ['alpha', 'agent-kit-focus', 'unpause'],
+      ['alpha', 'agent-kit-focus', 'set', '--open', '--per-day', '6']
+    ]);
+  });
+
+  it('a pause that cannot be ended starts no focus', async () => {
+    statuses.alpha = up(pausedFor('beta', soon()));
+    refuse.add('alpha unpause');
+    await expect(focus.startFocus(user, getProject('alpha'), { mode: 'open', perDay: 6, endPause: true })).rejects.toThrow('no unpause here');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('stopping one focus passes its pauses to another focus that wants them', async () => {
+    const until = soon();
+    fs.writeFileSync(pausesFile, JSON.stringify({ alpha: { until: null }, beta: { until } }));
+    statuses.alpha = up(on());
+    statuses.beta = up(on({ until }));
+    statuses.gamma = up(pausedFor('alpha'));
+    const out = await focus.stopFocus(user, getProject('alpha'));
+    expect(calls).toEqual([
+      ['alpha', 'agent-kit-focus', 'clear', 'owner'],
+      ['gamma', 'agent-kit-focus', 'pause', '--until', String(until), '--for', 'beta']
+    ]);
+    expect(out.detail).toMatch(/Gamma stays paused for Beta's focus/);
+    expect(wants()).toEqual({ beta: { until } });
+  });
+
+  it('a focus that kept the others running takes no pauses over', async () => {
+    fs.writeFileSync(pausesFile, JSON.stringify({ alpha: { until: null } }));
+    statuses.alpha = up(on());
+    statuses.beta = up(on()); // started without pausing the others
+    statuses.gamma = up(pausedFor('alpha'));
+    await focus.stopFocus(user, getProject('alpha'));
+    expect(calls.at(-1)).toEqual(['gamma', 'agent-kit-focus', 'unpause']);
+  });
+
+  it('a pause whose focus ended on its VM passes on too, and the wishes of ended focuses are dropped', async () => {
+    fs.writeFileSync(pausesFile, JSON.stringify({ alpha: { until: null }, beta: { until: null } }));
+    statuses.alpha = up({ focus: { on: null, paused: null, ended: { at: 2, reason: 'it ran its 4 cycles' } } });
+    statuses.beta = up(on());
+    statuses.gamma = up(pausedFor('alpha'));
+    expect(await focus.reconcileFocus({ now: 9_000_000 })).toEqual([]);
+    expect(calls).toEqual([['gamma', 'agent-kit-focus', 'pause', '--open', '--for', 'beta']]);
+    expect(wants()).toEqual({ beta: { until: null } });
+  });
+
+  it('what a running focus still likely takes', () => {
+    const typical = { secs: 2700, costUsd: 4, n: 10 };
+    const now = 1_795_000_000;
+    expect(focus.focusLeft({ since: 1, until: now + 86_400, perDay: 12 }, typical, now)).toMatchObject({ cycles: 12, costUsd: 48, perDay: false });
+    expect(focus.focusLeft({ since: 1, cycles: 5, done: 2, perDay: 12 }, typical, now)).toMatchObject({ cycles: 3, costUsd: 12 });
+    expect(focus.focusLeft({ since: 1, perDay: 6 }, typical, now)).toMatchObject({ cycles: 6, perDay: true });
+    expect(focus.focusLeft(null, typical)).toBeNull();
   });
 });

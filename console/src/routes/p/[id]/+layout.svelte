@@ -74,7 +74,7 @@
         {/if}
         {#if p.status.focus?.on}
           <span class="pill running" title="Cycles back to back">Focus</span>
-        {:else if p.canFocus && p.status.state !== 'halted' && !p.status.focus?.paused && !data.focusNow}
+        {:else if p.canFocus && p.status.state !== 'halted'}
           <button class="btn quiet sm" onclick={() => (focusOpen = true)} title="Cycles back to back for a while">◎ Focus…</button>
         {/if}
       </span>
