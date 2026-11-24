@@ -84,8 +84,8 @@ describe('the Chat tab: conversations with the lead', () => {
     expect(g.running).toBe(true);
     const m = g.messages[0];
     expect(m.steps).toEqual([
-      { tool: 'Read', text: 'docs/agents/STATE.md', ok: true },
-      { tool: 'Bash', text: 'git log --oneline -5', ok: false }
+      { tool: 'Read', text: 'docs/agents/STATE.md', ok: true, outLines: 0 },
+      { tool: 'Bash', text: 'git log --oneline -5', ok: false, outLines: 0 }
     ]);
     expect(m.said).toBe('The team is on the save');
     expect(g.context).toMatchObject({ tokens: 42010, window: 200000, files: ['docs/agents/STATE.md'] });
@@ -100,6 +100,28 @@ describe('the Chat tab: conversations with the lead', () => {
     g = talk.get(project, CONV);
     expect(g.messages[0]).toMatchObject({ reply: { status: 'ok', text: 'The team is on the save system.' }, said: '', cost: 0.25, ranModel: 'opus' });
     expect(g.context).toMatchObject({ cost: 0.25, turns: 1, model: 'opus', effort: 'high', warmMinutes: 50 });
+  });
+
+  it('gives one step in full when it is opened: the input and the output', () => {
+    const m = talk.get(project, CONV).messages[0];
+    fs.appendFileSync(
+      path.join(out, CONV, `${m.id}.jsonl`),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't9', name: 'Bash', input: { command: 'seq 1 500', description: 'Count' } }] } }) +
+        '\n' +
+        JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't9', content: [{ type: 'text', text: Array.from({ length: 500 }, (_, i) => i + 1).join('\n') }] }] } }) +
+        '\n'
+    );
+    const g = talk.get(project, CONV);
+    expect(g.messages[0].steps.at(-1)).toMatchObject({ tool: 'Bash', text: 'seq 1 500', outLines: 500 });
+    expect(g.messages[0].steps.at(-1).output).toBeUndefined(); // the page stays small
+    const i = g.messages[0].steps.length - 1;
+    const d = talk.stepDetail(project, CONV, m.id, i);
+    expect(d).toMatchObject({ tool: 'Bash', ok: true, outLines: 500, truncated: true, input: { code: 'seq 1 500', lang: 'bash', notes: [{ label: 'what', value: 'Count' }] } });
+    expect(d.output.split('\n')).toHaveLength(400);
+    expect(talk.stepDetail(project, CONV, m.id, 0)).toMatchObject({ tool: 'Read', input: { code: 'docs/agents/STATE.md', lang: 'file' } });
+    expect(talk.stepDetail(project, CONV, m.id, 99)).toBeNull();
+    expect(talk.stepDetail(project, CONV, '../x', 0)).toBeNull();
+    expect(talk.stepDetail(project, '20990101T000000Z-t-abcdef', m.id, 0)).toBeNull();
   });
 
   it('the panel works from the answer before the ledger line has come', async () => {

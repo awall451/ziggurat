@@ -125,12 +125,65 @@ function stepText(name, input = {}) {
   }
 }
 
+const MAX_IN = 8000; // characters of a step's input shown in full
+const MAX_OUT_LINES = 400;
+const MAX_OUT = 32_000; // characters of a step's output
+
+/**
+ * A step's input in full, for its code block: `code` (the command, the file,
+ * the pattern), `lang` for the block's label, and `notes` (the other
+ * arguments, as label and value).
+ */
+export function stepInput(name, input = {}) {
+  const str = (v) => (v == null ? '' : String(v));
+  const cap = (v) => (v.length > MAX_IN ? `${v.slice(0, MAX_IN)}\n…` : v);
+  const notes = [];
+  const add = (label, v) => {
+    if (v != null && v !== '' && v !== false) notes.push({ label, value: str(v).slice(0, 300) });
+  };
+  switch (name) {
+    case 'Bash':
+      add('what', input.description);
+      return { code: cap(str(input.command)), lang: 'bash', notes };
+    case 'Read':
+      add('from line', input.offset);
+      add('lines', input.limit);
+      return { code: cap(str(input.file_path)), lang: 'file', notes };
+    case 'Grep':
+      add('in', input.path);
+      add('files', input.glob || input.type);
+      add('show', input.output_mode);
+      if (input['-i']) add('case', 'ignored');
+      return { code: cap(str(input.pattern)), lang: 'pattern', notes };
+    case 'Glob':
+      add('in', input.path);
+      return { code: cap(str(input.pattern)), lang: 'pattern', notes };
+    default:
+      return { code: cap(JSON.stringify(input, null, 2) || ''), lang: 'json', notes };
+  }
+}
+
+/** A tool's result as text, kept to MAX_OUT_LINES lines and MAX_OUT characters. */
+function resultText(content) {
+  let text = '';
+  if (typeof content === 'string') text = content;
+  else if (Array.isArray(content)) text = content.map((c) => (c?.type === 'text' && typeof c.text === 'string' ? c.text : c?.type === 'image' ? '[image]' : '')).join('\n');
+  const lines = text.replace(/\s+$/, '').split('\n');
+  let out = lines.slice(0, MAX_OUT_LINES).join('\n');
+  let truncated = lines.length > MAX_OUT_LINES;
+  if (out.length > MAX_OUT) {
+    out = out.slice(0, MAX_OUT);
+    truncated = true;
+  }
+  return { output: out, outLines: text ? lines.length : 0, truncated };
+}
+
 /**
  * What a turn's stream says: the lead's steps (tools and their outcome), the
  * text so far, the files it read and the size of the context at its last
  * message. Every value is checked; the stream is data the agent wrote.
  */
-export function readStream(text) {
+export function readStream(text, { details = false } = {}) {
   const steps = [];
   const byId = new Map();
   const files = new Set();
@@ -160,7 +213,9 @@ export function readStream(text) {
       }
       for (const c of e.message.content) {
         if (c?.type === 'tool_use' && typeof c.name === 'string' && /^[A-Za-z0-9_.-]{1,60}$/.test(c.name)) {
-          const step = { tool: c.name, text: stepText(c.name, c.input && typeof c.input === 'object' ? c.input : {}), ok: null };
+          const inp = c.input && typeof c.input === 'object' ? c.input : {};
+          const step = { tool: c.name, text: stepText(c.name, inp), ok: null, outLines: 0 };
+          if (details) step.input = stepInput(c.name, inp);
           steps.push(step);
           if (typeof c.id === 'string') byId.set(c.id, step);
           if ((c.name === 'Read' || c.name === 'Grep') && typeof c.input?.file_path === 'string') files.add(c.input.file_path.slice(0, 300));
@@ -171,7 +226,13 @@ export function readStream(text) {
       }
     } else if (e.type === 'user' && Array.isArray(e.message?.content)) {
       for (const c of e.message.content) {
-        if (c?.type === 'tool_result' && byId.has(c.tool_use_id)) byId.get(c.tool_use_id).ok = c.is_error !== true;
+        if (c?.type === 'tool_result' && byId.has(c.tool_use_id)) {
+          const step = byId.get(c.tool_use_id);
+          step.ok = c.is_error !== true;
+          const r = resultText(c.content);
+          step.outLines = r.outLines;
+          if (details) Object.assign(step, r);
+        }
       }
     } else if (e.type === 'result') {
       result = { cost: num(e.total_cost_usd), turns: num(e.num_turns), error: e.is_error === true };
@@ -181,7 +242,7 @@ export function readStream(text) {
   return { steps: steps.slice(-200), said, files: [...files].slice(-50), context, usage, model, result };
 }
 
-function streamOf(project, conv, msg) {
+function streamOf(project, conv, msg, opts = {}) {
   const file = path.join(outDir(project), conv, `${msg}.jsonl`);
   try {
     const st = fs.statSync(file);
@@ -192,13 +253,26 @@ function streamOf(project, conv, msg) {
       const len = Math.min(st.size, MAX_STREAM);
       const buf = Buffer.alloc(len);
       fs.readSync(fd, buf, 0, len, st.size - len);
-      return readStream(buf.toString('utf8'));
+      return readStream(buf.toString('utf8'), opts);
     } finally {
       fs.closeSync(fd);
     }
   } catch {
     return null;
   }
+}
+
+/**
+ * One step of an answer in full, for when the owner opens it: the input and
+ * the output (kept to 400 lines). Loaded on demand, so the page stays small.
+ */
+export function stepDetail(project, conv, msg, index) {
+  if (!TALK_RE.test(conv) || !MSG_RE.test(msg) || !Number.isInteger(index) || index < 0) return null;
+  if (!readConv(project, conv)) return null;
+  const s = streamOf(project, conv, msg, { details: true });
+  const step = s?.steps[index];
+  if (!step) return null;
+  return { tool: step.tool, ok: step.ok, input: step.input, output: step.output || '', outLines: step.outLines, truncated: !!step.truncated };
 }
 
 // ---- the ledger ----------------------------------------------------------------

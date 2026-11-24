@@ -5,8 +5,10 @@
   // sanitising markdown helper.
   import { ago, usd } from '$lib/format.js';
   import { md } from '$lib/md.js';
+  import ChatStep from '$lib/components/ChatStep.svelte';
 
-  let { messages = [], lead = 'the lead', now, running = false, canResend = true, onresend } = $props();
+  // stepUrl(msgId, index): where one step's input and output are loaded from.
+  let { messages = [], lead = 'the lead', now, running = false, canResend = true, onresend, stepUrl = null } = $props();
 
   let list = $state(null);
   let inner = $state(null);
@@ -46,11 +48,11 @@
               {(open[m.id] ?? live) ? '▾' : '▸'} {m.steps.length} step{m.steps.length > 1 ? 's' : ''}{live ? '…' : ''}
             </button>
             {#if open[m.id] ?? live}
-              <ol class="steps mono">
+              <div class="steps">
                 {#each m.steps as s, k (k)}
-                  <li class:fail={s.ok === false}><b>{s.tool}</b> {s.text}{#if s.ok === null && live && k === m.steps.length - 1}<span class="dim"> …</span>{/if}</li>
+                  <ChatStep step={s} pending={s.ok === null && live} url={stepUrl ? stepUrl(m.id, k) : ''} />
                 {/each}
-              </ol>
+              </div>
             {/if}
           {/if}
           {#if m.reply?.text}
@@ -106,7 +108,8 @@
     background: rgba(var(--glow), 0.08);
   }
   .msg.lead {
-    align-self: flex-start;
+    align-self: stretch;
+    max-width: none;
   }
   .msg.bad {
     border-color: var(--critical);
@@ -131,21 +134,12 @@
     text-decoration: underline;
   }
   .steps {
-    margin: 0 0 6px;
-    padding: 6px 8px 6px 26px;
-    background: var(--well);
-    border-radius: 6px;
-    font-size: 11.5px;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-  .steps li {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .steps li.fail {
-    color: var(--critical);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0 0 8px;
+    padding: 4px 0 4px 6px;
+    border-left: 2px solid var(--line);
   }
   .partial {
     opacity: 0.8;

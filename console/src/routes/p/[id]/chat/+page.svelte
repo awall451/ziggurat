@@ -197,7 +197,7 @@
         <button class="btn quiet sm" onclick={() => archive(!conv.archived)} disabled={!!busy}>{conv.archived ? 'Unarchive' : 'Archive'}</button>
       {/if}
     </header>
-    <ChatThread messages={conv?.messages || []} {lead} now={p.now} {running} canResend={!chatBusy} onresend={(m) => send(m)} />
+    <ChatThread messages={conv?.messages || []} {lead} now={p.now} {running} canResend={!chatBusy} onresend={(m) => send(m)} stepUrl={conv ? (msg, i) => `${base}/chat/step?c=${conv.id}&m=${msg}&i=${i}` : null} />
     {#if !conv?.archived}
       <ChatComposer
         bind:this={composer}
