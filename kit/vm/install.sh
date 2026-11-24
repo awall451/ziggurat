@@ -109,6 +109,9 @@ install -d -m 755 -o agent -g agent "$STATE/publish-out"
 # root-owned; the lead's proposals and chat answers go to backlog-out.
 install -d -m 755 "$STATE/backlog" "$STATE/backlog/plans" "$STATE/backlog/.owner" "$STATE/backlog/chat"
 install -d -m 755 -o agent -g agent "$STATE/backlog-out" "$STATE/ledger/plans"
+# The Chat tab (kit 0.33): the owner's messages root-owned, the lead's answers and sessions the agent's.
+install -d -m 755 "$STATE/talk"
+install -d -m 755 -o agent -g agent "$STATE/talk-out" "$STATE/ledger/talks"
 # Changes to what "done" means (kit 0.14): the owner's approvals are root-owned;
 # the lead's explanations go to gate-out.
 install -d -m 755 "$STATE/gate/approved"

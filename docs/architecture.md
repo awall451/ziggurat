@@ -362,6 +362,37 @@ so later turns resume that one. The lead reads code again only when a question n
 `CHAT_EFFORT` (agent-kit-caps, Controls) is the thinking effort of a chat answer; `medium`, the default, is
 what Claude Code uses anyway. Thinking was about 2% of what chat costs, so a lower level saves little.
 
+### The Chat tab: conversations with the lead (kit 0.33)
+
+Next to the plan chat, each project has a **Chat** tab: named conversations with the lead that are not
+about a plan. The console names a conversation (`<utc>-t-<hex6>`) and keeps its title; the kit only
+knows its id.
+
+| Path | Owner | What |
+|---|---|---|
+| `/var/lib/agent-kit/talk/<talk-id>/<msgid>.md` | root | The owner's message, with `Model:` and `Effort:` when asked for |
+| `/var/lib/agent-kit/talk/<talk-id>/att/<msgid>/` | root | Files sent with a message (at most 8, 20 MB each) |
+| `/var/lib/agent-kit/talk-out/<talk-id>/<msgid>.md` | agent | The lead's answer, as for a plan chat |
+| `/var/lib/agent-kit/talk-out/<talk-id>/<msgid>.jsonl` | agent | The turn's events as they happen (`stream-json`) |
+| `/var/lib/agent-kit/ledger/talks/<talk-id>` | agent | The conversation's session id |
+
+- `agent-kit-chat say <talk-id> <msgid> <from> [--model fable|opus|sonnet|haiku] [--effort low…max]
+  [--files]` stores the message (with `--files`, stdin is a tar of `body.md` and `att/`, checked like a
+  planning request's) and starts the same `agent-kit-chat.service`. The marker is shared with the plan
+  chat: one answer at a time per team.
+- `lead-chat` starts a new session for a conversation's first message, resumes it after that, and starts
+  a new one after an hour's pause (the same rule as the plan chat), from `owner-backlog talk <talk-id>
+  <msgid> [--fresh]`: the talk notice (`[agent-kit owner talk]`), the open owner issues and the last
+  twelve exchanges. Talk only, with the plan chat's tools and budget. The model and effort are the
+  message's, else `LEAD_MODEL` and `CHAT_EFFORT`. Switching model mid-conversation re-reads the session
+  at the full rate: the prompt cache belongs to one model.
+- The turn runs with `--output-format stream-json --verbose` into `talk-out/<talk-id>/<msgid>.jsonl`, which
+  the console reads while the turn runs to show the lead's steps; the last line, the result, gives the
+  answer and the figures.
+- The ledger line has `kind: talk`, `talk`, `chat` (the message), `plan: null`, `counted: false`, this
+  turn's cost, the model and effort asked for, and `tokens`/`models` from the run's `modelUsage`. Like
+  plan chat turns, talk turns are not cycles: the cap and every cycle figure leave them out.
+
 ### Scheduled one-shot job
 
 From kit 0.10. `agent-kit-oneshot at <unix> <id> <from> [--plan]` keeps a job (or a planning request) in

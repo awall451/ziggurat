@@ -44,6 +44,9 @@ function tokensOf(t) {
   return { in: n(t.in), out: n(t.out), cr: n(t.cr), cw: n(t.cw), think: n(t.think) };
 }
 
+/** A chat turn (Backlog chat or Chat tab): it costs, but it is not a cycle. */
+export const isChat = (c) => c?.kind === 'chat' || c?.kind === 'talk';
+
 export function readCycles(fleet) {
   const out = [];
   for (const line of readText(path.join(fleet, 'cycles.jsonl')).split('\n')) {
@@ -65,8 +68,8 @@ export function readCycles(fleet) {
         counted: c.counted !== false,
         isError: !!c.is_error,
         summary: c.summary || '',
-        // Kit 0.10: normal, oneshot, plan or chat. Older lines have no kind.
-        kind: ['normal', 'oneshot', 'plan', 'chat'].includes(c.kind) ? c.kind : c.oneshot ? 'oneshot' : 'normal',
+        // Kit 0.10: normal, oneshot, plan or chat; kit 0.33: talk (the Chat tab). Older lines have no kind.
+        kind: ['normal', 'oneshot', 'plan', 'chat', 'talk'].includes(c.kind) ? c.kind : c.oneshot ? 'oneshot' : 'normal',
         oneshot: typeof c.oneshot === 'string' ? c.oneshot : null,
         // A normal cycle the owner started with no job (kit 0.25).
         free: c.free === true,
@@ -92,7 +95,7 @@ export function readCycles(fleet) {
  * and chat turns are short and say nothing about a cycle). {secs, costUsd, n}.
  */
 export function typicalCycle(cycles) {
-  const real = cycles.filter((c) => c.counted && !c.halted && c.kind !== 'chat' && c.kind !== 'plan' && Number.isFinite(c.secs) && c.secs > 60).slice(-10);
+  const real = cycles.filter((c) => c.counted && !c.halted && !isChat(c) && c.kind !== 'plan' && Number.isFinite(c.secs) && c.secs > 60).slice(-10);
   const median = (xs) => {
     const v = xs.filter(Number.isFinite).sort((a, b) => a - b);
     if (!v.length) return null;
@@ -168,7 +171,7 @@ export function summary(project) {
   const since = Date.now() - DAY;
   // A chat turn with the lead is not a cycle: its cost counts, the turn does not.
   const recent = cycles.filter((c) => isRecent(c.start, since));
-  const recentCycles = recent.filter((c) => c.kind !== 'chat');
+  const recentCycles = recent.filter((c) => !isChat(c));
   // The team's own results only: a gate proof's refused branch is the gate
   // working, and must not read as a failure of the team.
   const recentGate = gate.filter((g) => !g.canary && !g.proof && isRecent(g.at, since));
@@ -178,7 +181,7 @@ export function summary(project) {
   const issues = listDir(issuesDir)
     .filter((d) => d.isFile() && d.name.endsWith('.md'))
     .map((d) => parseIssue(d.name, readText(path.join(issuesDir, d.name), 20000)));
-  const last = cycles.findLast((c) => c.kind !== 'chat') || null;
+  const last = cycles.findLast((c) => !isChat(c)) || null;
   return {
     last24: {
       cycles: recentCycles.length,
@@ -198,7 +201,7 @@ export function summary(project) {
 
 export function progress(project) {
   const fleet = project.paths.fleet;
-  const cycles = readCycles(fleet).filter((c) => c.kind !== 'chat');
+  const cycles = readCycles(fleet).filter((c) => !isChat(c));
   const gate = parseGateLog(readText(path.join(fleet, 'history.log')));
   return {
     cycles,
@@ -335,7 +338,7 @@ export function galleryCycles(project, live = null) {
   const cycles = [];
   for (const c of readCycles(fleet)) {
     const number = c.counted && c.session ? ++n : null;
-    if (c.kind === 'chat' || !Number.isFinite(ms(c.start))) continue;
+    if (isChat(c) || !Number.isFinite(ms(c.start))) continue;
     cycles.push({ key: c.session || c.start, session: c.session, start: c.start, end: c.end, kind: c.kind, number, live: false });
   }
   if (live?.session && Number.isFinite(ms(live.start)) && !cycles.some((c) => c.session === live.session)) {

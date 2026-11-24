@@ -4,6 +4,9 @@
 #
 #   agent-kit-chat say <plan-id> <msgid> <from>   the owner's message on stdin (plain text);
 #                                                 starts agent-kit-chat.service for one answer
+#   agent-kit-chat say <talk-id> <msgid> <from> [--model M] [--effort E] [--files]
+#                                                 a message in a conversation of the Chat tab (kit 0.33):
+#                                                 plain text on stdin, or with --files a tar of body.md and att/
 #   agent-kit-chat end <plan-id>                  the owner ended the chat: no more turns
 #   agent-kit-chat finish                         drop the marker (run by agent-kit-chat.service)
 #   agent-kit-chat reap                           drop a marker whose turn is gone (agent-kit-tick)
@@ -14,7 +17,11 @@
 # next planning cycle replaces it. From kit 0.10.1 a turn may run while a
 # cycle or a one-shot job runs, and a cycle may start during a turn; the
 # chat notice tells the lead what is running.
-# The marker ($STATE/chat) is "<plan-id> <msgid> <since>".
+# A conversation of the Chat tab ("talk", kit 0.33) is not tied to a plan:
+# its own session ($STATE/ledger/talks/<talk-id>), messages under
+# $STATE/talk/<talk-id>/, answers under $STATE/talk-out/<talk-id>/. Talk turns
+# and plan chat turns share the marker: one answer at a time per team.
+# The marker ($STATE/chat) is "<plan-id|talk-id> <msgid> <since>".
 set -uo pipefail
 PATH=${AGENT_KIT_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}
 export PATH
@@ -28,6 +35,11 @@ MARK=$STATE/chat
 LOCK=${AGENT_KIT_LOCK:-/run/agent-kit-ctl.lock}
 PLAN_RE='^[0-9]{8}T[0-9]{6}Z-p-[a-z0-9-]{1,40}$'
 MSG_RE='^[0-9]{8}T[0-9]{6}Z-c-[a-f0-9]{6}$'
+TALK_RE='^[0-9]{8}T[0-9]{6}Z-t-[a-f0-9]{6}$'
+TL=$STATE/talk
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$'
+MAX_ATT=$((20 * 1024 * 1024))
+MAX_FILES=8
 UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 MAX_TEXT=20000
 REAP_AFTER=120
@@ -41,8 +53,88 @@ active() {
 }
 umask 022
 
+# A message in a conversation of the Chat tab (kit 0.33).
+talk_say() {
+  local talk=$1 msg=$2 from=$3 model="" effort="" files=0
+  shift 3
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --model) [[ ${2:-} =~ ^(fable|opus|sonnet|haiku)$ ]] || die "model must be fable, opus, sonnet or haiku"; model=$2; shift 2 ;;
+      --effort) [[ ${2:-} =~ ^(low|medium|high|xhigh|max)$ ]] || die "effort must be low, medium, high, xhigh or max"; effort=$2; shift 2 ;;
+      --files) files=1; shift ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+  [[ $talk =~ $TALK_RE ]] || die "bad conversation id"
+  [[ $msg =~ $MSG_RE ]] || die "bad message id"
+  [[ $from =~ ^[A-Za-z0-9._@-]{1,80}$ ]] || die "bad sender name"
+  exec 8> "$LOCK"
+  flock 8
+  [ ! -e "$MARK" ] || die "the lead is still answering the last message"
+  [ ! -e "$TL/$talk/$msg.md" ] || die "that message was already sent"
+  install -d -m 755 "$TL" "$TL/$talk"
+  local x="" text n=0 f name
+  if [ "$files" = 1 ]; then
+    # A tar of body.md and att/, checked like a planning request's (kit 0.30).
+    x=$TL/$talk/.x-$msg
+    rm -rf -- "$x"
+    mkdir -m 700 "$x" || die "cannot create work folder"
+    trap 'rm -rf -- "$x"' EXIT
+    head -c $((MAX_ATT * MAX_FILES + 1048576)) | tar -x -C "$x" --no-same-owner --no-same-permissions \
+      --no-overwrite-dir --delay-directory-restore 2> /dev/null || die "could not read the message archive"
+    [ -f "$x/body.md" ] && [ ! -L "$x/body.md" ] || die "the archive has no body.md"
+    [ -z "$(find "$x" -mindepth 1 ! -path "$x/body.md" ! -path "$x/att" ! -path "$x/att/*" -print -quit)" ] || die "unexpected entry in the archive"
+    [ -z "$(find "$x" -mindepth 1 ! -type f ! -path "$x/att" -print -quit)" ] || die "the archive may hold plain files only"
+    if [ -d "$x/att" ]; then
+      [ ! -L "$x/att" ] || die "the archive may hold plain files only"
+      while IFS= read -r -d '' f; do
+        n=$((n + 1))
+        name=${f##*/}
+        [[ $name =~ $NAME_RE ]] || die "bad file name: $name"
+        [ "$(dirname "$f")" = "$x/att" ] || die "files must sit directly in att/"
+        [ "$(stat -c %s "$f")" -le "$MAX_ATT" ] || die "file over 20 MB: $name"
+      done < <(find "$x/att" -mindepth 1 -print0)
+      [ "$n" -le "$MAX_FILES" ] || die "more than $MAX_FILES files"
+    fi
+    text=$(head -c $((MAX_TEXT + 1)) "$x/body.md")
+  else
+    text=$(head -c $((MAX_TEXT + 1)))
+  fi
+  [ ${#text} -le $MAX_TEXT ] || die "the message is longer than $MAX_TEXT bytes"
+  [ -n "${text//[[:space:]]/}" ] || die "the message is empty"
+  if [ "$n" -gt 0 ]; then
+    install -d -m 755 "$TL/$talk/att"
+    rm -rf -- "$TL/$talk/att/$msg"
+    mv "$x/att" "$TL/$talk/att/$msg"
+    chmod 755 "$TL/$talk/att/$msg"
+    find "$TL/$talk/att/$msg" -type f -exec chmod 644 {} +
+  fi
+  {
+    printf 'Ziggurat-Owner-Talk: 1\nId: %s\nTalk: %s\nFrom: %s\nSent: %s\n' "$msg" "$talk" "$from" "$(date -u +%FT%TZ)"
+    [ -n "$model" ] && printf 'Model: %s\n' "$model"
+    [ -n "$effort" ] && printf 'Effort: %s\n' "$effort"
+    printf -- '---\n%s\n' "$text"
+  } > "$TL/$talk/.$msg.tmp"
+  chmod 644 "$TL/$talk/.$msg.tmp"
+  mv "$TL/$talk/.$msg.tmp" "$TL/$talk/$msg.md"
+  [ -n "$x" ] && rm -rf -- "$x"
+  printf '%s %s %s\n' "$talk" "$msg" "$(date -Is)" > "$MARK.tmp"
+  chmod 644 "$MARK.tmp"
+  mv "$MARK.tmp" "$MARK"
+  if ! systemctl start --no-block "$CHAT.service" > /dev/null 2>&1; then
+    rm -f "$MARK" "$TL/$talk/$msg.md"
+    rm -rf -- "$TL/$talk/att/$msg"
+    die "could not start the chat turn"
+  fi
+  echo "chat message $msg sent. The lead answers in a minute or two"
+}
+
 case "${1:-show}" in
   say)
+    if [[ ${2:-} =~ $TALK_RE ]]; then
+      talk_say "${@:2}"
+      exit 0
+    fi
     plan=${2:-} msg=${3:-} from=${4:-}
     [[ $plan =~ $PLAN_RE ]] || die "bad plan id"
     [[ $msg =~ $MSG_RE ]] || die "bad message id"
@@ -110,13 +202,13 @@ case "${1:-show}" in
   show)
     if [ -f "$MARK" ]; then
       read -r plan msg since _ < "$MARK"
-      echo "chat turn in progress: $msg about $plan since $since"
+      echo "chat turn in progress: $msg in $plan since $since"
     else
       echo "no chat turn in progress"
     fi
     ;;
 
   *)
-    die "usage: agent-kit-chat say <plan-id> <msgid> <from> | end <plan-id> | finish | reap | show"
+    die "usage: agent-kit-chat say <plan-id|talk-id> <msgid> <from> [...] | end <plan-id> | finish | reap | show"
     ;;
 esac

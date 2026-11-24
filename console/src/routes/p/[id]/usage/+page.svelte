@@ -24,7 +24,7 @@
     ['output', 'Output'],
     ['input', 'Fresh input']
   ];
-  const KIND_NAME = { normal: 'Normal cycle', oneshot: 'One-shot job', plan: 'Planning cycle' };
+  const KIND_NAME = { normal: 'Normal cycle', oneshot: 'One-shot job', plan: 'Planning cycle', chat: 'Planning chat', talk: 'Chat tab' };
   const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : 0);
   const mostOf = (counts) => Object.entries(counts || {}).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 
@@ -252,9 +252,18 @@
               <td class="num">{pct(k.costUsd, total)}%</td>
             </tr>
           {/each}
+          {#if data.talk?.turns}
+            <tr>
+              <td>Chat tab</td>
+              <td class="num">{num(data.talk.turns)}</td>
+              <td class="num">–</td>
+              <td class="num">{usd(data.talk.costUsd)}</td>
+              <td class="num dim">apart</td>
+            </tr>
+          {/if}
           {#if chat.turns}
             <tr>
-              <td>Chat with the lead</td>
+              <td>Planning chat</td>
               <td class="num">{num(chat.turns)}</td>
               <td class="num">–</td>
               <td class="num">{usd(chat.costUsd)}</td>
@@ -332,9 +341,9 @@
                 <td class="num">{w.medianMin == null ? '–' : `${num(w.medianMin)} min`}</td>
                 <td class="num">{w.timeRatio == null ? '–' : `${w.timeRatio}× (${w.estimated})`}</td>
                 <td class="num">{w.costRatio == null ? '–' : `${w.costRatio}×`}</td>
-                <td class="num">{w.kind === 'chat' ? '–' : `${pct(w.rewriteUsd, w.costUsd)}%`}</td>
+                <td class="num">{w.kind === 'chat' || w.kind === 'talk' ? '–' : `${pct(w.rewriteUsd, w.costUsd)}%`}</td>
                 <td class="num">{w.redo ? `${w.redo} (${usd(w.redoUsd)})` : '–'}</td>
-                <td class="num">{w.kind === 'chat' || w.kind === 'plan' ? '–' : `${w.merged} / ${w.refused}`}</td>
+                <td class="num">{w.kind === 'chat' || w.kind === 'talk' || w.kind === 'plan' ? '–' : `${w.merged} / ${w.refused}`}</td>
                 <td class="num">{usd(w.costUsd)}</td>
               </tr>
             {/each}

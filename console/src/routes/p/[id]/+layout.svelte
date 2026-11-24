@@ -20,6 +20,7 @@
     ['topology', 'Topology'],
     ['progress', 'Progress'],
     ['inbox', 'Inbox'],
+    ['chat', 'Chat'],
     ['notes', 'Notes'],
     ['issues', 'Issues'],
     ['backlog', 'Planning'],
@@ -35,7 +36,7 @@
   const waitingText = $derived(wait.text);
   const current = $derived(page.url.pathname.split('/')[3] || 'topology');
   // The number on a tab: what waits there.
-  const countOf = (slug) => (slug === 'inbox' ? wait.inbox : slug === 'issues' ? p.issues : slug === 'backlog' ? wait.backlog : 0) || 0;
+  const countOf = (slug) => (slug === 'inbox' ? wait.inbox : slug === 'issues' ? p.issues : slug === 'backlog' ? wait.backlog : slug === 'chat' ? wait.chat : 0) || 0;
   const currentLabel = $derived(TABS.find(([slug]) => slug === current)?.[1] || 'Menu');
   // Tabs that are not open and have something waiting: shown on the phone menu's button.
   const elsewhere = $derived(TABS.reduce((t, [slug]) => t + (slug === current ? 0 : countOf(slug)), 0));

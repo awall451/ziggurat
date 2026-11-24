@@ -6,6 +6,7 @@
   // by an agent: it is rendered through the sanitising markdown helper.
   import { ago, usd } from '$lib/format.js';
   import { md } from '$lib/md.js';
+  import ChatComposer from '$lib/components/ChatComposer.svelte';
 
   let {
     plan = null, // {id, chat, ended, running} or null: no plan to talk over
@@ -24,13 +25,13 @@
   let root = $state(null);
   let list = $state(null);
   let inner = $state(null);
-  let box = $state(null);
+  let composer = $state(null);
   // Follow the newest message, unless the owner scrolled up to read.
   let follow = true;
 
   export function focus() {
     root?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    box?.focus({ preventScroll: true });
+    composer?.focus();
   }
 
   function scrolled() {
@@ -89,14 +90,14 @@
     {#if plan.ended}
       <p class="small dim">This chat is ended. Start a new planning cycle to plan again.</p>
     {:else}
-      <textarea class="field" rows="3" bind:this={box} bind:value={text} placeholder="Ask about a proposal, or ask {lead} to change, split or drop one"></textarea>
-      <div class="actions">
-        <span class="small dim grow">
-          Each message counts as usage, not as a cycle.
-          {#if jobRunning}The chat stays open while a job runs; {lead} is told what is running.{/if}
-        </span>
-        <button class="btn primary" disabled={!!busy || chatBusy || plan.running || !text.trim()} onclick={() => onsend?.()}>Send</button>
-      </div>
+      <ChatComposer
+        bind:this={composer}
+        bind:text
+        placeholder="Ask about a proposal, or ask {lead} to change, split or drop one"
+        disabled={!!busy || chatBusy || plan.running}
+        hint="Each message counts as usage, not as a cycle.{jobRunning ? ` The chat stays open while a job runs; ${lead} is told what is running.` : ''}"
+        onsend={() => onsend?.()}
+      />
     {/if}
   {/if}
 </aside>
@@ -153,13 +154,6 @@
   }
   .msg.bad {
     border-color: var(--bad, #c55);
-  }
-  textarea {
-    flex: none;
-    width: 100%;
-    margin: 0;
-    box-sizing: border-box;
-    resize: none;
   }
   .actions {
     flex: none;

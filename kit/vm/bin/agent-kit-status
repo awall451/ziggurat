@@ -1,15 +1,21 @@
 #!/bin/bash
 # agent-kit-status [n]: owner's one-screen view.  ssh oakhollow agent-kit-status
-source /etc/agent-kit/project.env
+ETC=${AGENT_KIT_ETC:-/etc/agent-kit}
+source "$ETC/project.env"
+# shellcheck source=/dev/null
+[ -f "$ETC/caps.env" ] && source "$ETC/caps.env"
 L=$STATE/ledger/cycles.jsonl
 today=$(date +%F)
 echo "== $PROJECT  $(date '+%F %H:%M')   control: $(cat "$STATE/control" 2>/dev/null || echo 'run (default)')"
 [ -f "$STATE/halt-after" ] && agent-kit-halt-after show
 systemctl list-timers 'agent-kit-*' --no-pager | sed -n '1,4p'
 echo; echo "== last cycles"
-tail -n "${1:-6}" "$L" 2>/dev/null | jq -r '"\(.start[5:16])  rc=\(.rc)  \(.secs // "?")s  $\(.cost_usd // "?")  \(.summary // "" | gsub("\n";" ") | .[0:160])"'
+# Cycles only: chat turns (plan chat, Chat tab) are listed on the console, not here.
+jq -c 'select(.kind != "chat" and .kind != "talk")' "$L" 2>/dev/null | tail -n "${1:-6}" | jq -r '"\(.start[5:16])  rc=\(.rc)  \(.secs // "?")s  $\(.cost_usd // "?")  \(.summary // "" | gsub("\n";" ") | .[0:160])"'
 cost=$(grep "\"date\":\"$today\"" "$L" 2>/dev/null | jq -s 'map(.cost_usd // 0) | add // 0 | . * 100 | round / 100')
-echo; echo "== today: $(grep -c "\"date\":\"$today\"" "$L" 2>/dev/null || echo 0)/$MAX_CYCLES_PER_DAY cycles, API-equivalent \$${cost:-0} (subscription usage, not a bill)"
+# The same count as the cap's (lead-cycle): counted lines only, so chat turns are not cycles.
+n=$(jq -s --arg d "$today" '[.[] | select(.date == $d and .counted != false)] | length' "$L" 2>/dev/null)
+echo; echo "== today: ${n:-0}/$MAX_CYCLES_PER_DAY cycles, API-equivalent \$${cost:-0} (subscription usage, not a bill)"
 echo; echo "== gate"; gate-status | head -8
 esc=$WORKSPACE/docs/agents/ESCALATIONS.md
 if sudo test -f "$esc"; then echo; echo "== escalations (tail)"; sudo tail -15 "$esc"; fi
