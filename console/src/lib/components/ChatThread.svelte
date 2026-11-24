@@ -42,7 +42,7 @@
         <div class="msg lead small" class:bad={m.reply?.status === 'error'}>
           <span class="dim">{lead}{#if m.ranModel}{` · ${m.ranModel}`}{/if}{#if m.cost != null}, {usd(m.cost)}{/if}{#if m.reply?.date}, {ago(m.reply.date, now)}{/if}</span>
           {#if m.steps.length}
-            <button class="steps-toggle dim" onclick={() => (open = { ...open, [m.id]: !(open[m.id] ?? live) })}>
+            <button class="steps-toggle" aria-expanded={open[m.id] ?? live} title="Show or hide what {lead} did" onclick={() => (open = { ...open, [m.id]: !(open[m.id] ?? live) })}>
               {(open[m.id] ?? live) ? '▾' : '▸'} {m.steps.length} step{m.steps.length > 1 ? 's' : ''}{live ? '…' : ''}
             </button>
             {#if open[m.id] ?? live}
@@ -117,6 +117,7 @@
     gap: 8px;
     margin-top: 4px;
   }
+  /* The accent colour says it opens: what the lead did, folded once it has answered. */
   .steps-toggle {
     display: block;
     background: none;
@@ -124,6 +125,10 @@
     padding: 4px 0;
     cursor: pointer;
     font: inherit;
+    color: var(--accent);
+  }
+  .steps-toggle:hover {
+    text-decoration: underline;
   }
   .steps {
     margin: 0 0 6px;

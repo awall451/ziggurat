@@ -223,6 +223,12 @@ function ledger(project) {
   }
 }
 
+/** "claude-opus-5-5" -> "opus": the names the model picker uses. */
+function shortModel(id) {
+  const m = /(fable|opus|sonnet|haiku)/.exec(String(id || ''));
+  return m ? m[1] : null;
+}
+
 /** The context window of a model: `context` of its entry in pricing.json, else 200k. */
 export function contextWindow(model) {
   const p = getPricing();
@@ -295,8 +301,9 @@ export function get(project, id, { status = null, now = Date.now() } = {}) {
       steps: s?.steps || [],
       said: !m.reply && s ? s.said : '',
       cost: num(line?.cost_usd),
-      ranModel: typeof line?.model === 'string' ? line.model : null,
-      ranEffort: typeof line?.effort === 'string' ? line.effort : null,
+      // The ledger comes with the slow pull; until then the stream says which model answered.
+      ranModel: typeof line?.model === 'string' ? line.model : shortModel(s?.model),
+      ranEffort: typeof line?.effort === 'string' ? line.effort : m.reply ? m.effort : null,
       _stream: s
     };
   });
@@ -310,11 +317,18 @@ export function get(project, id, { status = null, now = Date.now() } = {}) {
       ctxModel = m._stream.model;
     }
   }
+  // The answers and their streams arrive with the turn; the ledger line (cost)
+  // only with the slower pull of the ledger. The panel works from the answers,
+  // and adds what the ledger knows once it has come.
+  const answered = msgs.filter((m) => m.reply);
+  const lastAnswer = answered.at(-1) || null;
   const lastLine = lines.at(-1) || null;
-  const lastEnd = Date.parse(lastLine?.end) || null;
+  const lineIsLast = !!lastLine && lastLine.chat === lastAnswer?.id;
+  const lastEnd = (lineIsLast && Date.parse(lastLine.end)) || Date.parse(lastAnswer?.reply?.date) || Date.parse(lastLine?.end) || null;
   // A new session after a pause starts from a summary, so its context is small again.
   const warmMs = lastEnd ? Math.max(0, FRESH_MS - (now - lastEnd)) : 0;
-  const model = lastLine?.model || ctxModel || null;
+  const model = (lineIsLast && lastLine.model) || lastAnswer?.ranModel || lastLine?.model || shortModel(ctxModel) || null;
+  const effort = (lineIsLast && lastLine.effort) || lastAnswer?.ranEffort || lastLine?.effort || null;
   return {
     id,
     title: c.title || 'New conversation',
@@ -328,9 +342,11 @@ export function get(project, id, { status = null, now = Date.now() } = {}) {
       tokens: context,
       window: contextWindow(ctxModel || model),
       cost: lines.reduce((s, l) => s + (num(l.cost_usd) || 0), 0),
-      turns: lines.length,
+      // Answers whose cost the console does not know yet (the ledger is pulled later).
+      costPending: Math.max(0, answered.length - lines.length),
+      turns: Math.max(lines.length, answered.length),
       model,
-      effort: lastLine?.effort || null,
+      effort,
       warmMinutes: warmMs ? Math.ceil(warmMs / 60000) : 0,
       files: [...files].slice(-30)
     }
@@ -452,8 +468,11 @@ export function syncTalk(project, { conv = null, live = false, force = false } =
   const dest = one ? path.join(outDir(project), conv) : outDir(project);
   fs.mkdirSync(dest, { recursive: true });
   const src = `${project.kit.state}/talk-out/${one ? `${conv}/` : ''}`;
-  const pending = pull(project, [src], dest, { as: 'agent', maxSize: '8m', timeout: 60000, filters: ['--exclude=.*.tmp'] })
-    .catch(() => {})
+  const answers = pull(project, [src], dest, { as: 'agent', maxSize: '8m', timeout: 60000, filters: ['--exclude=.*.tmp'] }).catch(() => {});
+  // Between turns, the ledger too: an answer's cost is in its ledger line, and
+  // the console's own pull of the ledger comes only every 15 minutes.
+  const costs = one || !project.paths?.fleet ? null : pull(project, [`${project.kit.state}/ledger/cycles.jsonl`], project.paths.fleet, { maxSize: '32m', timeout: 60000 }).catch(() => {});
+  const pending = Promise.all([answers, costs])
     .finally(() => syncState.set(key, { at: Date.now(), pending: null }));
   syncState.set(key, { ...s, pending });
   return pending;

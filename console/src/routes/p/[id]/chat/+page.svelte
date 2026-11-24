@@ -226,7 +226,11 @@
         <div class="small"><b>{conv.context.tokens != null ? k(conv.context.tokens) : '–'}</b> <span class="dim">/ {k(conv.context.window)} tokens ({pct ?? 0}%)</span></div>
       </div>
       <dl class="small">
-        <dt>Cost</dt><dd>{usd(conv.context.cost)} <span class="dim">over {conv.context.turns} answer{conv.context.turns > 1 ? 's' : ''}</span></dd>
+        <dt>Cost</dt>
+        <dd>
+          {#if conv.context.costPending === conv.context.turns}<span class="dim">known after the next pull</span>
+          {:else}{usd(conv.context.cost)} <span class="dim">over {conv.context.turns - conv.context.costPending} answer{conv.context.turns - conv.context.costPending > 1 ? 's' : ''}{#if conv.context.costPending}, {conv.context.costPending} more to come{/if}</span>{/if}
+        </dd>
         <dt>Model</dt><dd>{conv.context.model || '–'}{#if conv.context.effort}<span class="dim">, {conv.context.effort} effort</span>{/if}</dd>
         <dt>Cache</dt>
         <dd>
