@@ -8,7 +8,7 @@
   import ProposalCard from '$lib/components/ProposalCard.svelte';
   import ConflictChoice from '$lib/components/ConflictChoice.svelte';
   import { conflictsAt, placeAfter, dateString, expectedStarts, gapNote, usageOverlaps, waitText } from '$lib/schedule.js';
-  import { DAYS, plan, occurrences, markFresh, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel, instantOf, endOf } from '$lib/schedule.js';
+  import { DAYS, plan, occurrences, markFresh, quietIntervals, validateSchedule, validTimeZone, slotId, todayIn, wallClock, windowRange, cleanWindow, clockLabel, zoneChoices, zoneLabel, instantOf, endOf, focusSpan } from '$lib/schedule.js';
 
   let { data } = $props();
   const tl = $derived(data.timeline);
@@ -71,7 +71,10 @@
     if (!p.canSchedule) return p.kitVersion ? `kit ${p.kitVersion}: needs 0.9` : 'no kit status yet';
     if (drafts[p.id] !== undefined) return 'saving…';
     // Focus mode (kit 0.27).
-    if (p.focus?.on) return 'in focus: back to back';
+    if (p.focus?.on) {
+      const f = p.focus.on;
+      return f.until ? `in focus until ${clockAt(f.until * 1000)}` : f.cycles ? `in focus · ${f.done} of ${f.cycles} cycles` : 'in focus until off';
+    }
     if (p.focus?.paused) return `paused for ${p.focus.paused.for}`;
     if (!s) return 'back to back';
     return `${s.slots.length} start time${s.slots.length === 1 ? '' : 's'}${p.cap != null ? ` · cap ${p.cap}` : ''}`;
@@ -88,6 +91,8 @@
       past: p.past,
       running: p.running,
       stalled: p.stalled || null,
+      // Focus mode (#93): the stretch the team's focus, or its pause for another's, covers.
+      focusSpan: focusSpan(p.focus, p.typicalSecs, tl.now, range.to),
       // With a change open, the starts it brings are marked: only those show when their time has passed.
       planned: drafts[p.id] !== undefined ? markFresh(planning.planned[p.id] || [], p.schedule, range.from, range.to) : planning.planned[p.id] || [],
       // Starts skipped for one day: drawn struck through, they do not run.

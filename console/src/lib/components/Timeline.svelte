@@ -12,7 +12,7 @@
   // of that length along its row and a click calls onpick with the start; the
   // parent passes the picked start back as ghost.at, which stays drawn and can
   // be dragged, or picked again with another click.
-  import { wallClock, timeOfDay, hourLabel, clockLabel, draggedStart, waitText, DAYS } from '$lib/schedule.js';
+  import { wallClock, timeOfDay, hourLabel, clockLabel, draggedStart, waitText, DAYS, focusSpan } from '$lib/schedule.js';
   import { stallText } from '$lib/format.js';
 
   let {
@@ -275,6 +275,14 @@
       <pattern id="{uid}-limit" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
         <rect width="3" height="6" fill="var(--critical)" opacity="0.55" />
       </pattern>
+      <pattern id="{uid}-paused" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="2" height="8" fill="var(--ink-2)" opacity="0.35" />
+      </pattern>
+      <linearGradient id="{uid}-fade" x1="0" x2="1" y1="0" y2="0">
+        <stop offset="0.85" stop-color="white" stop-opacity="1" />
+        <stop offset="1" stop-color="white" stop-opacity="0" />
+      </linearGradient>
+      <mask id="{uid}-fademask" maskContentUnits="objectBoundingBox"><rect width="1" height="1" fill="url(#{uid}-fade)" /></mask>
       <pattern id="{uid}-job" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
         <rect width="7" height="7" fill="var(--accent)" opacity="0.32" />
         <rect width="3" height="7" fill="var(--accent)" opacity="0.75" />
@@ -327,6 +335,20 @@
         </rect>
 
         <g clip-path="url(#{uid}-track)">
+          <!-- focus mode (#93): the stretch it covers, behind everything else on the row -->
+          {#if row.focusSpan && visible(row.focusSpan.from, row.focusSpan.to)}
+            {@const f = row.focusSpan}
+            <!-- the label starts after the "now" line when it crosses the band, so the line does not cut the words -->
+            {@const lx = Math.max(x(f.from), LABEL, now > f.from && now < f.to ? x(now) : 0)}
+            <g class="band {f.kind}" class:about={f.end === 'about'} mask={f.end === 'open' ? `url(#${uid}-fademask)` : null}>
+              <rect class="fill" x={x(f.from)} y={y + 2} width={Math.max(4, x(f.to) - x(f.from))} height={ROW - 2} rx="5" fill={f.kind === 'paused' ? `url(#${uid}-paused)` : null} />
+              <!-- the label sits in a strip under the bars, where nothing is drawn over it; too narrow for words: the tooltip says it -->
+              {#if x(f.to) - lx >= 110}<text class="bandlabel" x={lx + 6} y={y + ROW - 1.5}>
+                {f.kind === 'paused' ? `Paused for ${f.for}'s focus` : f.end === 'set' ? `Focus until ${clockText(f.to)}` : f.end === 'about' ? `Focus · ${f.done} of ${f.cycles} cycles · ends about ${clockText(f.to)}` : 'Focus · until switched off'}
+              </text>{/if}
+              <title>{f.kind === 'paused' ? `${row.name} is paused while ${f.for} is in focus, until ${clockText(f.to)} at the latest. Its start times are skipped; planned jobs and one-time cycles still run.` : `${row.name} in focus from ${clockText(f.from)}${f.end === 'set' ? ` to ${clockText(f.to)}` : f.end === 'about' ? `, about to ${clockText(f.to)}` : ', until switched off'}: cycles back to back, at most ${f.perDay} a day. Planned jobs run first, in order, right away.`}</title>
+            </g>
+          {/if}
           {#each row.past as c (c.start)}
             {#if visible(c.start, c.end)}
               <rect class="past" x={x(c.start)} y={y + 10} width={Math.max(3, x(c.end) - x(c.start))} height={ROW - 20} rx="3">
@@ -498,6 +520,9 @@
         <div class="small warnline">expected about {clockText(tip.row.expected[tip.job.id])} instead of {clockText(tip.job.start)}</div>
       {/if}
       {#if tip.job.wait}<div class="small warnline">{waitText(tip.job.wait)}</div>{/if}
+      {#if tip.job.state === 'set' && tip.row.focusSpan?.kind === 'focus' && tip.job.start <= tip.row.focusSpan.to && tip.job.start > now}
+        <div class="small">runs earlier: the team is in focus, and planned jobs go first</div>
+      {/if}
       {#if onjob}<div class="small dim">Click for details{movable(tip.job) ? '. Drag to move it' : ''}</div>{/if}
     </div>
   {/if}
@@ -731,6 +756,33 @@
   .running {
     fill: var(--row);
     animation: pulse 1.6s ease-in-out infinite;
+  }
+  .band {
+    pointer-events: none;
+  }
+  .band .fill {
+    fill: var(--row);
+    fill-opacity: 0.12;
+    stroke: var(--row);
+    stroke-opacity: 0.55;
+    stroke-width: 1;
+  }
+  .band.about .fill {
+    stroke-dasharray: 5 4;
+  }
+  .band.paused .fill {
+    fill-opacity: 1;
+    stroke: var(--ink-2);
+    stroke-opacity: 0.35;
+  }
+  .bandlabel {
+    fill: var(--row);
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .band.paused .bandlabel {
+    fill: var(--ink-2);
   }
   .running.stalled {
     fill: var(--warn);
