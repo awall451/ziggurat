@@ -364,13 +364,30 @@ case "${1:-show}" in
   due)
     [ -d "$AT" ] || exit 0
     now=$(date +%s)
-    for f in "$AT"/2*; do
+    # Focus (kit 0.29): while the team is in focus its planned jobs are pulled
+    # forward: due now, in the order of their set times, as soon as the team is
+    # free. With an end time, only the jobs set before it.
+    pull=0 pull_until=""
+    if [ -f "$STATE/focus" ]; then
+      fu=$(sed -n 's/.*until=\([0-9]*\).*/\1/p' "$STATE/focus" | head -1)
+      if [ -z "$fu" ]; then pull=1; elif [ "$now" -lt "$fu" ]; then pull=1 pull_until=$fu; fi
+    fi
+    # An entry without a usable time is dropped.
+    for x in "$AT"/2*; do
+      [ -f "$x" ] && [[ $(basename "$x") =~ $ANY_RE ]] || continue
+      read -r w _ < "$x"
+      [[ ${w:-} =~ ^[0-9]{9,11}$ ]] || rm -f -- "$x" "$x.job" "$x.meta" "$x.wait"
+    done
+    # Oldest set time first.
+    for f in $(for x in "$AT"/2*; do [ -f "$x" ] && [[ $(basename "$x") =~ $ANY_RE ]] && read -r w _ < "$x" && [[ ${w:-} =~ ^[0-9]{9,11}$ ]] && echo "$w $x"; done | sort -n | cut -d' ' -f2); do
       [ -f "$f" ] || continue
       id=$(basename "$f")
       [[ $id =~ $ANY_RE ]] || continue
       read -r when from _ < "$f"
       [[ ${when:-} =~ ^[0-9]{9,11}$ ]] || { rm -f -- "$f" "$f.job" "$f.meta" "$f.wait"; continue; }
-      [ "$now" -ge "$when" ] || continue
+      if [ "$now" -lt "$when" ]; then
+        [ "$pull" = 1 ] && { [ -z "$pull_until" ] || [ "$when" -le "$pull_until" ]; } || continue
+      fi
       flag=(); [[ $id =~ $PLAN_RE ]] && flag=(--plan); [[ $id =~ $FREE_RE ]] && flag=(--free)
       # What it waited for at the last look, and how long of that was for the owner:
       # time spent waiting for an approval does not count against the job.

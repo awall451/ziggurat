@@ -110,7 +110,13 @@ function runOf(project, tree, row, status) {
 function teamOf(project, status, now) {
   if (!status?.reachable || (status.state !== 'idle' && status.state !== 'halted')) return null;
   let next = null;
-  try {
+  // In focus (kit 0.29) planned jobs are pulled forward: the one the focus holds for starts next.
+  const hold = status.focus?.on?.hold || null;
+  if (hold) {
+    const what = describe(project, hold.id);
+    if (what) next = { at: hold.at * 1000, ...what };
+  }
+  if (!next) try {
     const set = jobsFor(project, status, now).find((j) => j.state === 'set');
     if (set) next = { at: set.start, ...describe(project, set.id) };
   } catch {
@@ -121,7 +127,7 @@ function teamOf(project, status, now) {
     const what = at ? describe(project, at.id) : null;
     if (what) next = { at: at.at * 1000, ...what };
   }
-  return { state: status.state, idle: status.idle || null, haltAfter: !!status.haltAfter, next };
+  return { state: status.state, idle: status.idle || null, haltAfter: !!status.haltAfter, next, focusNext: !!hold };
 }
 
 /**

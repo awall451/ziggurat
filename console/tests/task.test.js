@@ -184,7 +184,14 @@ describe('no cycle runs', () => {
 
   it('halted with nothing set', () => {
     const { team } = task(7, { status: { reachable: true, state: 'halted', leadActive: false, atJobs: [] }, following: true });
-    expect(team).toEqual({ state: 'halted', idle: null, haltAfter: false, next: null });
+    expect(team).toEqual({ state: 'halted', idle: null, haltAfter: false, next: null, focusNext: false });
+  });
+
+  it('in focus the job the focus holds for starts next (kit 0.29)', () => {
+    const status = { reachable: true, state: 'idle', leadActive: false, idle, atJobs: [{ id: PLAN, at: 1767308400, plan: true }], focus: { on: { since: 1, perDay: 6, done: 0, hold: { id: PLAN, at: 1767308400, kind: 'plan' } } } };
+    const { team } = task(7, { status, following: true });
+    expect(team.focusNext).toBe(true);
+    expect(team.next).toMatchObject({ at: 1767308400000, kind: 'plan' });
   });
 
   it('an older cycle picked from the list has no team rows', () => {

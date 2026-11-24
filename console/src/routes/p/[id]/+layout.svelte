@@ -104,7 +104,7 @@
   {#if p.status.focus?.on}
     {@const f = p.status.focus.on}
     <div class="note s-running">
-      In focus: cycles back to back{f.until ? ` until ${fwhen(f.until)}` : f.cycles ? `, ${f.done} of ${f.cycles} cycles done` : ' until you switch it off'}, at most {f.perDay} a day.{f.hold ? ` Waiting for the planned ${f.hold.kind === 'once' ? 'one-time cycle' : f.hold.kind === 'plan' ? 'planning cycle' : 'job'} at ${fwhen(f.hold.at)}: it goes first.` : ''} Stop it in the bar at the top.
+      In focus: cycles back to back{f.until ? ` until ${fwhen(f.until)}` : f.cycles ? `, ${f.done} of ${f.cycles} cycles done` : ' until you switch it off'}, at most {f.perDay} a day.{f.hold ? ` Planned jobs first: the next (set for ${fwhen(f.hold.at)}) starts as soon as the team is free.` : ''} Stop it in the bar at the top.
     </div>
   {:else if p.status.focus?.paused}
     <div class="note dim">Paused while {p.status.focus.paused.for} is in focus, until {fwhen(p.status.focus.paused.until)} at the latest. Jobs and one-time cycles set for a time still run.</div>
