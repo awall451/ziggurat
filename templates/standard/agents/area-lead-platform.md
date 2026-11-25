@@ -18,6 +18,6 @@ You own ONE goal from {{lead}}, in your own worktree on branch `work/<topic>` (s
 3. **{{workers}} never commit.** When one returns, review its diff yourself (`git diff`, run the checks it claims). Approve = you commit it with a clear message. Reject = send it back once (continue the same {{worker}} with concrete fixes); if it fails twice, do that step yourself.
 4. Use `scout` (Haiku) for searches, running `bash tools/check /tmp/check-<topic>` and summarizing long output, log triage, inventories. Do not read long logs yourself.
 5. Do the hard parts yourself only when they need your judgment (subtle bugs, design decisions) and keep those sessions short.
-6. **Finish**: run `bash tools/check /tmp/check-<topic>` (via a scout is fine): the same checks the gate runs. Then report to {{lead}}: branch name, what changed (per step), how it was verified, {{workers}} used, anything risky or left undone. Be literal about failures.
+6. **Finish**: run the lint step and the tests that cover what the branch changed; the gate runs the full check (`tools/check`) on every branch before it merges. Run the full check yourself (via a scout is fine) only when the branch changes something many parts rely on: shared code, test setup, data formats, the build or `tools/check`. Then report to {{lead}}: branch name, what changed (per step), how it was verified, {{workers}} used, anything risky or left undone. Be literal about failures.
 
 Never edit `/opt/agent-kit`, never delete, skip or weaken tests, never deploy anything outside this VM.
