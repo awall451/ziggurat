@@ -607,10 +607,17 @@ jobs). Earlier entries in a team's notes keep their old numbers.
 `agent-kit-rules` holds a few working rules that cut waste without touching quality. Every agent the
 lead starts gets them at its start (the `SubagentStart` hook), and the lead gets its own in the cycle
 prompt; a planning cycle gets none. They are: never wait idle for more than 4 minutes in one command;
-helpers run only the tests for what they touched, the tech lead runs the full check once per branch and
-the gate runs everything; a small step is done by the tech lead itself; a goal that fails on the smaller
+helpers run only the tests for what they touched, the tech lead runs the lint step and the tests for
+its branch (from kit 0.34; before, it ran the full check once per branch), and the gate's run is the one
+full check, unless the branch changes what many parts rely on (shared code, test setup, data formats,
+the build or `tools/check`); a small step is done by the tech lead itself; a goal that fails on the smaller
 model is started again on the larger one with `Redo on Opus:` at the start of the agent's description,
 which the Usage tab counts. A team's own instructions stay as they are.
+
+Why the gate's run became the one full check (kit 0.34): a small one-shot job on a team whose suite
+takes 10 minutes ran 25 minutes, because the tech lead's full check and the gate's ran one after the
+other. Across four teams' gate histories (272 runs) only two branches failed the gate on a real test
+failure; the team whose tech leads hardly ran the full check themselves had none in 92 merges.
 
 An agent's prompt cache lives 5 minutes, the lead's one hour. A tech lead waits on its helpers for
 longer than 5 minutes and then pays for its whole context again, so the templates give tech leads the

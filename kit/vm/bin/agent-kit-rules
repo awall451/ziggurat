@@ -2,7 +2,10 @@
 # agent-kit-rules: the kit's own working rules that keep usage down without
 # touching quality (kit 0.20). They come from measurements of real cycles:
 # an agent that waits longer than its prompt cache lives pays for its whole
-# context again, and every agent ran the full checks many times over.
+# context again, and every agent ran the full checks many times over. From
+# kit 0.34 the gate's run is the one full check of a branch: a tech lead runs
+# the lint step and the tests for what it changed (a full run doubled the
+# wait of every cycle, and the gate's history showed it rarely catches more).
 #
 #   agent-kit-rules subagent        the rules every agent of the team gets at its start
 #   agent-kit-rules lead <kind>     the rules for the lead; kind is normal, oneshot or plan
@@ -18,7 +21,8 @@ case "${1:-}" in
 Team rules from the agent kit, on cost. They replace anything in your own instructions that says otherwise on these points; everything else stands.
 1. Never wait idle for more than 4 minutes in one command (`sleep`, a watch loop, polling). After 5 minutes without a request your whole context is paid for again. Poll in shorter steps, or go on with other work.
 2. If you implement one step for a tech lead (you never commit): run only the tests that cover what you touched, not the project's full check. Your tech lead runs the full check once for the branch, and the gate runs everything again before anything is merged.
-3. If you own a goal and hand steps to helpers: do a small step yourself (one file, a few lines) instead of starting a helper for it. Run the full check once per branch, before you report, not after every step.
+3. If you own a goal and hand steps to helpers: do a small step yourself (one file, a few lines) instead of starting a helper for it.
+4. Before you report a branch, run the lint step and the tests that cover what the branch changed, not the project's full check: the gate runs the full check on every branch before it merges, and a full run here only doubles the wait. Run the full check yourself only when the branch changes something many parts rely on (shared code, test setup or fixtures, the data formats, the build or `tools/check`). Do not wait for a check you started to finish if you no longer need it.
 These rules never allow weaker work: no skipped, deleted or weakened test, and a failing test is always reported.
 TXT
     ;;
@@ -34,7 +38,7 @@ Quality of the work comes first. These rules cut waste only, and they apply wher
 
 - **The smaller model, and when to go back.** You choose the model for each tech lead you start, as before. If one you started on the smaller model is sent back twice, or its branch fails at the gate, start that goal again on the larger model (`model: "opus"`) and begin that agent's description with `Redo on Opus:` so the owner can see how often this happens and what it costs.
 - **Waiting.** Never wait idle for more than 4 minutes in one command (`sleep`, polling). Use `gate-wait` in its own short steps.
-- **Checks.** Helpers run only the tests for what they touched; the tech lead runs the full check once per branch; the gate runs everything. Do not ask for more full runs than that.
+- **Checks.** Helpers run only the tests for what they touched. A tech lead runs the lint step and the tests that cover its branch, not the full check, unless the branch changes something many parts rely on (shared code, test setup, data formats, the build or `tools/check`). The gate runs the full check on every branch before it merges: that is the one full run. Do not ask for more. If the gate refuses a branch, the tech lead fixes it from the gate's log (`gate-status <branch>`).
 TXT
     if [ "$kind" = oneshot ]; then
       cat <<'TXT'

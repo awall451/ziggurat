@@ -665,6 +665,10 @@ check "a normal cycle's prompt has the cost rules" 'grep -q "^## Cost rules (age
 check "no cache notice while the workspace has no agent files" '! grep -q "cacheTtl" "$FAKE_PROMPT"'
 check "a one-shot cycle is told how to do a small job, after the team text and before the job" '[ "$(grep -n "A small job" <<< "$("$BIN/agent-kit-rules" lead oneshot)" | wc -l)" = 1 ]'
 check "a planning cycle gets no cost rules" '[ -z "$("$BIN/agent-kit-rules" lead plan)" ]'
+# Kit 0.34: the gate's run is the one full check of a branch.
+check "a tech lead runs lint and the tests for its branch, the gate the full check" 'r=$("$BIN/agent-kit-rules" subagent); grep -q "the lint step and the tests that cover what the branch changed" <<< "$r" && grep -q "the gate runs the full check on every branch" <<< "$r" && grep -q "shared code" <<< "$r"'
+check "the lead is told the same, and how a refusal is fixed" 'r=$("$BIN/agent-kit-rules" lead normal); grep -q "that is the one full run" <<< "$r" && grep -q "gate-status <branch>" <<< "$r" && ! grep -q "tech lead runs the full check once per branch" <<< "$r"'
+check "the rules still forbid weaker work" 'grep -q "no skipped, deleted or weakened test" <<< "$("$BIN/agent-kit-rules" subagent)"'
 # The number is the cycle's place among counted cycles with a session: a try
 # that hit a usage limit and a line without a session take none.
 cp "$S/ledger/cycles.jsonl" "$T/ledger.keep"
