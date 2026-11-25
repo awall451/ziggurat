@@ -20,7 +20,9 @@ export async function load({ params, parent, url }) {
   // The team's own model and chat effort, for "Team default" (cached; never wait long for it).
   const caps = ready ? ((await Promise.race([info(project).catch(() => null), new Promise((r) => setTimeout(r, 1500))]))?.caps || {}) : {};
   const conversations = list(project, status);
-  const open = TALK_RE.test(want) ? get(project, want, { status }) : null;
+  // No conversation named: the most recent one opens, unless the owner asked for a new one (?new).
+  const pick = TALK_RE.test(want) ? want : url.searchParams.has('new') ? '' : conversations.find((c) => !c.archived)?.id || '';
+  const open = pick ? get(project, pick, { status }) : null;
   return {
     ready,
     kitVersion: status?.kitVersion || null,
