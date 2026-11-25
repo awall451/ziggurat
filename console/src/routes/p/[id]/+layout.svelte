@@ -6,6 +6,7 @@
   import Popover from '$lib/components/Popover.svelte';
   import RunCycle from '$lib/components/RunCycle.svelte';
   import FocusDialog from '$lib/components/FocusDialog.svelte';
+  import ProjectTile from '$lib/components/ProjectTile.svelte';
 
   let focusOpen = $state(false);
   const fwhen = (secs) => new Date(secs * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
@@ -43,6 +44,12 @@
 
   // Phone width: the tabs are in a menu. It closes when the page changes.
   let tabMenu = $state(false);
+  // The switcher on the project's name: the other projects, opened on the same tab.
+  let switcher = $state(false);
+  $effect(() => {
+    page.url.pathname;
+    switcher = false;
+  });
   $effect(() => {
     page.url.pathname;
     tabMenu = false;
@@ -63,6 +70,26 @@
 </script>
 
 <div class="head">
+  <div class="who">
+    <Popover open={switcher} onclose={() => (switcher = false)} align="start">
+      {#snippet trigger()}
+        <button class="name" aria-haspopup="true" aria-expanded={switcher} title="Change project" onclick={() => (switcher = !switcher)}>
+          <ProjectTile name={p.name} accent={p.accent} avatar={p.avatar} size={44} />
+          <span class="title">{p.name}</span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+      {/snippet}
+      {#each data.projects as x (x.id)}
+        <a class="menuitem proj" class:on={x.id === p.id} href="/p/{x.id}/{current}" aria-current={x.id === p.id ? 'page' : null}>
+          <ProjectTile name={x.name} accent={x.accent} avatar={x.avatar} size={22} />
+          <span class="grow">{x.name}</span>
+          {#if x.state}<span class="small dim">{STATE_WORD[x.state]?.toLowerCase() || x.state}</span>{/if}
+        </a>
+      {/each}
+      <a class="menuitem" href="/">All projects</a>
+    </Popover>
+    {#if p.description}<span class="desc small dim">{p.description}</span>{/if}
+  </div>
   <div class="strip">
     <div class="stat panel">
       <span class="k">State</span>
@@ -178,6 +205,53 @@
 </div>
 
 <style>
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+  }
+  .name {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    padding: 4px 12px 4px 4px;
+    margin-left: -4px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: none;
+    color: var(--ink-2);
+    font: inherit;
+    cursor: pointer;
+  }
+  .name:hover,
+  .name[aria-expanded='true'] {
+    border-color: var(--line);
+    background: rgba(var(--glow), 0.05);
+  }
+  .title {
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 28px;
+    line-height: 1.1;
+    color: var(--ink-strong);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .desc {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .proj {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 220px;
+  }
   .head {
     padding: 12px 24px 0;
     display: flex;
@@ -279,6 +353,12 @@
   @media (max-width: 700px) {
     .head {
       padding: 12px 12px 0;
+    }
+    .title {
+      font-size: 22px;
+    }
+    .desc {
+      display: none;
     }
     .body {
       padding: 12px 12px 16px;

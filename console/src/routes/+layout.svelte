@@ -62,7 +62,7 @@
 </svelte:head>
 
 <div class="app" style="--accent: {project?.accent || '#4fd8ff'}">
-  <header class="bar">
+  <header class="bar" class:band={!!project}>
     <a class="brand" class:short={crumb} href="/">
       <span class="logo"><Icon name="ziggurat" size={26} /></span>
       <span class="word">Ziggurat</span>
@@ -73,14 +73,12 @@
       <a class:on={section === 'projects'} aria-current={section === 'projects' ? 'page' : undefined} href="/">Projects</a>
       <a class:on={section === 'schedule'} aria-current={section === 'schedule' ? 'page' : undefined} href="/schedule">Schedule</a>
     </nav>
+    <!-- A project names itself in its own header, under this bar (with its colour band). -->
     <span class="crumbs">
-      {#if project}
-        <span class="dim slash">/</span><span class="here">{project.name}</span>
-        <span class="chip mono">{project.theme}</span>
-      {:else if page.url.pathname.startsWith('/new')}
-        <span class="dim slash">/</span><span class="here">New project</span>
-      {:else if page.url.pathname.startsWith('/settings')}
-        <span class="dim slash">/</span><span class="here">Settings</span>
+      {#if !project && page.url.pathname.startsWith('/new')}
+        <span class="here">New project</span>
+      {:else if !project && page.url.pathname.startsWith('/settings')}
+        <span class="here">Settings</span>
       {/if}
     </span>
     <span class="grow"></span>
@@ -120,6 +118,10 @@
     color: var(--cyan-soft);
     background: rgba(var(--glow), 0.08);
     border-bottom: 1px solid var(--line);
+  }
+  /* A project's colour across the top of every one of its pages (it stays with the sticky bar). */
+  .bar.band {
+    border-top: 4px solid var(--accent);
   }
   .app {
     min-height: 100vh;
@@ -195,14 +197,6 @@
     font-weight: 500;
     color: var(--ink);
   }
-  .chip {
-    margin-left: 6px;
-    padding: 2px 10px;
-    border-radius: 999px;
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    font-size: 12px;
-  }
   .narrow {
     display: none;
   }
@@ -214,8 +208,6 @@
     }
     .tabs,
     .sep,
-    .chip,
-    .slash,
     .settings,
     .brand.short .word {
       display: none;

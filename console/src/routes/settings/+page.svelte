@@ -3,6 +3,7 @@
   import { invalidateAll } from '$app/navigation';
   import { page } from '$app/state';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import ProjectTile from '$lib/components/ProjectTile.svelte';
 
   let { data } = $props();
 
@@ -61,6 +62,38 @@
   let done = $state('');
   let confirm = $state(null);
   let check = $state(null); // result of "Check target"
+  // The project's picture (its tile beside the name): uploaded on its own, not part of the entry.
+  let picker = $state(null);
+  let picProblem = $state('');
+  async function uploadPicture(file) {
+    picProblem = '';
+    if (!file) return;
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) return (picProblem = 'Use a PNG, JPEG or WebP picture.');
+    if (file.size > 2 * 1024 * 1024) return (picProblem = 'The picture is over 2 MB.');
+    busy = 'picture';
+    try {
+      const res = await fetch(`/api/projects/${original}/avatar`, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out.message || 'The upload failed');
+      await invalidateAll();
+    } catch (e) {
+      picProblem = e.message;
+    } finally {
+      busy = '';
+    }
+  }
+  async function removePicture() {
+    picProblem = '';
+    busy = 'picture';
+    try {
+      await call('DELETE', `/api/projects/${original}/avatar`);
+      await invalidateAll();
+    } catch (e) {
+      picProblem = e.message;
+    } finally {
+      busy = '';
+    }
+  }
 
   const kind = $derived(tab === 'targets' ? 'target' : 'project');
   const list = $derived(tab === 'targets' ? data.targets : data.projects);
@@ -248,6 +281,22 @@
           {/if}
           {#if done}<div class="panel note good" role="status">{done}</div>{/if}
 
+          {#if tab === 'projects' && original && mode === 'form'}
+            <div class="picture">
+              <ProjectTile name={draft.name || original} accent={draft.accent} avatar={data.avatars?.[original]} size={64} />
+              <div class="stack">
+                <span>Picture</span>
+                <span class="small dim">Beside the project's name on its pages. Without one, the first letter of the name on its accent colour. PNG, JPEG or WebP, up to 2 MB; square works best.</span>
+                <div class="row-btns">
+                  <input type="file" accept="image/png,image/jpeg,image/webp" hidden bind:this={picker} onchange={(e) => { uploadPicture(e.currentTarget.files?.[0]); e.currentTarget.value = ''; }} />
+                  <button class="btn quiet sm" onclick={() => picker?.click()} disabled={!!busy}>{busy === 'picture' ? 'Uploading…' : data.avatars?.[original] ? 'Change picture' : 'Upload a picture'}</button>
+                  {#if data.avatars?.[original]}<button class="btn quiet sm" onclick={removePicture} disabled={!!busy}>Use the letter</button>{/if}
+                </div>
+                {#if picProblem}<span class="small s-failed">{picProblem}</span>{/if}
+              </div>
+            </div>
+          {/if}
+
           {#if mode === 'json'}
             <p class="dim small">The whole entry. Fields the form does not show (kit paths, data folders, agent name aliases) can be edited here.</p>
             <textarea class="field mono json" bind:value={text} spellcheck="false"></textarea>
@@ -426,6 +475,22 @@
     margin: 0;
   }
   .bar,
+  .picture {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 4px 0 14px;
+  }
+  .picture .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .row-btns {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
   .actions {
     display: flex;
     align-items: center;

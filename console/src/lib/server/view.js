@@ -8,6 +8,7 @@ import { openAskCount } from './feedback.js';
 import { openCount as openIssueCount } from './issues.js';
 import { publishView, PUBLISH_KIT } from './publish.js';
 import { chatUnread } from './backlog.js';
+import { avatarUrl } from './avatar.js';
 import { unread as talkUnread, kitHasTalk } from './talk.js';
 import { parseScheduleText, nextStart } from '../schedule.js';
 
@@ -36,6 +37,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     description: project.description,
     theme: project.theme,
     accent: project.accent,
+    // The owner's picture for the project, or null: then its tile shows the first letter.
+    avatar: avatarUrl(project.id),
     hidden: !!project.hidden,
     tiers: tierNames(project),
     status: {
