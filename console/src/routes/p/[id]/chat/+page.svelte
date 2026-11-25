@@ -148,7 +148,7 @@
   function newConversation() {
     text = '';
     files = [];
-    goto(`${base}/chat`, { noScroll: true }).then(() => composer?.focus());
+    goto(`${base}/chat?new`, { noScroll: true }).then(() => composer?.focus());
   }
   async function renameConv() {
     const t = window.prompt('Name of this conversation', conv.title);
