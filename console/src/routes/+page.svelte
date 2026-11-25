@@ -1,6 +1,6 @@
 <script>
   import { num, usd, dur, between, ago, waitingParts, stallText, pillState } from '$lib/format.js';
-  import Icon from '$lib/components/Icon.svelte';
+  import ProjectTile from '$lib/components/ProjectTile.svelte';
 
   let { data } = $props();
 
@@ -48,7 +48,7 @@
     {#each shown as p (p.id)}
       <a class="card panel" class:hid={p.hidden} class:live={p.status.state === 'running'} href="/p/{p.id}/topology" style="--accent: {p.accent}">
         <div class="top">
-          <span class="glyph"><Icon name="ziggurat" size={38} /></span>
+          <span class="glyph"><ProjectTile name={p.name} accent={p.accent} avatar={p.avatar} size={40} /></span>
           <div class="name">
             <h2>{p.name}</h2>
             <div class="small dim">{p.description}{p.description ? ' · ' : ''}{p.theme}</div>
