@@ -31,7 +31,9 @@ nothing else of the project's. `tools/check` must:
 | may write | screenshots to `<outdir>/shots/*.png`: the owner sees them in the gallery, one set per merged build |
 
 It runs with a 25 minute limit, without your environment, through the same
-proxy. Run it yourself before submitting: `bash tools/check /tmp/check-out`.
+proxy. Before submitting, run the lint step and the tests for what you changed; run the whole
+script yourself (`bash tools/check /tmp/check-out`) when the change touches what many parts rely on
+(shared code, test setup, data formats, the build or `tools/check`). The gate's run is the full check.
 
 The gate's own rules, outside the repository:
 - the number of passed tests may never drop below main's;
