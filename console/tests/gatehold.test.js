@@ -57,6 +57,69 @@ describe('parseHeld', () => {
   });
 });
 
+describe('parseHeld approvedAt', () => {
+  it('keeps a valid approval time only', () => {
+    const h = gh.parseHeld([JSON.stringify({ topic: 'a', sha: A, approvedAt: '2026-01-01T10:05:00+00:00' }), JSON.stringify({ topic: 'b', sha: B, approvedAt: 'soon' })].join('\n'));
+    expect(h[0].approvedAt).toBe('2026-01-01T10:05:00+00:00');
+    expect(h[1].approvedAt).toBeNull();
+  });
+});
+
+describe('remembered decisions', () => {
+  const held = (extra = {}) => ({ topic: 'a', sha: A, at: null, detail: '', approvedAt: null, ...extra });
+  const now = Date.parse('2026-01-01T12:00:00Z');
+  const rec = { decision: 'approve', topic: 'a', at: '2026-01-01T11:55:00.000Z' };
+  const noRead = async () => {
+    throw new Error('not read');
+  };
+
+  it('writes one on success, none on a refusal', async () => {
+    vm(0, 'approved');
+    await gh.decideHeld(user, project, A, 'approve', 'a');
+    expect(gh.readDecisions(project)[A]).toMatchObject({ decision: 'approve', topic: 'a' });
+    vm(2, '', 'nothing is held');
+    await gh.decideHeld(user, project, B, 'approve', 'b').catch(() => {});
+    expect(gh.readDecisions(project)[B]).toBeUndefined();
+    fs.rmSync(path.join(root, 'gatehold', 'team', 'decisions.json'));
+  });
+
+  it('shows approved from memory while the VM says nothing yet', async () => {
+    const r = await gh.reconcile([held()], { [A]: rec }, noRead, now);
+    expect(r.items[0]).toMatchObject({ state: 'approved', approvedAt: rec.at });
+    expect(r.keep[A]).toBeDefined();
+  });
+
+  it('prefers the VM approval time', async () => {
+    const r = await gh.reconcile([held({ approvedAt: '2026-01-01T11:50:00+00:00' })], {}, noRead, now);
+    expect(r.items[0]).toMatchObject({ state: 'approved', approvedAt: '2026-01-01T11:50:00+00:00' });
+  });
+
+  it('is waiting with nothing remembered, declined when a decline is remembered', async () => {
+    expect((await gh.reconcile([held()], {}, noRead, now)).items[0].state).toBe('waiting');
+    expect((await gh.reconcile([held()], { [A]: { ...rec, decision: 'deny' } }, noRead, now)).items[0].state).toBe('declined');
+  });
+
+  it('settles a decision the VM stopped listing, once', async () => {
+    const read = async () => JSON.stringify({ sha: A, status: 'rejected', detail: 'main moved during the run; rebase and resubmit', at: '2026-01-01T11:59:00+00:00' });
+    const r = await gh.reconcile([], { [A]: rec }, read, now);
+    expect(r.settled).toEqual([expect.objectContaining({ topic: 'a', status: 'rejected', detail: expect.stringContaining('main moved') })]);
+    expect(r.keep).toEqual({});
+  });
+
+  it('settles as gone when the result cannot be read, and drops old memory', async () => {
+    expect((await gh.reconcile([], { [A]: rec }, noRead, now)).settled[0].status).toBe('gone');
+    const old = { ...rec, at: '2025-12-30T11:55:00.000Z' };
+    const r = await gh.reconcile([held()], { [A]: old }, noRead, now);
+    expect(r.keep).toEqual({});
+    expect(r.items[0].state).toBe('waiting');
+  });
+
+  it('ignores a result for another commit', () => {
+    expect(gh.parseSettled(JSON.stringify({ sha: B, status: 'merged' }), A)).toBeNull();
+    expect(gh.parseSettled('nope', A)).toBeNull();
+  });
+});
+
 describe('the diff', () => {
   it('is built only from checked shas', () => {
     expect(() => gh.diffScript(['a; rm -rf /'], 'ABCDEF0123456789')).toThrow();

@@ -1055,10 +1055,12 @@ n0=$(grep -c " hold-a " "$S/gate/history.log")
 "$T/opt/gate/bin/gate-run"
 check "a held change is not judged again before the owner decides" '[ "$(grep -c " hold-a " "$S/gate/history.log")" = "$n0" ]'
 check "agent-kit-gate held lists it" '[ "$(kg held | jq -r .sha)" = "$hsha" ]'
+check "held says it is not approved yet" '[ "$(kg held | jq -r .approvedAt)" = null ]'
 refuse "approve needs a full sha" kg approve "${hsha:0:9}"
 refuse "approve needs a held change" kg approve "$(printf 'a%.0s' {1..40})"
 kg approve "$hsha" > /dev/null
 check "the approval is root-side state" '[ -f "$S/gate/approved/$hsha" ]'
+check "held shows when it was approved" '[ "$(kg held | jq -r .approvedAt)" = "$(cat "$S/gate/approved/$hsha")" ]'
 "$T/opt/gate/bin/gate-run"
 check "after approval the gate judges it again and merges it" '[ "$(jq -r .status "$S/gate/results/hold-a.json")" = merged ] && [ "$(git -C "$T/bare" rev-parse main)" = "$hsha" ]'
 check "nothing is held any more" '[ -z "$(kg held)" ] && [ -z "$(og prompt | grep "Held for the owner now")" ]'

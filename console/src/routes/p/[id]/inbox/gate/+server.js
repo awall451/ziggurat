@@ -9,7 +9,7 @@ export async function POST({ params, request, locals }) {
   const b = await request.json().catch(() => null);
   if (!b || typeof b !== 'object') error(400, 'Bad request');
   try {
-    return json(await decideHeld(locals.user, project, String(b.sha ?? ''), String(b.decision ?? '')));
+    return json(await decideHeld(locals.user, project, String(b.sha ?? ''), String(b.decision ?? ''), String(b.topic ?? '')));
   } catch (e) {
     error(400, e.message);
   }

@@ -30,6 +30,8 @@
   // System packages and domains the lead asked for (kit 0.16).
   let pkgBusy = $state('');
   let pkgNote = $state('');
+  let pkgErr = $state({}); // rid -> why the VM refused, shown on the card
+  let pkgLocal = $state({}); // rid -> decision just sent, until the list shows it
   const openPkgs = $derived((data.packages?.requests || []).filter((r) => r.state === 'waiting'));
   const pastPkgs = $derived((data.packages?.requests || []).filter((r) => r.state !== 'waiting').slice(0, 6));
   const PKG_KIND = { apt: 'Ubuntu package', recipe: 'Install recipe', domain: 'Domain on the allow-list' };
@@ -37,14 +39,15 @@
     if (decision === 'approve' && r.missing?.length && !confirm(`Approving adds ${r.missing.join(', ')} to the gateway's allow-list, for every agent VM behind it. Go on?`)) return;
     pkgBusy = r.rid;
     pkgNote = '';
+    pkgErr = { ...pkgErr, [r.rid]: '' };
     try {
       const res = await fetch(`${base}/packages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rid: r.rid, decision }) });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.message || 'The VM refused');
-      pkgNote = decision === 'approve' ? `Approved ${r.request}${out.added?.length ? `; allowed ${out.added.join(', ')}` : ''}. It is installed between cycles.` : `Declined ${r.request}.`;
+      pkgLocal = { ...pkgLocal, [r.rid]: { decision, added: out.added || [] } };
       await invalidateAll();
     } catch (e) {
-      pkgNote = e.message;
+      pkgErr = { ...pkgErr, [r.rid]: e.message };
     } finally {
       pkgBusy = '';
     }
@@ -74,21 +77,48 @@
 
   // Changes to what "done" means, held by the gate (kit 0.14).
   let gateBusy = $state('');
-  let gateNote = $state('');
+  let gateErr = $state({}); // sha -> why the VM refused, shown on the card
+  let gateLocal = $state({}); // sha -> {decision, at}: just sent, until the VM lists it as approved
+  let settledSeen = $state([]); // how approved changes ended, until dismissed
+  let clock = $state(Date.now());
+  const gstate = (h) => (h.state !== 'waiting' ? h.state : gateLocal[h.sha] ? (gateLocal[h.sha].decision === 'approve' ? 'approved' : 'declined') : 'waiting');
+  const gAt = (h) => h.approvedAt || gateLocal[h.sha]?.at || null;
+  const minsSince = (iso) => Math.max(0, Math.floor((clock - Date.parse(iso)) / 60000));
+  const SETTLED = {
+    merged: (s) => `${s.topic} was merged into main.`,
+    rejected: (s) => `${s.topic} was not merged: ${s.detail || 'the gate rejected it'}.${/main moved/.test(s.detail) ? ` ${lead} rebases it and you approve the new commit.` : ''}`,
+    failed: (s) => `${s.topic} failed the gate's checks: ${s.detail || 'see the log'}.`,
+    held: (s) => `${s.topic} is held again and waits for you.`,
+    gone: (s) => `${s.topic || 'The change'} is no longer waiting. Check the Controls tab for the gate's verdict.`
+  };
+  $effect(() => {
+    for (const s of data.gateHeld?.settled || []) if (!settledSeen.some((x) => x.sha === s.sha)) settledSeen = [...settledSeen, s];
+  });
+  // While something the owner approved is still being worked on, look again by itself.
+  const inFlight = $derived((data.gateHeld?.held || []).some((h) => gstate(h) === 'approved') || (data.packages?.requests || []).some((r) => ['approved', 'fetching', 'installing'].includes(r.state)));
+  $effect(() => {
+    if (!inFlight) return;
+    const t = setInterval(() => {
+      clock = Date.now();
+      if (!document.hidden) invalidateAll();
+    }, 30000);
+    return () => clearInterval(t);
+  });
   const diffClass = (l) => (l.startsWith('+++') || l.startsWith('---') ? 'meta' : l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hunk' : '');
   async function decideGate(h, decision) {
     const what = decision === 'approve' ? `Approve ${h.topic}? The gate checks it once more and merges it if it passes. From then on these checks define "done".` : `Decline ${h.topic}? It will not be merged.`;
     if (!confirm(what)) return;
     gateBusy = h.sha;
-    gateNote = '';
+    gateErr = { ...gateErr, [h.sha]: '' };
     try {
-      const r = await fetch(`${base}/gate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha: h.sha, decision }) });
+      const r = await fetch(`${base}/gate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sha: h.sha, decision, topic: h.topic }) });
       const res = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(res.message || 'The VM refused');
-      gateNote = decision === 'approve' ? `Approved ${h.topic}: the gate merges it on its next pass if it still passes.` : `Declined ${h.topic}.`;
+      clock = Date.now();
+      gateLocal = { ...gateLocal, [h.sha]: { decision: decision === 'approve' ? 'approve' : 'deny', at: res.at || new Date().toISOString() } };
       await invalidateAll();
     } catch (e) {
-      gateNote = e.message;
+      gateErr = { ...gateErr, [h.sha]: e.message };
     } finally {
       gateBusy = '';
     }
@@ -412,16 +442,24 @@
         </article>
       </section>
     {/if}
-    {#if data.gateHeld && (data.gateHeld.held.length || data.gateHeld.error || gateNote)}
+    {#if data.gateHeld && (data.gateHeld.held.length || data.gateHeld.error || settledSeen.length)}
       <section class="block">
         <h2>Changes to what "done" means</h2>
         <p class="dim small">The gate holds any change to the project's checks until you approve that exact commit.</p>
-        {#if gateNote}<p class="small">{gateNote}</p>{/if}
+        {#each settledSeen as s (s.sha)}
+          <p class="small settled">{SETTLED[s.status]?.(s) || SETTLED.gone(s)} <button class="btn quiet sm" onclick={() => (settledSeen = settledSeen.filter((x) => x.sha !== s.sha))}>Dismiss</button></p>
+        {/each}
         {#if data.gateHeld.error && !data.gateHeld.held.length}<p class="small s-failed">Could not ask the VM: {data.gateHeld.error}</p>{/if}
         {#each data.gateHeld.held as h (h.sha)}
           <article class="panel msg">
             <header>
-              <span class="pill halted">Waiting on you</span>
+              {#if gstate(h) === 'approved'}
+                <span class="pill running">Approved {when(gAt(h))}, re-checking</span>
+              {:else if gstate(h) === 'declined'}
+                <span class="pill halted">Declined</span>
+              {:else}
+                <span class="pill halted">Waiting on you</span>
+              {/if}
               <span class="mono small">{h.topic}</span>
               <span class="mono small dim">{h.sha.slice(0, 9)}</span>
               <span class="grow"></span>
@@ -442,7 +480,13 @@
             {:else}
               <p class="dim small">The diff could not be read.</p>
             {/if}
-            {#if p.canControl}
+            {#if gstate(h) === 'approved'}
+              <p class="small dim">The gate runs all of the checks again on this exact commit, usually 6 to 8 minutes{gAt(h) ? `; ${minsSince(gAt(h))} min so far` : ''}, then merges it. This card changes by itself when it is done. If main moves in the meantime the gate rejects it, {lead} rebases, and you approve the new commit.</p>
+            {:else if gstate(h) === 'declined'}
+              <p class="small dim">Declined. It will not be merged.</p>
+            {/if}
+            {#if gateErr[h.sha]}<p class="small s-failed" role="alert">Could not {gateLocal[h.sha] ? 'finish' : 'send'} that: {gateErr[h.sha]}</p>{/if}
+            {#if p.canControl && gstate(h) === 'waiting'}
               <footer class="actions end">
                 <button class="btn sm" disabled={gateBusy === h.sha} onclick={() => decideGate(h, 'deny')}>Decline</button>
                 <button class="btn primary sm" disabled={gateBusy === h.sha} onclick={() => decideGate(h, 'approve')}>Approve</button>
@@ -462,7 +506,13 @@
         {#each openPkgs as r (r.rid)}
           <article class="panel msg">
             <header>
-              <span class="pill halted">Waiting on you</span>
+              {#if pkgLocal[r.rid]}
+                <span class="pill {pkgLocal[r.rid].decision === 'approve' ? 'running' : 'halted'}">{pkgLocal[r.rid].decision === 'approve' ? 'Approved, installed between cycles' : 'Declined'}</span>
+              {:else if pkgBusy === r.rid}
+                <span class="pill running">Sending…</span>
+              {:else}
+                <span class="pill halted">Waiting on you</span>
+              {/if}
               <span class="mono small">{r.request}</span>
               <span class="grow"></span>
               <span class="dim small">{PKG_KIND[r.what.kind]}</span>
@@ -477,7 +527,9 @@
                 {:else}<span class="dim">All allowed already.</span>{/if}
               </p>
             {/if}
-            {#if p.canControl}
+            {#if pkgLocal[r.rid]?.added?.length}<p class="small dim">Allowed on the gateway: {pkgLocal[r.rid].added.join(', ')}.</p>{/if}
+            {#if pkgErr[r.rid]}<p class="small s-failed" role="alert">Could not send that: {pkgErr[r.rid]}</p>{/if}
+            {#if p.canControl && !pkgLocal[r.rid]}
               <footer class="actions end">
                 <button class="btn sm" disabled={pkgBusy === r.rid} onclick={() => decidePkg(r, 'deny')}>Decline</button>
                 <button class="btn primary sm" disabled={pkgBusy === r.rid} onclick={() => decidePkg(r, 'approve')}>Approve</button>
