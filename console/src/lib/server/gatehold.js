@@ -22,6 +22,72 @@ const MAX_SUMMARY = 8000;
 
 const outDir = (project) => path.join(DATA_DIR, 'gatehold', project.id, 'out');
 
+const decisionsFile = (project) => path.join(DATA_DIR, 'gatehold', project.id, 'decisions.json');
+const DECISION_KEEP_MS = 24 * 3600 * 1000;
+
+/** The owner's decisions the VM has not caught up with yet: {sha: {decision, topic, at}}. */
+export function readDecisions(project) {
+  try {
+    const o = JSON.parse(fs.readFileSync(decisionsFile(project), 'utf8'));
+    const out = {};
+    for (const [sha, d] of Object.entries(o || {})) {
+      if (SHA_RE.test(sha) && d && ['approve', 'deny'].includes(d.decision) && Number.isFinite(Date.parse(d.at || ''))) out[sha] = { decision: d.decision, topic: TOPIC_RE.test(d.topic || '') ? d.topic : '', at: d.at };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeDecisions(project, o) {
+  const f = decisionsFile(project);
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const tmp = `${f}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(o));
+  fs.renameSync(tmp, f);
+}
+
+/** What the gate finally did with a commit the owner approved: its result file, or null. */
+export function parseSettled(text, sha) {
+  try {
+    const o = JSON.parse(text);
+    if (!o || o.sha !== sha || !['merged', 'rejected', 'failed', 'held'].includes(o.status)) return null;
+    return { status: o.status, detail: typeof o.detail === 'string' ? o.detail.replace(/[\p{Cc}]/gu, ' ').slice(0, 300) : '', at: Number.isFinite(Date.parse(o.at || '')) ? o.at : null };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Put the owner's remembered decisions on the VM's list and settle the ones the
+ * VM no longer lists. `read(topic)` gives the topic's result text (or throws).
+ * Returns the held changes with `state`, the settled outcomes, and the decisions to keep.
+ */
+export async function reconcile(held, decisions, read, now = Date.now()) {
+  const keep = {};
+  const settled = [];
+  const listed = new Set(held.map((h) => h.sha));
+  const items = held.map((h) => {
+    const fresh = decisions[h.sha] && now - Date.parse(decisions[h.sha].at) < DECISION_KEEP_MS;
+    const d = fresh ? decisions[h.sha] : null;
+    const approvedAt = h.approvedAt || (d?.decision === 'approve' ? d.at : null);
+    if (d) keep[h.sha] = d;
+    return { ...h, approvedAt, state: approvedAt ? 'approved' : d?.decision === 'deny' ? 'declined' : 'waiting' };
+  });
+  for (const [sha, d] of Object.entries(decisions)) {
+    if (listed.has(sha) || now - Date.parse(d.at) >= DECISION_KEEP_MS) continue;
+    if (d.decision === 'deny') continue; // the VM dropped it at once: nothing to report
+    let r = null;
+    try {
+      r = parseSettled(await read(d.topic), sha);
+    } catch {
+      r = null;
+    }
+    settled.push({ sha, topic: d.topic, approvedAt: d.at, ...(r || { status: 'gone', detail: '', at: null }) });
+  }
+  return { items, settled, keep };
+}
+
 export const kitHasGateHold = (version) => kitAtLeast(version, GATEHOLD_KIT);
 
 /** Parse `agent-kit-gate held` output: one JSON object per line. */
@@ -41,6 +107,8 @@ export function parseHeld(text) {
       topic: o.topic,
       sha: o.sha,
       at: Number.isFinite(Date.parse(o.at || '')) ? o.at : null,
+      // Kit 0.35: when the owner approved it and the gate began judging it again.
+      approvedAt: Number.isFinite(Date.parse(o.approvedAt || '')) ? o.approvedAt : null,
       detail: typeof o.detail === 'string' ? o.detail.replace(/[\p{Cc}]/gu, ' ').slice(0, 300) : ''
     });
     if (out.length >= MAX_HELD) break;
@@ -104,9 +172,16 @@ export function explanation(project, topic) {
  */
 export async function heldChanges(project) {
   const res = await kit(project, 'agent-kit-gate', ['held']);
-  if (res.code !== 0) return { held: [], error: (res.stderr || `exit ${res.code}`).trim().slice(-200) };
+  if (res.code !== 0) return { held: [], settled: [], error: (res.stderr || `exit ${res.code}`).trim().slice(-200) };
   const held = parseHeld(res.stdout);
-  if (!held.length) return { held: [], error: null };
+  const decisions = readDecisions(project);
+  const rec = await reconcile(held, decisions, async (topic) => {
+    const r = await kit(project, 'gate-status', [topic]);
+    if (r.code !== 0) throw new Error('no result');
+    return r.stdout;
+  });
+  if (JSON.stringify(rec.keep) !== JSON.stringify(decisions)) writeDecisions(project, rec.keep);
+  if (!held.length) return { held: [], settled: rec.settled, error: null };
   fs.mkdirSync(outDir(project), { recursive: true });
   await pull(project, [`${project.kit.state}/gate-out/`], outDir(project), {
     as: 'agent',
@@ -118,7 +193,8 @@ export async function heldChanges(project) {
   const d = await readScript(project, diffScript(held.map((h) => h.sha), marker), { timeout: 30000 }).catch(() => null);
   const diffs = d && d.code === 0 ? parseDiffs(d.stdout, marker) : {};
   return {
-    held: held.map((h) => {
+    settled: rec.settled,
+    held: rec.items.map((h) => {
       const e = explanation(project, h.topic);
       return {
         ...h,
@@ -131,7 +207,7 @@ export async function heldChanges(project) {
 }
 
 /** The owner's decision on one held change. */
-export async function decideHeld(user, project, sha, decision) {
+export async function decideHeld(user, project, sha, decision, topic = '') {
   if (!SHA_RE.test(sha)) throw new Error('Bad commit');
   if (!['approve', 'deny'].includes(decision)) throw new Error('Bad decision');
   const res = await kit(project, 'agent-kit-gate', [decision, sha]);
@@ -140,5 +216,9 @@ export async function decideHeld(user, project, sha, decision) {
   audit(user, project.id, decision === 'approve' ? 'gate-approve' : 'gate-deny', { sha }, { ok, detail });
   invalidateStatus(project.id);
   if (!ok) throw new Error(detail);
-  return { ok: true, message: (res.stdout || '').trim().slice(0, 300) };
+  // Remember it until the VM lists it as approved or stops listing it: a reload must not bring the buttons back.
+  const all = readDecisions(project);
+  all[sha] = { decision, topic: TOPIC_RE.test(topic) && !topic.includes('..') ? topic : '', at: new Date().toISOString() };
+  writeDecisions(project, all);
+  return { ok: true, message: (res.stdout || '').trim().slice(0, 300), at: all[sha].at };
 }

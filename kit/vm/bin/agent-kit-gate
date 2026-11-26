@@ -5,7 +5,7 @@
 # finish.
 #
 #   agent-kit-gate pause [reason words] | resume | show
-#   agent-kit-gate held                  held changes, one JSON line each (kit 0.14)
+#   agent-kit-gate held                  held changes, one JSON line each (kit 0.14; approvedAt 0.35)
 #   agent-kit-gate approve <sha>         the gate judges it again and merges it if it passes
 #   agent-kit-gate deny <sha>            the verdict becomes `failed`
 #
@@ -49,7 +49,11 @@ case "${1:-show}" in
   held)
     for f in "$RES"/*.json; do
       [ -f "$f" ] || continue
-      jq -c 'select(.status == "held") | {topic, sha, at, detail}' "$f" 2>/dev/null
+      # approvedAt: the owner approved it and the gate is judging it again (kit 0.35).
+      sha=$(jq -r 'select(.status == "held") | .sha' "$f" 2>/dev/null)
+      [ -n "$sha" ] || continue
+      ap=""; [[ $sha =~ ^[0-9a-f]{40}$ ]] && [ -f "$APPROVED/$sha" ] && ap=$(head -c 40 "$APPROVED/$sha")
+      jq -c --arg ap "$ap" 'select(.status == "held") | {topic, sha, at, detail, approvedAt: (if $ap == "" then null else $ap end)}' "$f" 2>/dev/null
     done | head -50
     ;;
   approve|deny)
