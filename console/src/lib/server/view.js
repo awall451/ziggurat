@@ -1,5 +1,5 @@
 // What the pages show about a project: config, live status, progress numbers.
-import { getStatus, peekStatus, kitAtLeast, runCycleState } from './live.js';
+import { getStatus, peekStatus, kitAtLeast, runCycleState, IDLE_KIT } from './live.js';
 import { touch, pullInfo, ledgerPulledAt } from './pull.js';
 import { summary, readCycles, typicalCycle } from './aggregate.js';
 import { tierNames } from './theme.js';
@@ -106,6 +106,8 @@ export async function projectView(project, { wait = 3500 } = {}) {
     canRetryPackages: kitAtLeast(status.kitVersion, '0.17.0'),
     // Cycle slots need kit 0.9.
     canSchedule: kitAtLeast(status.kitVersion, '0.9.0'),
+    // Idle without start times or focus (kit 0.35, #132); before, back to back until the cap.
+    idleByDefault: kitAtLeast(status.kitVersion, IDLE_KIT),
     // Publishing main to a remote repository needs kit 0.8.
     canPublish: kitAtLeast(status.kitVersion, PUBLISH_KIT),
     publish: publishView(project),

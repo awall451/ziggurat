@@ -76,7 +76,7 @@
       return f.until ? `in focus until ${clockAt(f.until * 1000)}` : f.cycles ? `in focus · ${f.done} of ${f.cycles} cycles` : 'in focus until off';
     }
     if (p.focus?.paused) return `paused for ${p.focus.paused.for}`;
-    if (!s) return 'back to back';
+    if (!s) return p.idleByDefault ? 'idle' : 'back to back';
     return `${s.slots.length} start time${s.slots.length === 1 ? '' : 's'}${p.cap != null ? ` · cap ${p.cap}` : ''}`;
   }
   const rows = $derived(
@@ -480,14 +480,16 @@
   function askClear(p) {
     confirm = {
       title: `Remove all start times of ${p.name}?`,
-      body: 'Its cycles follow each other again, 15 minutes apart, until the daily cap is used up. That is how every team runs without set times.',
+      body: p.idleByDefault
+        ? 'The team is then idle: no cycle starts until you run one, give it start times again or put it in focus.'
+        : 'Its cycles follow each other again, 15 minutes apart, until the daily cap is used up. That is how every team runs without set times.',
       word: 'Remove all',
       danger: true,
       run: async () => {
         const out = await send({ action: 'clear', project: p.id }, `clear-${p.id}`);
         if (!out) return;
         discard(p.id);
-        done = `${p.name}: start times removed. Its cycles run back to back again.`;
+        done = p.idleByDefault ? `${p.name}: start times removed. It is idle until you run a cycle, set times or focus it.` : `${p.name}: start times removed. Its cycles run back to back again.`;
       }
     };
   }
@@ -571,7 +573,7 @@
   <div class="top">
     <div>
       <h1>Schedule</h1>
-      <p class="dim small">When each team's cycles start. Times in {zoneLabel(settings.timezone, tl.now)}, now {clockAt(tl.now)}. A team with no start times runs its cycles back to back.</p>
+      <p class="dim small">When each team's cycles start. Times in {zoneLabel(settings.timezone, tl.now)}, now {clockAt(tl.now)}. A team with no start times is idle until you run a cycle or put it in focus.</p>
     </div>
     <span class="grow"></span>
     <div class="seg" aria-label="Clock">
@@ -700,7 +702,8 @@
           <p class="dim">{p.kitVersion ? `This VM runs kit ${p.kitVersion}. Start times need kit 0.9 or later.` : 'The VM does not answer, or has no kit yet.'}</p>
         {:else}
           <p class="small dim">
-            {#if !s}No start times: its cycles follow each other until the daily cap{p.cap != null ? ` (${p.cap})` : ''} is used up.
+            {#if !s && p.idleByDefault}No start times: idle until you run it, schedule it or focus it.
+            {:else if !s}No start times: its cycles follow each other until the daily cap{p.cap != null ? ` (${p.cap})` : ''} is used up.
             {:else}Its cycles start only at these times. Daily cap: {p.cap ?? 'not known'}. Typical cycle: {lengthText(p.typicalSecs)}.{/if}
           </p>
           {#if s}

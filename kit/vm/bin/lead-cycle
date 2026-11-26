@@ -75,19 +75,26 @@ if [ -z "$oneshot" ] && [ -z "$focus_since" ] && [ -f "$STATE/paused" ]; then
   if [[ ${pu:-} =~ ^[0-9]+$ ]] && [ "$(date +%s)" -lt "$pu" ]; then echo "paused for focus on $(fkey "$STATE/paused" for): not running"; exit 0; fi
 fi
 
-# A schedule (agent-kit-schedule): a normal cycle starts only at one of its
-# slots. The tick leaves a root-owned marker just before it starts this unit;
-# without a fresh one this start came from the lead timer, and there is
-# nothing to do. A one-shot job is the owner asking for this cycle: it runs.
+# Idle by default (kit 0.35): a normal cycle starts only at one of the
+# schedule's slots (agent-kit-schedule), in focus, or when the owner asks for
+# it (a one-shot job, a planning cycle, Run a cycle now). The tick leaves a
+# root-owned marker just before it starts this unit for a slot; without a
+# fresh one this start came from the lead timer, and there is nothing to do.
+# A team with no schedule is idle: the timer only drives focus. Before kit
+# 0.35 such a team ran back to back until its daily cap.
 slot=
-if [ -z "$oneshot" ] && [ -z "$focus_since" ] && grep -q '^slot ' "$ETC/schedule" 2>/dev/null; then
-  if [ -f "$STATE/slot" ]; then
+if [ -z "$oneshot" ] && [ -z "$focus_since" ]; then
+  if [ -f "$STATE/slot" ] && grep -q '^slot ' "$ETC/schedule" 2>/dev/null; then
     read -r slot slot_at _ < "$STATE/slot"
     { [[ ${slot:-} =~ ^[a-z,]{3,27}@[0-9]{2}:[0-9]{2}$ ]] && [[ ${slot_at:-} =~ ^[0-9]{9,11}$ ]] \
       && [ $(($(date +%s) - slot_at)) -le 300 ] && [ $(($(date +%s) - slot_at)) -ge -60 ] \
       && [ "$(cat "$STATE/ledger/slot-used" 2>/dev/null)" != "$slot $slot_at" ]; } || slot=
   fi
-  if [ -z "$slot" ]; then echo "a schedule is set: waiting for the next slot"; exit 0; fi
+  if [ -z "$slot" ]; then
+    if grep -q '^slot ' "$ETC/schedule" 2>/dev/null; then echo "a schedule is set: waiting for the next slot"
+    else echo "no schedule and not in focus: idle until the owner runs a cycle, sets start times or starts a focus"; fi
+    exit 0
+  fi
   # One marker, one cycle.
   echo "$slot $slot_at" > "$STATE/ledger/slot-used"
 fi

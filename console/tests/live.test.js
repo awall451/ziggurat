@@ -66,6 +66,24 @@ describe('status of an idle team', () => {
     expect(_test.shape(raw({ haltafter: '1795139000 plain owner' })).idle.reason).toBe('halt-after');
   });
 
+  it('kit 0.35: no start times and no focus is idle with nothing due, before the cap (#132)', () => {
+    const st = _test.shape(raw({ kitver: '0.35.0', cap: '4', schedule: '' }));
+    expect(st.idle.reason).toBe('nothing-due');
+    expect(idleText(st.idle)).toBe('Idle: nothing scheduled. It starts only when you run a cycle, give it start times or put it in focus.');
+    expect(_test.shape(raw({ kitver: '0.35.0', schedule: '' })).idle.reason).toBe('nothing-due'); // cap used up too: still nothing due
+    expect(_test.shape(raw({ kitver: '0.35.0', schedule: '', haltafter: '1795139000 plain owner' })).idle.reason).toBe('halt-after');
+  });
+
+  it('kit 0.35 with start times, or in focus, keeps the old reasons', () => {
+    expect(_test.shape(raw({ kitver: '0.35.0', cap: '4', schedule: 'tz UTC\nslot daily 01:00\n' })).idle.reason).toBe('between');
+    const focus = JSON.stringify({ focus: { since: 1, perDay: 6, done: 0 }, paused: null, ended: null });
+    expect(_test.shape(raw({ kitver: '0.35.0', cap: '4', schedule: '', focus })).idle.reason).toBe('between');
+  });
+
+  it('an older kit without start times still runs back to back: no nothing-due', () => {
+    expect(_test.shape(raw({ kitver: '0.34.0', cap: '4', schedule: '' })).idle.reason).toBe('between');
+  });
+
   it('no idle reason for a running or halted team', () => {
     expect(_test.shape(raw({ lead: 'active' })).idle).toBeNull();
     expect(_test.shape(raw({ control: 'stop owner 2026-11-20T00:00:00+00:00' })).idle).toBeNull();

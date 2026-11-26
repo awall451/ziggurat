@@ -629,6 +629,13 @@ EOF
 chmod 755 "$FB/claude"
 export FAKE_PROMPT=$T/prompt.txt
 cycle() { rm -f "$FAKE_PROMPT"; AGENT_KIT_HOME=$K PATH=$FB:$PATH "$BIN/lead-cycle"; }
+# A normal cycle at a slot (kit 0.35: without a slot, focus or an owner's job the team is idle):
+# a schedule and a fresh slot marker for this one cycle, both gone again afterwards.
+slotted() {
+  printf 'tz UTC\nslot daily 00:00\n' > "$T/etc/schedule"; echo "daily@00:00 $(date +%s)" > "$S/slot"; rm -f "$S/ledger/slot-used"
+  cycle; local rc=$?
+  rm -f "$T/etc/schedule" "$S/slot" "$S/ledger/slot-used"; return $rc
+}
 LC=20260101T140000Z-o-cyclejob
 mkdir -p "$T/work/lc"; echo "Make the title louder. Code word GNEISS." > "$T/work/lc/body.md"
 echo "stop owner halt 2026-01-01T05:00:00+00:00" > "$S/control"
@@ -651,9 +658,11 @@ check "no cycle is left marked as in progress" '[ ! -e "$S/ledger/current" ]'
 # A marker that does not agree with the control file must not change a normal cycle.
 echo "run 2026-01-01T06:00:00+00:00" > "$S/control"
 out=$(cycle 2>&1)
+check "without a slot, focus or a job of the owner's a normal cycle does not start: idle (kit 0.35)" 'grep -q "no schedule and not in focus: idle" <<< "$out" && [ ! -e "$FAKE_PROMPT" ] && ! grep -q "daily cycle cap" <<< "$out"'
+out=$(slotted 2>&1)
 check "a normal cycle still stops at the daily cap" 'grep -q "daily cycle cap reached" <<< "$out" && [ ! -e "$FAKE_PROMPT" ]'
 head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
-out=$(cycle 2>&1)
+out=$(slotted 2>&1)
 check "a stale marker does not make a normal cycle a one-shot" '[ -s "$FAKE_PROMPT" ] && ! grep -q "One-shot job\|Read this first" "$FAKE_PROMPT" && grep -q "oneshot=no" <<< "$out"'
 # The cycle's number (kit 0.23): counted as the owner's console counts.
 check "a normal cycle's prompt starts with its number, then the team's own text" '[ "$(head -c 20 "$FAKE_PROMPT")" = "**This is cycle 1.**" ] && [ "$(grep -n "TEAM-CYCLE-TEXT" "$FAKE_PROMPT" | cut -d: -f1)" -gt 1 ]'
@@ -674,9 +683,9 @@ check "the rules still forbid weaker work" 'grep -q "no skipped, deleted or weak
 cp "$S/ledger/cycles.jsonl" "$T/ledger.keep"
 { jq -nc '{date:"2025-12-01", counted:true, session:"s-1"}'; jq -nc '{date:"2025-12-01", counted:false, session:"s-2"}'
   jq -nc '{date:"2025-12-01", counted:true}'; jq -nc '{date:"2025-12-01", counted:true, session:"s-3", kind:"plan"}'; } > "$S/ledger/cycles.jsonl"
-out=$(cycle 2>&1)
+out=$(slotted 2>&1)
 check "the number counts normal, one-shot and planning cycles, not uncounted tries" '[ "$(head -c 20 "$FAKE_PROMPT")" = "**This is cycle 3.**" ]'
-rm -f "$S/ledger/cycles.jsonl"; out=$(cycle 2>&1)
+rm -f "$S/ledger/cycles.jsonl"; out=$(slotted 2>&1)
 check "a team without a ledger starts at cycle 1" '[ "$(head -c 20 "$FAKE_PROMPT")" = "**This is cycle 1.**" ]'
 mv "$T/ledger.keep" "$S/ledger/cycles.jsonl"
 RW=$T/rules-ws; mkdir -p "$RW/.claude/agents"
@@ -688,7 +697,7 @@ check "and no longer once the lines are there" '! WORKSPACE=$RW AGENT_KIT_ETC=$T
 refuse "rules for an unknown reader" "$BIN/agent-kit-rules" everyone
 "$BIN/agent-kit-publish" enable git@example.org:team/demo.git > /dev/null
 head -3 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
-out=$(cycle 2>&1)
+out=$(slotted 2>&1)
 check "the publishing section is added once it is set up, after the issues" '[ "$(grep -n "^## Publishing" "$FAKE_PROMPT" | cut -d: -f1)" -gt "$(grep -n "^## Owner issues" "$FAKE_PROMPT" | cut -d: -f1)" ] && grep -q "git@example.org:team/demo.git" "$FAKE_PROMPT" && grep -q "Nothing has been published yet" "$FAKE_PROMPT"'
 "$BIN/agent-kit-publish" disable > /dev/null
 rm -rf "$S/publish" "$S/publish-out"
@@ -842,8 +851,11 @@ echo "run 2026-01-01T00:00:00+00:00" > "$S/control"
 sch clear > /dev/null
 check "clear removes the schedule and its marker" '[ ! -e "$T/etc/schedule" ] && [ ! -e "$S/slot" ] && [ "$(sch show | jq -r ".slots | length")" = 0 ]'
 head -2 "$S/ledger/cycles.jsonl" > "$S/ledger/cycles.tmp"; mv "$S/ledger/cycles.tmp" "$S/ledger/cycles.jsonl"
+n0=$(wc -l < "$S/ledger/cycles.jsonl")
 out=$(cycle 2>&1)
-check "without a schedule cycles start as before" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=no" <<< "$out"'
+check "without a schedule the team is idle: no cycle, nothing in the ledger (kit 0.35)" '[ ! -e "$FAKE_PROMPT" ] && grep -q "idle until the owner runs a cycle" <<< "$out" && [ "$(wc -l < "$S/ledger/cycles.jsonl")" = "$n0" ]'
+out=$(slotted 2>&1)
+check "a normal cycle at a slot still runs once the schedule is back" '[ -s "$FAKE_PROMPT" ] && grep -q "oneshot=no" <<< "$out"'
 refuse "unknown command" sch start-now
 check "the tick unit runs the schedule after the stop check" '[ "$(grep -n "agent-kit-schedule tick" "$HERE/../systemd/agent-kit-tick.service" | cut -d: -f1)" -gt "$(grep -n "agent-kit-halt --if-due" "$HERE/../systemd/agent-kit-tick.service" | cut -d: -f1)" ]'
 echo "stop owner 2026-01-01T09:00:00+00:00" > "$S/control"
@@ -1217,7 +1229,7 @@ echo "Second plan." | shot start $PL2 owner --plan > /dev/null
 FAKE_TOUCH=$T/ws/stray.txt cycle > /dev/null 2>&1
 check "a planning cycle that changed the workspace is flagged" '[ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .touched_code)" = true ]'
 rm -f "$T/ws/stray.txt"; shot finish > /dev/null
-check "a normal cycle's prompt has the backlog section" 'echo "run 2026-01-02T01:00:00+00:00" > "$S/control"; cycle > /dev/null 2>&1; grep -q "^## Backlog: proposals to the owner" "$FAKE_PROMPT" && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .kind)" = normal ]'
+check "a normal cycle's prompt has the backlog section" 'echo "run 2026-01-02T01:00:00+00:00" > "$S/control"; slotted > /dev/null 2>&1; grep -q "^## Backlog: proposals to the owner" "$FAKE_PROMPT" && [ "$(tail -1 "$S/ledger/cycles.jsonl" | jq -r .kind)" = normal ]'
 echo "stop owner 2026-01-02T02:00:00+00:00" > "$S/control"
 
 # Proposals.
@@ -1337,7 +1349,7 @@ chat finish
 refuse "CHAT_EFFORT must be a known level" "$BIN/agent-kit-caps" set CHAT_EFFORT tiny
 check "the effort is listed with the other settings" '"$BIN/agent-kit-caps" show | grep -qx "CHAT_EFFORT=low"'
 shot finish > /dev/null
-check "a cycle starts while a chat turn is answering" 'echo "$PL2 $M4 2026-01-02T13:01:00+00:00" > "$S/chat"; echo "run 2026-01-02T13:02:00+00:00" > "$S/control"; : > "$S/ledger/cycles.jsonl"; cycle > /dev/null 2>&1; [ -s "$FAKE_PROMPT" ]'
+check "a cycle starts while a chat turn is answering" 'echo "$PL2 $M4 2026-01-02T13:01:00+00:00" > "$S/chat"; echo "run 2026-01-02T13:02:00+00:00" > "$S/control"; : > "$S/ledger/cycles.jsonl"; slotted > /dev/null 2>&1; [ -s "$FAKE_PROMPT" ]'
 rm -f "$S/chat"; echo "stop owner 2026-01-02T13:03:00+00:00" > "$S/control"
 chat end $PL2 > /dev/null
 refuse "no chat after the owner ended it" sh -c "echo hi | AGENT_KIT_PATH=$FB:\$PATH $BIN/agent-kit-chat say $PL2 $M3 owner"

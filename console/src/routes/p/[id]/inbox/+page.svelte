@@ -162,13 +162,21 @@
     return out;
   }
 
-  async function send() {
+  // Send and run a cycle now (#132): a team without start times or focus is idle,
+  // so a message waits for the next cycle unless one is started with it.
+  const canRunWith = $derived(!!p.runCycle?.can && !p.runCycle?.atCap && p.status.state !== 'running');
+  async function send(andRun = false) {
     if (!text.trim() || busy) return;
     busy = true;
     problem = '';
     try {
       const out = await post('send', { tier, text, attachments: files.map((f) => f.token), inReplyTo: replyTo?.id || null });
       if (!out.delivered) problem = `Saved, but not delivered yet: ${out.error || 'the VM did not accept it'}. Use Retry on the message.`;
+      else if (andRun) {
+        const res = await fetch(`/p/${p.id}/controls/act`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'run-cycle' }) });
+        const ran = await res.json().catch(() => ({}));
+        if (!res.ok) problem = `Sent, but no cycle started: ${ran.message || `the VM refused (${res.status})`}.`;
+      }
       text = '';
       files = [];
       replyTo = null;
@@ -310,7 +318,10 @@
           <button class="btn quiet" onclick={() => picker.click()}>Attach files</button>
           <span class="dim small">Or paste a screenshot, or drop files here. Up to 8, 20 MB each.</span>
           <span class="spacer"></span>
-          <button class="btn primary send" onclick={send} disabled={busy || !text.trim()}>{busy ? 'Sending…' : `Send ${tier}`}</button>
+          {#if canRunWith}
+            <button class="btn send" onclick={() => send(true)} disabled={busy || !text.trim()} title="Send, then start one normal cycle now: the lead reads the message in it. It counts toward the daily cap.">Send and run a cycle now</button>
+          {/if}
+          <button class="btn primary send" onclick={() => send()} disabled={busy || !text.trim()}>{busy ? 'Sending…' : `Send ${tier}`}</button>
         </div>
 
         {#if p.status.state === 'halted'}

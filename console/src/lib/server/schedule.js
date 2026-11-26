@@ -9,7 +9,7 @@ import path from 'node:path';
 import { CONFIG_DIR, listProjects, readJson, writeJson } from './config.js';
 import { kit } from './ssh.js';
 import { audit } from './audit.js';
-import { invalidateStatus, kitAtLeast, peekStatus, runCycleState } from './live.js';
+import { invalidateStatus, kitAtLeast, peekStatus, runCycleState, IDLE_KIT } from './live.js';
 import { readCycles, typicalCycle } from './aggregate.js';
 import { statusSoon } from './view.js';
 import { jobsFor } from './backlog.js';
@@ -137,6 +137,8 @@ export async function timeline({ view = 'day', date = null, from = null, to = nu
           canSchedule: kitAtLeast(status.kitVersion, SCHEDULE_KIT),
           // Every N, first and last dates, a number of times, and one-time cycles (kit 0.26).
           canRepeat: kitAtLeast(status.kitVersion, REPEAT_KIT),
+          // Idle without start times or focus (kit 0.35, #132); before, back to back until the cap.
+          idleByDefault: kitAtLeast(status.kitVersion, IDLE_KIT),
           // Focus mode (kit 0.27): in focus, or paused for another team's.
           focus: status.focus || null,
           cap: Number.isInteger(status.cap) ? status.cap : null,
@@ -260,7 +262,7 @@ export async function setSchedule(user, project, input) {
   return { ok, schedule, detail };
 }
 
-/** Remove a project's schedule: its cycles follow each other again. */
+/** Remove a project's schedule: from kit 0.35 the team is idle (before, its cycles followed each other). */
 export async function clearSchedule(user, project) {
   const res = await kit(project, 'agent-kit-schedule', ['clear'], { timeout: 60000 });
   const ok = res.code === 0;

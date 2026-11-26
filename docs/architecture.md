@@ -165,14 +165,16 @@ All root-owned, all run from outside by the owner (or the console):
 | `agent-kit-oneshot start <id> <from>` | On a halted or idle team: one cycle for one job from the owner, then back to what it was (see below) |
 | `agent-kit-halt-at set <unix-seconds>` | A halt at a fixed time (checked every minute, survives a reboot). The daily cap counts cycles, not hours |
 | `agent-kit-caps set <KEY> <VALUE>` | Cycle cap, budget and models, kept in `/etc/agent-kit/caps.env` |
-| `agent-kit-schedule set` / `clear` / `show` | Start cycles at set times instead of back to back (see below) |
+| `agent-kit-schedule set` / `clear` / `show` | Start cycles at set times (see below) |
 | `agent-kit-gate pause` / `resume` | Pause the merge gate on its own |
 | `agent-kit-units` | The team's own systemd user units and whether a halt stops them |
 
 ### Cycle slots
 
-Without a schedule a team runs its cycles back to back until the daily cap is used up, which puts them all in
-one block and lets two teams use up the same usage window together. A schedule spreads them out.
+A team that is not halted is idle by default (kit 0.35): a cycle starts only at a slot of its schedule, in
+focus, or when the owner asks for one (Run a cycle now, a one-shot job, a planning cycle). Before kit 0.35 a
+team without a schedule ran its cycles back to back until the daily cap was used up. The daily cap stays a
+brake on slots and focus.
 
 ```
 tz Europe/Amsterdam
