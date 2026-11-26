@@ -118,6 +118,7 @@ export function idleText(idle, now = Date.now()) {
     const end = clock(idle.dayEndsAt, now);
     return `Idle: the daily cycle cap is used up${counted}. It resets when the VM's day ends${end ? `, at ${end} your time` : ''}; the next cycle starts after that. Raise the cap under Controls, run a cycle past the cap, or start a one-shot job.`;
   }
+  if (idle.reason === 'nothing-due') return 'Idle: nothing scheduled. It starts only when you run a cycle, give it start times or put it in focus.';
   if (idle.reason === 'timer-off') return 'Idle: the lead timer is off, so no cycle starts on its own. Resume the team under Controls, or start a one-shot job.';
   if (idle.reason === 'between' && idle.nextSlot) {
     const next = clock(Math.floor(idle.nextSlot / 1000), now);

@@ -48,6 +48,7 @@
     if (i.reason === 'cap') return ['Daily cycle cap used up', counted, clock(i.dayEndsAt, now) ? `resets at ${clock(i.dayEndsAt, now)}` : null];
     if (i.reason === 'timer-off') return ['The lead timer is off: no cycle starts on its own'];
     if (i.reason === 'halt-after') return ['A halt is pending'];
+    if (i.reason === 'nothing-due') return ['Nothing scheduled: idle until you run a cycle, set start times or focus it'];
     return ['Between cycles', clock(i.nextAt, now) ? `next cycle ${clock(i.nextAt, now)}` : null, counted];
   });
 </script>

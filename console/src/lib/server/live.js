@@ -44,7 +44,7 @@ canoneshot=$([ -x /opt/agent-kit/bin/agent-kit-oneshot ] && echo yes || echo no)
 stall=$([ -x /opt/agent-kit/bin/agent-kit-stall ] && sudo -n /opt/agent-kit/bin/agent-kit-stall 2>/dev/null | head -c 600)
 # Focus mode (kit 0.27): this team in focus, paused for another's, and how the last focus ended.
 focus=$([ -x /opt/agent-kit/bin/agent-kit-focus ] && sudo -n /opt/agent-kit/bin/agent-kit-focus show 2>/dev/null | head -c 1000)
-# Cycle slots (agent-kit-schedule, kit 0.9): empty when cycles simply follow each other.
+# Cycle slots (agent-kit-schedule, kit 0.9): empty when there are none (from kit 0.35 the team is then idle).
 schedule=$(head -c 6000 /etc/agent-kit/schedule 2>/dev/null)
 # Why an idle team is idle: the daily cap (owner's caps.env wins over project.env,
 # as in lead-cycle), cycles counted today by the VM's own date, the timer's next run.
@@ -184,16 +184,23 @@ export function focusOf(text) {
 
 const count = (v) => (/^\d{1,10}$/.test(String(v ?? '')) ? Number(v) : null);
 
+/** From this kit a team with no schedule and no focus is idle (#132). */
+export const IDLE_KIT = '0.35.0';
+
 /**
  * Why a team that is set to run has no cycle running. `cap`: the daily cycle
  * cap is used up, and the next cycle waits for the VM's next day. `timer-off`:
- * no cycle starts on its own. `halt-after`: a halt is pending. `between`: the
- * next cycle comes when the timer next fires.
+ * no cycle starts on its own. `halt-after`: a halt is pending. `nothing-due`
+ * (kit 0.35): no schedule and no focus, so nothing starts until the owner runs
+ * a cycle, sets start times or starts a focus. `between`: the next cycle comes
+ * at the next slot, or (focus, or an older kit) when the timer next fires.
  */
 function idleWhy(raw, haltAfter) {
   const today = count(raw.today);
   const cap = count(raw.cap);
-  const reason = haltAfter ? 'halt-after' : cap != null && today != null && today >= cap ? 'cap' : raw.timer !== 'enabled' ? 'timer-off' : 'between';
+  const noSlots = !/^slot /m.test(typeof raw.schedule === 'string' ? raw.schedule : '');
+  const nothingDue = noSlots && !focusOf(raw.focus)?.on && kitAtLeast(raw.kitver, IDLE_KIT);
+  const reason = haltAfter ? 'halt-after' : nothingDue ? 'nothing-due' : cap != null && today != null && today >= cap ? 'cap' : raw.timer !== 'enabled' ? 'timer-off' : 'between';
   return { reason, today, cap, nextAt: count(raw.next), dayEndsAt: count(raw.dayend) };
 }
 

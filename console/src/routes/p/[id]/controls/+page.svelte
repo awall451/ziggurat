@@ -365,7 +365,7 @@
           <a href="/schedule">Schedule</a>
         </p>
       {:else if p.canSchedule}
-        <p class="small dim">No schedule: cycles follow each other until the daily cap is used up. <a href="/schedule">Set times</a></p>
+        <p class="small dim">{p.idleByDefault ? 'No schedule: idle until you run it, schedule it or focus it.' : 'No schedule: cycles follow each other until the daily cap is used up.'} <a href="/schedule">Set times</a></p>
       {/if}
       {#if !st.oneshot && st.state === 'idle' && !st.focus?.on && idleText(st.idle, p.now)}
         <p>{idleText(st.idle, p.now)}</p>

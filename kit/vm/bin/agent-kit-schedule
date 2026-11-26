@@ -4,7 +4,7 @@
 #
 #   agent-kit-schedule show     the schedule and the last lines of its log, as one JSON line
 #   agent-kit-schedule set      a new schedule on stdin (checked before it replaces the old one)
-#   agent-kit-schedule clear    no schedule: cycles follow each other again, as the daily cap allows
+#   agent-kit-schedule clear    no schedule: the team is idle (kit 0.35) until a cycle is run, start times are set or a focus starts
 #   agent-kit-schedule tick     start a cycle if a slot is due (agent-kit-tick, every minute)
 #   agent-kit-schedule skip <slot> <local date>     skip that one start (kit 0.14.1): the owner gave
 #                                                   the time to a backlog job
@@ -29,7 +29,8 @@
 # count=N ends it after N starts, counted by calendar from `from` (a skipped
 # day counts too). `set` writes the date of the last of them as until=.
 #
-# Without a schedule nothing here does anything and a team runs as before.
+# Without a schedule nothing here does anything, and from kit 0.35 the team is
+# idle: no cycle starts unless the owner runs one or puts the team in focus.
 # With one, lead-cycle starts a normal cycle only when this script has just
 # left a slot marker ($STATE/slot). The lead timer keeps its meaning (on = the
 # team may run), so halt, resume and one-shot jobs work as they always did.
@@ -210,7 +211,7 @@ case "${1:-show}" in
     exec 8> "$LOCK"
     flock 8
     rm -f "$FILE" "$MARK" "$USED"
-    echo "no schedule: cycles follow each other again, as the daily cap allows"
+    echo "no schedule: the team is idle until a cycle is run, start times are set or a focus starts"
     ;;
 
   tick)

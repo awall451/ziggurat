@@ -21,7 +21,7 @@ running (see "Upgrading the kit while a cycle runs" in [docs/architecture.md](..
 | `vm/bin/agent-kit-auth` | how the agents sign in to Claude: `status`, `set-token` (a subscription token from `claude setup-token`, on stdin), `clear`. Never prints the token; never accepts an API key |
 | `vm/bin/agent-kit-inbox` | owner side of the inbox: checked delivery of a message, close |
 | `vm/bin/owner-inbox`, `owner-inbox-hook`, `vm/lead-settings.json` | lead side: read, reply, ask; mid-cycle delivery to the lead's session |
-| `vm/bin/agent-kit-schedule` | cycle slots: start the team's cycles at set times instead of back to back (checked schedule file, a tick every minute, a log of what each slot did); from kit 0.26 a slot may repeat every N days or weeks, start on a first date and end on a date or after N starts |
+| `vm/bin/agent-kit-schedule` | cycle slots: start the team's cycles at set times; from kit 0.35 a team without slots, focus or a job of the owner's is idle (checked schedule file, a tick every minute, a log of what each slot did); from kit 0.26 a slot may repeat every N days or weeks, start on a first date and end on a date or after N starts |
 | `vm/bin/agent-kit-publish`, `owner-publish` | publishing main to a remote repository: status and a bundle of main for the console, which does the push; the lead's request and prompt |
 | `vm/bin/agent-kit-issues`, `owner-issues` | owner issues: checked delivery and owner moves; the lead's list, show, update and prompt |
 | `vm/gate/bin/gate-run` | the gate: fetch `ready/*`, test as `gaterun`, fast-forward `main` |

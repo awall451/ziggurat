@@ -48,7 +48,7 @@
       tz: p.schedule?.tz && validTimeZone(p.schedule.tz) ? p.schedule.tz : settings.timezone,
       editable: false,
       draft: false,
-      note: p.id === project ? 'click to place' : p.schedule ? `${p.schedule.slots.length} start times` : 'back to back',
+      note: p.id === project ? 'click to place' : p.schedule ? `${p.schedule.slots.length} start times` : p.idleByDefault ? 'idle' : 'back to back',
       past: p.past,
       running: p.running,
       planned: planning.planned[p.id] || [],
